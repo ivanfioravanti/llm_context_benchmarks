@@ -62,7 +62,10 @@ htmlcov/
 512k.txt
 
 # Benchmark output directories
-benchmark_*/
+# Comment out these lines if you want to commit your benchmark results
+# benchmark_ollama_*/
+# benchmark_ollama_cli_*/
+# benchmark_ollama_api_*/
 
 # Logs
 *.log

@@ -270,6 +270,20 @@ llm_context_benchmarks/
 5. Run tests and benchmarks
 6. Submit a pull request
 
+### Contributing Benchmark Results
+
+We welcome benchmark contributions from different hardware configurations! To share your benchmark results:
+
+1. Run benchmarks on your hardware
+2. The output folders (`benchmark_ollama_*`) are normally gitignored
+3. To commit your results, either:
+   - Comment out the relevant lines in `.gitignore`, or
+   - Rename your folder to include your hardware (e.g., `benchmark_m2_max_64gb_ollama_cli_llama3.2`)
+4. Create a PR with your benchmark results
+5. Include hardware details in your PR description
+
+This helps the community understand performance across different systems!
+
 ## Requirements
 
 - Python 3.7+
