@@ -1,0 +1,12 @@
+Model: gpt-oss:20b
+Context size: 64k
+Tokens generated: 753
+Generation time: 20.79s
+Generation TPS: 36.2 t/s
+--------------------------------------------------------------------------------
+
+**Summary**
+
+The passage is a heavily edited, rambling retelling of Jane Austen’s *Pride and Prejudice*. It begins with a brief description of the Bennet family at Longbourn, noting Mrs. Bennet’s worry over her husband’s health and her obsession with arranging a suitable marriage for her daughters. Mr. Bennet is portrayed as a weary, somewhat detached father who rarely speaks to the family and is often absent from their affairs. Mrs. Bennet’s attempts at socializing are described as “unpleasant” and “horrible.” The family’s conversations are full of gossip and criticism of other families, especially the Hurst family, whose daughters Maria and Elizabeth are said to be “unhealthy.”
+
+The narrative then shifts to the arrival of Mr. Collins, a clergyman who has become the family’s heir and who is now in Hertfordshire with the Lucas family. Mrs. Bennet is relieved that he is no longer at Longbourn, and Mr. Collins’ impending marriage to Charlotte Lucas is described as inevitable. Mrs. Bennet is forced to accept that her daughters will be left alone in the house. The narrative describes the family’s daily life and the arrival of Mr. Collins at Netherfield, where he is described as “friendly” and “agreeable.” Mrs. Bennet is forced to accept that the family will be left alone in the house. The passage ends with a description of a journey to Hunsford and the arrival of Jane, who is described as “lovely” and “healthy.” The journey is described as “pleasant” and “joyful,” and the narrative ends with a description of the morning’s shopping.

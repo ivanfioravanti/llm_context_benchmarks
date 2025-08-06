@@ -1,0 +1,11 @@
+gpt-oss_20b Ollama API Benchmark Results
+Hardware: Apple M3 Ultra, 512.0GB RAM, 32 CPU cores (24P+8E), 80 GPU cores
+
+Context | Prompt TPS | Gen TPS | Total Time
+--------|------------|---------|------------
+     2k |      484.8 |    53.0 |      14.5s
+     4k |      993.6 |    44.2 |      19.3s
+     8k |      837.7 |    35.9 |      37.8s
+    16k |      467.3 |    37.0 |      31.7s
+    32k |      458.2 |    37.0 |      60.9s
+    64k |      464.1 |    36.2 |      38.6s

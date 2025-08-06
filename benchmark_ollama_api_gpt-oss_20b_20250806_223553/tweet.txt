@@ -1,0 +1,8 @@
+Ollama gpt-oss_20b Context tests:
+
+2k Prompt: 485 - Gen: 53 t/s
+4k Prompt: 994 - Gen: 44 t/s
+8k Prompt: 838 - Gen: 36 t/s
+16k Prompt: 467 - Gen: 37 t/s
+32k Prompt: 458 - Gen: 37 t/s
+64k Prompt: 464 - Gen: 36 t/s

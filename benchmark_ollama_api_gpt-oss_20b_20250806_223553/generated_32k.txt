@@ -1,0 +1,36 @@
+Model: gpt-oss:20b
+Context size: 32k
+Tokens generated: 1588
+Generation time: 42.96s
+Generation TPS: 37.0 t/s
+--------------------------------------------------------------------------------
+
+**Summary**
+
+The passage is a highly altered, extended retelling of the early chapters of Jane Austen’s *Pride and Prejudice*, presented in a disjointed, almost stream‑of‑conscious style. It covers the Bennet family’s life in the village of Meryton, the arrival of a new clergyman, and the introduction of a charismatic officer named Mr Wickham.
+
+1. **The Bennet family**  
+   - Mr Bennet’s father has died, leaving a house and a substantial income to his cousin, the clergyman Mr Collins.  
+   - Mr Collins writes to Mrs Bennet, offering to arrange a marriage with one of her daughters as a way of atoning for inheriting the family estate. Mrs Bennet is eager to see her daughters married and is delighted by the prospect.  
+   - Mr Collins initially intends to marry Jane, but after Mrs Bennet’s suggestion he changes his mind and selects Elizabeth instead.
+
+2. **Netherfield and the arrival of Mr Bingley and Mr Darcy**  
+   - The Bennet family visits Netherfield, where Mr Bingley and Mr Darcy are staying.  
+   - Mr Bingley is cheerful and friendly, whereas Mr Darcy is described as proud and disagreeable by the Bennets. Mrs Bennet and the sisters are excited about the visit, especially Elizabeth, who is wary of Mr Darcy.
+
+3. **Mr Collins’s visit and the introduction of Mr Wickham**  
+   - Mr Collins stays at Netherfield and later is escorted by the Bennet sisters to Meryton, where they learn that Mr Wickham, a charming officer, has been invited to stay with the Bennet family.  
+   - Mrs Philips (the Bennets’ aunt) is impressed by Mr Collins’s description of her own home and by his courteous manners.  
+   - Mr Wickham arrives at Netherfield and immediately draws the attention of the sisters, especially Elizabeth.
+
+4. **Elizabeth’s intrigue with Mr Wickham**  
+   - Elizabeth and Mr Wickham begin a conversation at a card table.  
+   - Mr Wickham reveals that he has known Mr Darcy from a young age and claims to be “too well‑known” to give an impartial opinion of him.  
+   - Elizabeth is intrigued and asks about Mr Darcy’s character; Mr Wickham responds that he knows Mr Darcy well and that his reputation is largely negative among those who have met him.
+
+5. **Themes and tone**  
+   - The narrative is driven by social propriety, marriage prospects, and the social hierarchy of the time.  
+   - Mr Collins is portrayed as self‑important yet obsequious, and his attempts at conversation often fall flat.  
+   - Elizabeth’s curiosity about Mr Darcy and Mr Wickham’s knowledge of him foreshadows the complex relationships that will develop later in the story.
+
+Overall, the excerpt presents the Bennet family’s early interactions with Mr Collins, Mr Wickham, and the Netherfield gentry, setting the stage for the romantic and social entanglements that drive the novel.

@@ -1,0 +1,16 @@
+Model: gpt-oss:20b
+Context size: 16k
+Tokens generated: 454
+Generation time: 12.17s
+Generation TPS: 37.3 t/s
+--------------------------------------------------------------------------------
+
+Thinking...
+The user requests a summary. The text is a long excerpt. We should produce a concise summary, covering the main plot points, characters, and setting, while omitting superfluous details. No disallowed content. The user didn't request a translation or editing; just a summary. We'll do a general summary of the content: The text seems to be a mashup of various parts of Pride and Prejudice and some other content? It's a random excerpt with dialogues. The summary should highlight that Elizabeth Bennet visits Netherfield, goes to Meryton to see sick sister Jane, receives comments from Lady Catherine, Miss Bingley, etc. She interacts with Mr. Darcy, Bingley, Hurst. There's conversation about accomplishments, reading, etc. Summarize.
+...done thinking.
+
+The passage is a rambling, largely disjointed recounting of a period of Elizabeth Bennet’s life that mixes excerpts from different sources (including passages that sound like “Pride and Prejudice,” “Northanger Abbey,” and other nineteenth‑century fiction). It follows the Bennet family as Elizabeth and her sisters visit the estate of Mr. Bingley (Netherfield/Derbyshire) after Jane becomes ill. Elizabeth walks three miles from Longbourn to Netherfield to see Jane, arriving in a dirty state that draws comment from Miss Bingley, Mrs. Hurst and Mr. Darcy. While the family members take turns showing concern for Jane, they also express scepticism about the Bennets’ prospects due to their modest background.  
+
+Elizabeth spends time with Mr. Bingley and his sister Caroline, who are preoccupied with Mr. Darcy and his sister Charlotte. At dinner and later tea, a conversation turns to the qualities of an “accomplished” woman, with Mr. Darcy insisting that true accomplishment requires more than mere superficial skills. Miss Bingley rebuffs and ridicules this view, and the discussion devolves into snide remarks about ladies’ tactics for attracting men.  
+
+Overall, the passage covers Elizabeth’s journey to help her sister, the social interactions at Netherfield, and a debate about social standing and the “accomplished” status of young women.
