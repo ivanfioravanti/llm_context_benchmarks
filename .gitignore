@@ -51,13 +51,14 @@ htmlcov/
 .hypothesis/
 
 # Generated context files (but keep examples if needed)
-2k.txt
-4k.txt
-8k.txt
-16k.txt
-32k.txt
-64k.txt
-128k.txt
+# Commenting out to allow sample context files to be committed
+# 2k.txt
+# 4k.txt
+# 8k.txt
+# 16k.txt
+# 32k.txt
+# 64k.txt
+# 128k.txt
 256k.txt
 512k.txt
 
