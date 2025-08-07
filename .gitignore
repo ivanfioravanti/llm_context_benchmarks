@@ -61,7 +61,7 @@ htmlcov/
 128k.txt
 
 # Benchmark output directories
-benchmark_*
+output/
 
 # Logs
 *.log

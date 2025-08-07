@@ -1,8 +1,0 @@
-Model: gpt-oss:20b
-Context size: 16k
-Tokens generated: 520
-Generation time: 14.06s
-Generation TPS: 37.0 t/s
---------------------------------------------------------------------------------
-
-The passage follows Elizabeth Bennet’s attempt to visit her sister Jane, who has become ill at Netherfield. Encouraged by her mother’s plan to make rain fall on the Bingleys, Elizabeth walks three miles on horseback to the house in the wet weather, arriving in a dirty state that surprises the other ladies. Jane is feverish and cannot leave her room, but Elizabeth stays with her, offering care and companionship. The family at Netherfield, especially Mr. Bingley, shows concern for Jane while the others—Miss Bingley, Mrs. Hurst, and Mr. Hurst—are dismissive of Elizabeth’s appearance and manners. Elizabeth spends time reading, then joins a card game where the conversation turns to the qualities of an “accomplished woman.” Mr. Darcy and Mr. Bingley debate the standards of accomplishment, with Darcy insisting on a high level of musical, artistic, and intellectual ability. Elizabeth’s presence is seen as a potential distraction, and the discussion ends with Bingley urging that Jane’s condition be addressed. The narrative cuts off mid‑sentence.

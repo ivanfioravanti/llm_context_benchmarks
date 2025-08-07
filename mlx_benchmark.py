@@ -127,7 +127,9 @@ def main():
     # Extract model name from URL and create output directory
     model_name = args.model.split("/")[-1]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(f"benchmark_mlx_{model_name}_{timestamp}")
+    base_output_dir = Path("output")
+    base_output_dir.mkdir(exist_ok=True)
+    output_dir = base_output_dir / f"benchmark_mlx_{model_name}_{timestamp}"
     output_dir.mkdir(exist_ok=True)
 
     # Update output paths to use the new directory

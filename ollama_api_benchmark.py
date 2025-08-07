@@ -132,7 +132,9 @@ def main():
     # Extract model name and create output directory
     model_name = args.model.replace(":", "_")  # Replace : with _ for filesystem compatibility
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(f"benchmark_ollama_api_{model_name}_{timestamp}")
+    base_output_dir = Path("output")
+    base_output_dir.mkdir(exist_ok=True)
+    output_dir = base_output_dir / f"benchmark_ollama_api_{model_name}_{timestamp}"
     output_dir.mkdir(exist_ok=True)
 
     # Update output paths to use the new directory
