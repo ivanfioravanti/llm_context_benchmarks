@@ -1,17 +1,17 @@
 # LLM Context Benchmarks
 
-A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes using Ollama's API and CLI interfaces.
+A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes using Ollama and MLX frameworks.
 
 ## Features
 
-- 📊 **Dual Benchmark Modes**: Test models using both Ollama API and CLI
+- 📊 **Multiple Benchmark Modes**: Test models using Ollama API, Ollama CLI, and MLX
 - 🔧 **Automatic Hardware Detection**: Captures system specs including:
   - CPU cores (with performance/efficiency breakdown on Apple Silicon)
   - GPU cores (Apple Silicon)
   - System memory
 - 📈 **Visual Performance Charts**: Generate detailed performance graphs with hardware info
 - 💾 **Context File Generation**: Create test files with precise token counts
-- 🖥️ **Apple Silicon Optimized**: Full support for M1/M2/M3 chips
+- 🖥️ **Apple Silicon Optimized**: Full support for M1/M2/M3/M4 chips with MLX
 - 📝 **Jupyter Notebook Support**: Interactive benchmarking and analysis
 - 🔄 **Pre-commit Hooks**: Automated code formatting with Black and isort
 - 📄 **Complete Output Capture**: Saves model responses for analysis
@@ -28,7 +28,24 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv pip install -r requirements.txt
 ```
 
-2. Install Ollama from https://ollama.com
+2. Install framework-specific requirements:
+
+### For Ollama:
+- Install Ollama from https://ollama.com
+- Pull the model you want to test:
+  ```bash
+  ollama pull gpt-oss:20b
+  # or
+  ollama pull llama3.2
+  # or any other Ollama model
+  ```
+
+### For MLX (Apple Silicon only):
+- Install MLX-LM:
+  ```bash
+  pip install mlx-lm
+  ```
+- Models will be downloaded automatically from Hugging Face when running benchmarks
 
 3. (Optional) Set up pre-commit hooks for code quality:
 
@@ -38,15 +55,6 @@ pre-commit install
 
 # Run hooks manually on all files
 pre-commit run --all-files
-```
-
-4. Pull the model you want to test:
-
-```bash
-ollama pull gpt-oss:20b
-# or
-ollama pull llama3.2
-# or any other Ollama model
 ```
 
 ## Usage
@@ -88,9 +96,9 @@ python generate_context_files.py source.txt --sizes 2,4,8,16,32,64,128
 
 ### Step 2: Run Benchmarks
 
-You can benchmark Ollama models using either the API or CLI approach:
+You can benchmark models using Ollama (API or CLI) or MLX frameworks:
 
-#### Option A: API Benchmark (ollama_api_benchmark.py)
+#### Option A: Ollama API Benchmark (ollama_api_benchmark.py)
 
 Uses the Ollama Python API for benchmarking. This provides programmatic access to the model.
 
@@ -102,7 +110,7 @@ python ollama_api_benchmark.py gpt-oss:20b
 python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16
 ```
 
-#### Option B: CLI Benchmark (ollama_cli_benchmark.py)
+#### Option B: Ollama CLI Benchmark (ollama_cli_benchmark.py)
 
 Uses the `ollama run` command with `--verbose` flag to get detailed metrics. This approach directly calls the Ollama CLI and parses the verbose output.
 
@@ -120,7 +128,28 @@ The CLI version provides the same metrics as shown in the verbose output:
 - `eval count/duration/rate`: Generation metrics
 - `total duration`: Total processing time
 
-#### Common Options (both scripts)
+#### Option C: MLX Benchmark (mlx_benchmark.py) - Apple Silicon Only
+
+Uses MLX framework for running quantized models optimized for Apple Silicon.
+
+```bash
+# Test with all .txt files in the current directory
+python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit
+
+# Test only specific context sizes
+python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --contexts 2,4,8,16,32
+
+# Enable KV cache quantization (optional)
+python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --kv-bit 8
+```
+
+The MLX version provides:
+
+- `prompt tokens/rate`: Prompt processing metrics
+- `generation tokens/rate`: Generation metrics  
+- `peak memory`: GPU memory usage in GB
+
+#### Common Options (all scripts)
 
 - `--contexts`: Comma-separated list of context sizes to test (e.g., 2,4,8,16)
 - `--max-tokens`: Maximum tokens to generate per test (default: 16000)
@@ -129,7 +158,7 @@ The CLI version provides the same metrics as shown in the verbose output:
 
 #### Output Files
 
-Both benchmark scripts create a timestamped directory containing:
+All benchmark scripts create a timestamped directory containing:
 
 1. **hardware_info.json** - Detailed system specifications:
    ```json
@@ -147,14 +176,16 @@ Both benchmark scripts create a timestamped directory containing:
    - Prompt tokens and tokens per second
    - Generation tokens and tokens per second
    - Total processing time
+   - Peak memory usage (MLX only)
 
 3. **benchmark_chart.png** - Visual charts showing:
    - Hardware specs in the title
    - Prompt processing speed (tokens/sec)
    - Generation speed (tokens/sec)
-   - Total processing time and tokens generated
+   - Total processing time and tokens generated (Ollama)
+   - Peak memory usage and tokens generated (MLX)
 
-4. **generated_*.txt** - Complete model responses including:
+4. **generated_*.txt** - Complete model responses including (Ollama only):
    - Model metadata
    - Token counts and timing
    - Full generated text (including thinking process for models that show it)
@@ -181,7 +212,9 @@ The project includes `ollama_benchmark_notebook.ipynb` for interactive benchmark
 - Create comparison charts
 - Display hardware information
 
-## Example Workflow
+## Example Workflows
+
+### Ollama Workflow
 
 ```bash
 # 1. Install dependencies
@@ -207,15 +240,37 @@ ls benchmark_ollama_*/
 cat benchmark_ollama_*/hardware_info.json
 ```
 
+### MLX Workflow (Apple Silicon)
+
+```bash
+# 1. Install dependencies
+uv pip install -r requirements.txt
+pip install mlx-lm
+
+# 2. Download a source text
+curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
+
+# 3. Generate context files
+python generate_context_files.py pride_and_prejudice.txt
+
+# 4. Run MLX benchmark (model downloads automatically)
+python mlx_benchmark.py mlx-community/Qwen2.5-3B-Instruct-4bit
+
+# 5. View results
+ls benchmark_mlx_*/
+cat benchmark_mlx_*/hardware_info.json
+```
+
 ## Hardware Detection
 
 The tool automatically detects and reports:
 
-### Apple Silicon (M1/M2/M3)
+### Apple Silicon (M1/M2/M3/M4)
 - Chip model and variant
 - Total CPU cores with performance/efficiency breakdown
 - GPU core count
 - System memory
+- Optimized for MLX framework performance
 
 ### Other Systems
 - Processor information
@@ -251,8 +306,9 @@ pre-commit autoupdate
 
 ```
 llm_context_benchmarks/
-├── ollama_api_benchmark.py      # API-based benchmarking
-├── ollama_cli_benchmark.py      # CLI-based benchmarking
+├── ollama_api_benchmark.py      # Ollama API-based benchmarking
+├── ollama_cli_benchmark.py      # Ollama CLI-based benchmarking
+├── mlx_benchmark.py             # MLX framework benchmarking
 ├── generate_context_files.py    # Context file generation
 ├── ollama_benchmark_notebook.ipynb  # Interactive notebook
 ├── requirements.txt             # Python dependencies
@@ -287,11 +343,14 @@ This helps the community understand performance across different systems!
 ## Requirements
 
 - Python 3.7+
-- Ollama installed and running
 - Sufficient RAM for the model and context sizes you want to test
 - psutil (for hardware detection)
 - matplotlib, numpy (for charts)
 - tiktoken (for token counting)
+
+### Framework-specific:
+- **Ollama**: Ollama installed and running
+- **MLX**: Apple Silicon Mac (M1/M2/M3/M4), mlx-lm package
 
 ## Notes
 
@@ -299,5 +358,7 @@ This helps the community understand performance across different systems!
 - Performance varies significantly between models and hardware
 - The tool automatically handles models that support different maximum context lengths
 - Hardware information is automatically collected on macOS (Apple Silicon) and Linux systems
-- Generated text files include both the model's thinking process (if shown) and final response
+- Generated text files include both the model's thinking process (if shown) and final response (Ollama only)
 - All outputs are organized in timestamped directories for easy comparison
+- MLX models are optimized for Apple Silicon and provide excellent performance with low memory usage
+- MLX supports quantized models (4-bit, 8-bit) for efficient inference

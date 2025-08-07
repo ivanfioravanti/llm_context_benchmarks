@@ -433,9 +433,16 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
     return output_path
 
 
-def generate_tweet_text(results, model_name):
+def generate_tweet_text(results, model_name, hardware_info=None):
     """Generate tweet text with results."""
-    tweet = f"Ollama CLI {model_name} Context tests:\n\n"
+    tweet = f"{model_name} Ollama CLI Benchmark Results\n"
+
+    # Add hardware info if available
+    if hardware_info:
+        hardware_str = format_hardware_string(hardware_info)
+        tweet += f"Hardware: {hardware_str}\n"
+
+    tweet += "\n"
 
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
         tweet += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
@@ -523,6 +530,7 @@ def main():
     parser.add_argument("--max-tokens", type=int, default=16000, help="Max tokens to generate (default: 16000)")
     parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
     parser.add_argument("--output-chart", default="benchmark_chart.png", help="Output chart file")
+    parser.add_argument("--save-responses", action="store_true", help="Save raw model responses to files")
 
     args = parser.parse_args()
 
@@ -596,17 +604,18 @@ def main():
         if result:
             results.append(result)
 
-            # Save the generated text to a separate file
-            output_filename = output_dir / f"generated_{result['context_size']}.txt"
-            with open(output_filename, "w") as f:
-                f.write(f"Model: {args.model}\n")
-                f.write(f"Context size: {result['context_size']}\n")
-                f.write(f"Tokens generated: {result['generation_tokens']}\n")
-                f.write(f"Generation time: {result['eval_duration']:.2f}s\n")
-                f.write(f"Generation TPS: {result['generation_tps']:.1f} t/s\n")
-                f.write("-" * 80 + "\n\n")
-                f.write(result["generated_text"])
-            print(f"Generated text saved to {output_filename}")
+            # Save the generated text to a separate file if requested
+            if args.save_responses:
+                output_filename = output_dir / f"generated_{result['context_size']}.txt"
+                with open(output_filename, "w") as f:
+                    f.write(f"Model: {args.model}\n")
+                    f.write(f"Context size: {result['context_size']}\n")
+                    f.write(f"Tokens generated: {result['generation_tokens']}\n")
+                    f.write(f"Generation time: {result['eval_duration']:.2f}s\n")
+                    f.write(f"Generation TPS: {result['generation_tps']:.1f} t/s\n")
+                    f.write("-" * 80 + "\n\n")
+                    f.write(result["generated_text"])
+                print(f"Generated text saved to {output_filename}")
 
     if not results:
         print("No successful benchmark results")
@@ -632,7 +641,7 @@ def main():
     print(f"Chart saved to {chart_path}")
 
     # Generate tweet text
-    tweet = generate_tweet_text(results, model_name)
+    tweet = generate_tweet_text(results, model_name, hardware_info)
     print("\n--- Tweet Text ---")
     print(tweet)
 

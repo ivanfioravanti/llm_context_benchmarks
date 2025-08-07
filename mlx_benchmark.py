@@ -5,13 +5,13 @@ import json
 import platform
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import ollama
 import psutil
 
 
@@ -111,85 +111,102 @@ def format_hardware_string(hw_info):
     return ", ".join(parts) if parts else "Unknown hardware"
 
 
-def run_benchmark(model_name, context_file, max_tokens=32000):
-    """Run Ollama benchmark for a given context file."""
+def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=16000):
+    """Run MLX benchmark for a given context file."""
     print(f"Running benchmark for {context_file}...")
 
-    # Read the prompt from file
-    with open(context_file) as f:
-        prompt = f.read()
+    # Check if we're in a virtual environment and use the correct python
+    python_path = sys.executable
 
-    # Count prompt tokens (approximate)
-    prompt_tokens = len(prompt.split())
+    cmd = [
+        python_path,
+        "-m",
+        "mlx_lm",
+        "generate",
+        "--model",
+        model_url,
+        "--max-tokens",
+        str(max_tokens),
+    ]
 
-    # Start timing for prompt processing
+    # Only add kv-bit if explicitly specified
+    if kv_bit is not None:
+        cmd.extend(["--kv-bit", str(kv_bit)])
+
+    cmd.extend(["--prompt", "-"])
+
+    # Start timing
     start_time = time.time()
 
     try:
-        # Run the generation using Ollama
-        response = ollama.generate(
-            model=model_name,
-            prompt=prompt,
-            options={
-                "num_predict": max_tokens,
-                "temperature": 0.7,
-            },
-            stream=False,
-        )
+        with open(context_file, "r") as f:
+            result = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=600)  # 10 minute timeout
 
-        # Calculate timing
-        total_time = time.time() - start_time
+        # Calculate total wall time
+        total_wall_time = time.time() - start_time
 
-        # Extract metrics from response
-        eval_count = response.get("eval_count", 0)  # tokens generated
-        eval_duration = response.get("eval_duration", 0) / 1e9  # convert from nanoseconds to seconds
-        prompt_eval_count = response.get("prompt_eval_count", prompt_tokens)
-        prompt_eval_duration = response.get("prompt_eval_duration", 0) / 1e9  # convert from nanoseconds to seconds
+        if result.returncode != 0:
+            print(f"Error running benchmark: {result.stderr}")
+            return None
 
-        # Calculate tokens per second
-        prompt_tps = prompt_eval_count / prompt_eval_duration if prompt_eval_duration > 0 else 0
-        gen_tps = eval_count / eval_duration if eval_duration > 0 else 0
+        # Parse the output - MLX outputs to both stdout and stderr
+        output = result.stdout + result.stderr
+
+        # The generated text is in stdout, metrics are in stderr
+        generated_text = result.stdout.strip()
+
+        # Extract metrics using regex (from stderr + stdout combined)
+        prompt_match = re.search(r"Prompt:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec", output)
+        gen_match = re.search(r"Generation:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec", output)
+        memory_match = re.search(r"Peak memory:\s*([\d.]+)\s*GB", output)
+
+        if not all([prompt_match, gen_match, memory_match]):
+            print(f"Failed to parse output for {context_file}")
+            return None
 
         # Debug logging
-        print(f"  Prompt: {prompt_eval_count} tokens in {prompt_eval_duration:.2f}s = {prompt_tps:.1f} t/s")
-        print(f"  Generation: {eval_count} tokens in {eval_duration:.2f}s = {gen_tps:.1f} t/s")
-        print(f"  Total wall time: {total_time:.2f}s")
-        print(f"  Sum of durations: {prompt_eval_duration + eval_duration:.2f}s")
-
-        # Extract the generated text
-        generated_text = response.get("response", "")
+        print(
+            f"  Prompt: {prompt_match.group(1)} tokens in {float(prompt_match.group(1))/float(prompt_match.group(2)):.2f}s = {prompt_match.group(2)} t/s"
+        )
+        print(
+            f"  Generation: {gen_match.group(1)} tokens in {float(gen_match.group(1))/float(gen_match.group(2)):.2f}s = {gen_match.group(2)} t/s"
+        )
+        print(f"  Peak memory: {memory_match.group(1)} GB")
+        print(f"  Total wall time: {total_wall_time:.2f}s")
 
         return {
             "context_size": Path(context_file).stem,
-            "prompt_tokens": prompt_eval_count,
-            "prompt_tps": prompt_tps,
-            "generation_tokens": eval_count,
-            "generation_tps": gen_tps,
-            "total_time": total_time,
-            "prompt_eval_duration": prompt_eval_duration,
-            "eval_duration": eval_duration,
+            "prompt_tokens": int(prompt_match.group(1)),
+            "prompt_tps": float(prompt_match.group(2)),
+            "generation_tokens": int(gen_match.group(1)),
+            "generation_tps": float(gen_match.group(2)),
+            "peak_memory_gb": float(memory_match.group(1)),
+            "total_time": total_wall_time,
             "generated_text": generated_text,
         }
 
+    except subprocess.TimeoutExpired:
+        print(f"Timeout running benchmark")
+        return None
     except Exception as e:
         print(f"Error running benchmark: {e}")
         return None
 
 
 def create_chart(results, model_name, hardware_info, output_path="benchmark_chart.png"):
-    """Create a chart with separate subplots for prompt TPS, generation TPS, and timing."""
+    """Create a chart with separate subplots for prompt TPS, generation TPS, and memory with tokens."""
     # Sort results by context size
     context_sizes = []
     prompt_tps = []
     gen_tps = []
-    total_times = []
+    peak_memory = []
     generation_tokens = []
 
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
         prompt_tps.append(r["prompt_tps"])
         gen_tps.append(r["generation_tps"])
-        total_times.append(r["total_time"])
+        peak_memory.append(r["peak_memory_gb"])
         generation_tokens.append(r["generation_tokens"])
 
     # Create figure with three subplots
@@ -197,13 +214,13 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
-    fig.suptitle(f"{model_name} Ollama API Testing\n{hardware_str}", fontsize=16, fontweight="bold")
+    fig.suptitle(f"{model_name} MLX Testing\n{hardware_str}", fontsize=16, fontweight="bold")
 
     x = np.arange(len(context_sizes))
 
     # First subplot - Prompt TPS
     ax1.set_title("Prompt Tokens per Second", fontsize=14, pad=10)
-    color1 = "#2196F3"  # Blue for Ollama
+    color1 = "#ff9800"
     ax1.plot(x, prompt_tps, "o-", color=color1, linewidth=2, markersize=8)
     ax1.set_ylabel("Tokens/sec", color=color1)
     ax1.tick_params(axis="y", labelcolor=color1)
@@ -212,15 +229,7 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
     if prompt_tps:
         max_prompt = max(prompt_tps) if prompt_tps else 1
         for i, p in enumerate(prompt_tps):
-            ax1.text(
-                i,
-                p + max_prompt * 0.03,
-                f"{p:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                color=color1,
-            )
+            ax1.text(i, p + max_prompt * 0.03, f"{p:.1f}", ha="center", va="bottom", fontsize=9, color=color1)
 
     ax1.set_xticks(x)
     ax1.set_xticklabels(context_sizes)
@@ -229,7 +238,7 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
 
     # Second subplot - Generation TPS
     ax2.set_title("Generation Tokens per Second", fontsize=14, pad=10)
-    color2 = "#00BCD4"  # Cyan for Ollama
+    color2 = "#ff5722"
     ax2.plot(x, gen_tps, "o-", color=color2, linewidth=2, markersize=8)
     ax2.set_ylabel("Tokens/sec", color=color2)
     ax2.tick_params(axis="y", labelcolor=color2)
@@ -238,61 +247,45 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
     if gen_tps:
         max_gen = max(gen_tps) if gen_tps else 1
         for i, g in enumerate(gen_tps):
-            ax2.text(
-                i,
-                g + max_gen * 0.03,
-                f"{g:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                color=color2,
-            )
+            ax2.text(i, g + max_gen * 0.03, f"{g:.1f}", ha="center", va="bottom", fontsize=9, color=color2)
 
     ax2.set_xticks(x)
     ax2.set_xticklabels(context_sizes)
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, max(gen_tps) * 1.15 if gen_tps and max(gen_tps) > 0 else 1)
 
-    # Third subplot - Total Time with Tokens Generated
-    ax3.set_title("Total Processing Time & Tokens Generated", fontsize=14, pad=10)
+    # Third subplot - Peak Memory Usage with Tokens Generated
+    ax3.set_title("Peak Memory Usage & Tokens Generated", fontsize=14, pad=10)
 
-    # Bar chart for total time (left y-axis)
-    color_time = "#2196F3"
-    bars = ax3.bar(x, total_times, color=color_time, width=0.6, alpha=0.7, label="Total Time")
+    # Bar chart for memory (left y-axis)
+    color_memory = "#ff9800"
+    bars = ax3.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7, label="Peak Memory")
 
     # Add value labels on bars
-    if total_times:
-        max_time = max(total_times) if total_times else 1
-        for i, (bar, time_val) in enumerate(zip(bars, total_times)):
+    if peak_memory:
+        max_mem = max(peak_memory) if peak_memory else 1
+        for i, (bar, mem) in enumerate(zip(bars, peak_memory)):
             height = bar.get_height()
             ax3.text(
                 bar.get_x() + bar.get_width() / 2.0,
-                height + max_time * 0.02,
-                f"{time_val:.1f}s",
+                height + max_mem * 0.02,
+                f"{mem:.1f} GB",
                 ha="center",
                 va="bottom",
                 fontsize=9,
-                color=color_time,
+                color=color_memory,
             )
 
     ax3.set_xticks(x)
     ax3.set_xticklabels(context_sizes)
-    ax3.set_ylabel("Time (seconds)", color=color_time)
-    ax3.tick_params(axis="y", labelcolor=color_time)
-    ax3.set_ylim(0, max(total_times) * 1.2 if total_times and max(total_times) > 0 else 1)
+    ax3.set_ylabel("Memory (GB)", color=color_memory)
+    ax3.tick_params(axis="y", labelcolor=color_memory)
+    ax3.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
 
     # Create second y-axis for tokens generated
     ax3_right = ax3.twinx()
-    color_tokens = "#FF6B35"
-    ax3_right.plot(
-        x,
-        generation_tokens,
-        "o-",
-        color=color_tokens,
-        linewidth=2,
-        markersize=8,
-        label="Tokens Generated",
-    )
+    color_tokens = "#4CAF50"
+    ax3_right.plot(x, generation_tokens, "o-", color=color_tokens, linewidth=2, markersize=8, label="Tokens Generated")
     ax3_right.set_ylabel("Tokens Generated", color=color_tokens)
     ax3_right.tick_params(axis="y", labelcolor=color_tokens)
 
@@ -327,7 +320,7 @@ def create_chart(results, model_name, hardware_info, output_path="benchmark_char
 
 def generate_tweet_text(results, model_name, hardware_info=None):
     """Generate tweet text with results."""
-    tweet = f"{model_name} Ollama API Benchmark Results\n"
+    tweet = f"{model_name} MLX Benchmark Results\n"
 
     # Add hardware info if available
     if hardware_info:
@@ -345,76 +338,42 @@ def generate_tweet_text(results, model_name, hardware_info=None):
 def generate_table(results, model_name, hardware_info=None):
     """Generate a formatted table for posting to X/Twitter."""
     # Create header
-    table = f"{model_name} Ollama API Benchmark Results\n"
+    table = f"{model_name} MLX Benchmark Results\n"
 
     # Add hardware info if available
     if hardware_info:
         hardware_str = format_hardware_string(hardware_info)
         table += f"Hardware: {hardware_str}\n"
 
-    table += "\nContext | Prompt TPS | Gen TPS | Total Time\n"
-    table += "--------|------------|---------|------------\n"
+    table += "\nContext | Prompt TPS | Gen TPS | Memory\n"
+    table += "--------|------------|---------|--------\n"
 
     # Add data rows
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
-        table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r['total_time']:>9.1f}s\n"
+        table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB\n"
 
     return table
 
 
-def check_model_available(model_name):
-    """Check if the model is available in Ollama."""
+def check_mlx_installed():
+    """Check if MLX-LM is installed."""
     try:
-        # Try to list models and check if our model is there
-        response = ollama.list()
+        import mlx_lm
 
-        # The response is a dictionary with 'models' key
-        models = response.get("models", [])
-
-        # Extract model names - the model object has a 'model' attribute
-        model_names = []
-        for model_obj in models:
-            # Access the model attribute directly if it's an object
-            if hasattr(model_obj, "model"):
-                name = model_obj.model
-            elif isinstance(model_obj, dict):
-                # If it's a dict, try to get the 'model' key
-                name = model_obj.get("model", str(model_obj))
-            else:
-                # Fallback to string representation
-                name = str(model_obj)
-            model_names.append(name)
-
-        # Check exact match (including tags)
-        if model_name in model_names:
-            print(f"Found model: {model_name}")
-            return True
-
-        # Also check without considering digest (for models like "gpt-oss:20b")
-        for available_model in model_names:
-            if available_model == model_name or available_model.split(":")[0] == model_name.split(":")[0]:
-                print(f"Found model: {available_model}")
-                return True
-
-        print(f"Model '{model_name}' not found. Available models:")
-        for model in model_names:
-            print(f"  - {model}")
+        return True
+    except ImportError:
         return False
-
-    except Exception as e:
-        print(f"Error checking model availability: {e}")
-        print(f"Attempting to use model anyway...")
-        return True  # Try to proceed anyway
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Ollama benchmarks on context files")
-    parser.add_argument("model", help="Ollama model name (e.g., llama3.2, mistral)")
+    parser = argparse.ArgumentParser(description="Run MLX benchmarks on context files")
+    parser.add_argument("model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)")
     parser.add_argument(
         "--contexts",
         type=str,
         help="Comma-separated list of context sizes to benchmark (e.g., 2,4,8,16). If not specified, all .txt files will be used.",
     )
+    parser.add_argument("--kv-bit", type=int, default=None, help="KV cache bit size (optional, e.g., 4 or 8)")
     parser.add_argument("--max-tokens", type=int, default=16000, help="Max tokens to generate (default: 16000)")
     parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
     parser.add_argument("--output-chart", default="benchmark_chart.png", help="Output chart file")
@@ -422,15 +381,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Check if model is available
-    if not check_model_available(args.model):
-        print(f"\nPlease pull the model first with: ollama pull {args.model}")
+    # Check if MLX-LM is installed
+    if not check_mlx_installed():
+        print("MLX-LM is not installed. Please install it with: pip install mlx-lm")
         return
 
-    # Extract model name and create output directory
-    model_name = args.model.replace(":", "_")  # Replace : with _ for filesystem compatibility
+    # Extract model name from URL and create output directory
+    model_name = args.model.split("/")[-1]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(f"benchmark_ollama_api_{model_name}_{timestamp}")
+    output_dir = Path(f"benchmark_mlx_{model_name}_{timestamp}")
     output_dir.mkdir(exist_ok=True)
 
     # Update output paths to use the new directory
@@ -488,7 +447,7 @@ def main():
     # Run benchmarks
     results = []
     for file in context_files:
-        result = run_benchmark(args.model, file, args.max_tokens)
+        result = run_benchmark(args.model, file, args.kv_bit, args.max_tokens)
         if result:
             results.append(result)
 
@@ -499,8 +458,9 @@ def main():
                     f.write(f"Model: {args.model}\n")
                     f.write(f"Context size: {result['context_size']}\n")
                     f.write(f"Tokens generated: {result['generation_tokens']}\n")
-                    f.write(f"Generation time: {result['eval_duration']:.2f}s\n")
                     f.write(f"Generation TPS: {result['generation_tps']:.1f} t/s\n")
+                    f.write(f"Peak memory: {result['peak_memory_gb']:.1f} GB\n")
+                    f.write(f"Total time: {result['total_time']:.2f}s\n")
                     f.write("-" * 80 + "\n\n")
                     f.write(result["generated_text"])
                 print(f"Generated text saved to {output_filename}")
@@ -510,19 +470,16 @@ def main():
         return
 
     # Save to CSV (excluding generated_text field for cleaner CSV)
-    if results and results[0]:
-        with open(csv_path, "w", newline="") as f:
-            # Create a list of fieldnames excluding 'generated_text'
-            fieldnames = [k for k in results[0].keys() if k != "generated_text"]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            # Write rows without the generated_text field
-            for row in results:
-                csv_row = {k: v for k, v in row.items() if k != "generated_text"}
-                writer.writerow(csv_row)
-        print(f"Results saved to {csv_path}")
-    else:
-        print("Warning: No results to save to CSV")
+    with open(csv_path, "w", newline="") as f:
+        # Create a list of fieldnames excluding 'generated_text'
+        fieldnames = [k for k in results[0].keys() if k != "generated_text"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        # Write rows without the generated_text field
+        for row in results:
+            csv_row = {k: v for k, v in row.items() if k != "generated_text"}
+            writer.writerow(csv_row)
+    print(f"Results saved to {csv_path}")
 
     # Create chart
     chart_result = create_chart(results, model_name, hardware_info, str(chart_path))
