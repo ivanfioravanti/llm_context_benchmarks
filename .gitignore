@@ -52,21 +52,16 @@ htmlcov/
 
 # Generated context files (but keep examples if needed)
 # Commenting out to allow sample context files to be committed
-# 2k.txt
-# 4k.txt
-# 8k.txt
-# 16k.txt
-# 32k.txt
-# 64k.txt
-# 128k.txt
-256k.txt
-512k.txt
+2k.txt
+4k.txt
+8k.txt
+16k.txt
+32k.txt
+64k.txt
+128k.txt
 
 # Benchmark output directories
-# Comment out these lines if you want to commit your benchmark results
-# benchmark_ollama_*/
-# benchmark_ollama_cli_*/
-# benchmark_ollama_api_*/
+benchmark_*
 
 # Logs
 *.log

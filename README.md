@@ -57,6 +57,19 @@ pre-commit install
 pre-commit run --all-files
 ```
 
+## Quick Start
+
+```bash
+# 1. Generate test data
+python generate_context_files.py pride_and_prejudice.txt
+
+# 2. Run benchmark with unified interface
+python benchmark.py ollama-api gpt-oss:20b
+
+# 3. View available engines
+python benchmark.py --list-engines
+```
+
 ## Usage
 
 ### Step 1: Generate Test Data
@@ -96,65 +109,63 @@ python generate_context_files.py source.txt --sizes 2,4,8,16,32,64,128
 
 ### Step 2: Run Benchmarks
 
-You can benchmark models using Ollama (API or CLI) or MLX frameworks:
+#### Unified Benchmark Interface (Recommended)
 
-#### Option A: Ollama API Benchmark (ollama_api_benchmark.py)
-
-Uses the Ollama Python API for benchmarking. This provides programmatic access to the model.
+The simplest way to run benchmarks is using the unified `benchmark.py` script:
 
 ```bash
-# Test with all .txt files in the current directory
-python ollama_api_benchmark.py gpt-oss:20b
+# List available engines
+python benchmark.py --list-engines
 
-# Test only specific context sizes
-python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16
+# Run Ollama API benchmark
+python benchmark.py ollama-api gpt-oss:20b
+
+# Run Ollama CLI benchmark
+python benchmark.py ollama-cli llama3.2
+
+# Run MLX benchmark (Apple Silicon only)
+python benchmark.py mlx mlx-community/Qwen3-4B-Instruct-2507-4bit
+
+# Custom options
+python benchmark.py ollama-api gpt-oss:20b --contexts 2,4,8,16,32 --max-tokens 500 --save-responses
 ```
 
-#### Option B: Ollama CLI Benchmark (ollama_cli_benchmark.py)
+##### Common Options
 
-Uses the `ollama run` command with `--verbose` flag to get detailed metrics. This approach directly calls the Ollama CLI and parses the verbose output.
+- `--contexts`: Context sizes to test (default: 2,4,8,16)
+- `--max-tokens`: Maximum tokens to generate (default: 200)
+- `--save-responses`: Save model responses to files
+- `--output-csv`: Output CSV filename
+- `--output-chart`: Output chart filename
+
+##### Engine-Specific Options
+
+- `--kv-bit`: KV cache bit size for MLX (e.g., 4 or 8)
+
+#### Direct Script Usage (Alternative)
+
+You can also run the benchmark scripts directly:
+
+##### Ollama API Benchmark
 
 ```bash
-# Test with all .txt files in the current directory
-python ollama_cli_benchmark.py gpt-oss:20b
+python ollama_api_benchmark.py gpt-oss:20b
+python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16 --max-tokens 200
+```
 
-# Test only specific context sizes
+##### Ollama CLI Benchmark
+
+```bash
+python ollama_cli_benchmark.py gpt-oss:20b
 python ollama_cli_benchmark.py gpt-oss:20b --contexts 2,4,8,16,32
 ```
 
-The CLI version provides the same metrics as shown in the verbose output:
-
-- `prompt eval count/duration/rate`: Prompt processing metrics
-- `eval count/duration/rate`: Generation metrics
-- `total duration`: Total processing time
-
-#### Option C: MLX Benchmark (mlx_benchmark.py) - Apple Silicon Only
-
-Uses MLX framework for running quantized models optimized for Apple Silicon.
+##### MLX Benchmark (Apple Silicon Only)
 
 ```bash
-# Test with all .txt files in the current directory
 python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit
-
-# Test only specific context sizes
-python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --contexts 2,4,8,16,32
-
-# Enable KV cache quantization (optional)
 python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --kv-bit 8
 ```
-
-The MLX version provides:
-
-- `prompt tokens/rate`: Prompt processing metrics
-- `generation tokens/rate`: Generation metrics  
-- `peak memory`: GPU memory usage in GB
-
-#### Common Options (all scripts)
-
-- `--contexts`: Comma-separated list of context sizes to test (e.g., 2,4,8,16)
-- `--max-tokens`: Maximum tokens to generate per test (default: 16000)
-- `--output-csv`: Output CSV filename (default: benchmark_results.csv)
-- `--output-chart`: Output chart filename (default: benchmark_chart.png)
 
 #### Output Files
 
@@ -214,28 +225,57 @@ The project includes `ollama_benchmark_notebook.ipynb` for interactive benchmark
 
 ## Example Workflows
 
-### Ollama Workflow
+### Quick Benchmark with Unified Interface
 
 ```bash
 # 1. Install dependencies
 uv pip install -r requirements.txt
 
-# 2. Download a source text (e.g., Pride and Prejudice from Project Gutenberg)
+# 2. Download a source text
+curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
+
+# 3. Generate context files (only needed once)
+python generate_context_files.py pride_and_prejudice.txt --sizes 2,4,8,16
+
+# 4. List available engines
+python benchmark.py --list-engines
+
+# 5. Run benchmarks using unified interface
+# Ollama API (requires: ollama pull gpt-oss:20b)
+python benchmark.py ollama-api gpt-oss:20b
+
+# Ollama CLI
+python benchmark.py ollama-cli llama3.2
+
+# MLX (Apple Silicon only, auto-downloads model)
+python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit
+
+# 6. View results
+ls benchmark_*/
+```
+
+### Detailed Ollama Workflow
+
+```bash
+# 1. Install dependencies
+uv pip install -r requirements.txt
+
+# 2. Download source text
 curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
 
 # 3. Generate context files
 python generate_context_files.py pride_and_prejudice.txt
 
-# 4. Pull an Ollama model
+# 4. Pull Ollama model
 ollama pull gpt-oss:20b
 
-# 5. Run the benchmark (choose one)
-# Using API:
-python ollama_api_benchmark.py gpt-oss:20b
-# Or using CLI:
-python ollama_cli_benchmark.py gpt-oss:20b
+# 5. Run benchmark with unified interface
+python benchmark.py ollama-api gpt-oss:20b
 
-# 6. View results in the generated directory
+# Or run directly
+python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16 --max-tokens 200
+
+# 6. View results
 ls benchmark_ollama_*/
 cat benchmark_ollama_*/hardware_info.json
 ```
@@ -247,16 +287,16 @@ cat benchmark_ollama_*/hardware_info.json
 uv pip install -r requirements.txt
 pip install mlx-lm
 
-# 2. Download a source text
-curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
-
-# 3. Generate context files
+# 2. Generate test data
 python generate_context_files.py pride_and_prejudice.txt
 
-# 4. Run MLX benchmark (model downloads automatically)
-python mlx_benchmark.py mlx-community/Qwen2.5-3B-Instruct-4bit
+# 3. Run MLX benchmark (model downloads automatically)
+python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit
 
-# 5. View results
+# With KV cache quantization
+python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit --kv-bit 4
+
+# 4. View results
 ls benchmark_mlx_*/
 cat benchmark_mlx_*/hardware_info.json
 ```
@@ -306,6 +346,8 @@ pre-commit autoupdate
 
 ```
 llm_context_benchmarks/
+├── benchmark.py                 # Unified benchmark interface (main entry point)
+├── benchmark_common.py          # Shared utilities and functions
 ├── ollama_api_benchmark.py      # Ollama API-based benchmarking
 ├── ollama_cli_benchmark.py      # Ollama CLI-based benchmarking
 ├── mlx_benchmark.py             # MLX framework benchmarking
