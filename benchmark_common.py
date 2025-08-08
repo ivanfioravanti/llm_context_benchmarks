@@ -221,8 +221,8 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_tweet_text(results, model_name, framework, hardware_info=None):
-    """Generate tweet text with results.
+def generate_xpost_text(results, model_name, framework, hardware_info=None):
+    """Generate X post text with results.
 
     Args:
         results: List of benchmark results
@@ -230,19 +230,33 @@ def generate_tweet_text(results, model_name, framework, hardware_info=None):
         framework: Framework name (e.g., "Ollama API", "Ollama CLI", "MLX")
         hardware_info: Hardware information dictionary
     """
-    tweet = f"{model_name} {framework} Benchmark Results\n"
+    xpost = f"{model_name} {framework} Benchmark Results\n"
 
     # Add hardware info if available
     if hardware_info:
         hardware_str = format_hardware_string(hardware_info)
-        tweet += f"Hardware: {hardware_str}\n"
+        xpost += f"Hardware: {hardware_str}\n"
 
-    tweet += "\n"
+    xpost += "\n"
 
+    total_tokens = 0
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
-        tweet += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
+        # Handle N/A prompt TPS for LM Studio
+        if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+            xpost += (
+                f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s\n"
+            )
+        else:
+            xpost += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
+        total_tokens += r.get("generation_tokens", 0)
 
-    return tweet.strip()
+    xpost += f"\nTotal generated tokens: {total_tokens}"
+
+    return xpost.strip()
+
+
+# Add a backward compatibility alias
+generate_tweet_text = generate_xpost_text
 
 
 def generate_table(results, model_name, framework, hardware_info=None, include_memory=False):
@@ -263,21 +277,43 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
         hardware_str = format_hardware_string(hardware_info)
         table += f"Hardware: {hardware_str}\n"
 
+    total_tokens = 0
     if include_memory:
-        table += "\nContext | Prompt TPS | Gen TPS | Memory\n"
-        table += "--------|------------|---------|--------\n"
+        table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory\n"
+        table += "--------|------------|---------|------------|--------\n"
 
         # Add data rows with memory
         for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
-            table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r.get('peak_memory_gb', 0):>6.1f} GB\n"
+            gen_tokens = r.get("generation_tokens", 0)
+            # Handle N/A prompt TPS for LM Studio
+            if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+                prompt_str = f"{r.get('prompt_tokens', 0)} tok"
+            else:
+                prompt_str = f"{r['prompt_tps']:>10.1f}"
+            table += f"{r['context_size']:>7} | {prompt_str:>10} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {r.get('peak_memory_gb', 0):>6.1f} GB\n"
+            total_tokens += gen_tokens
     else:
-        table += "\nContext | Prompt TPS | Gen TPS | Total Time\n"
-        table += "--------|------------|---------|------------\n"
+        # Check if we need special handling for LM Studio
+        if "EXPERIMENTAL" in framework:
+            table += "\nContext | Prompt Tokens | Gen TPS | Gen Tokens | Total Time\n"
+            table += "--------|---------------|---------|------------|------------\n"
+        else:
+            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Total Time\n"
+            table += "--------|------------|---------|------------|------------\n"
 
         # Add data rows with total time
         for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
             total_time = r.get("total_time", r.get("wall_time", 0))
-            table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {total_time:>9.1f}s\n"
+            gen_tokens = r.get("generation_tokens", 0)
+            # Handle N/A prompt TPS for LM Studio
+            if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+                prompt_str = f"{r.get('prompt_tokens', 0)} tok"
+                table += f"{r['context_size']:>7} | {prompt_str:>13} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+            else:
+                table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+            total_tokens += gen_tokens
+
+    table += f"\nTotal generated tokens: {total_tokens}"
 
     return table
 

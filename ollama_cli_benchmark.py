@@ -264,7 +264,7 @@ def main():
     # Update output paths to use the new directory
     csv_path = output_dir / args.output_csv
     chart_path = output_dir / args.output_chart
-    tweet_path = output_dir / "tweet.txt"
+    xpost_path = output_dir / "xpost.txt"
     table_path = output_dir / "table.txt"
     hardware_path = output_dir / "hardware_info.json"
 
@@ -298,6 +298,10 @@ def main():
         print("No successful benchmark results")
         return
 
+    # Calculate total generated tokens
+    total_generated_tokens = sum(r.get("generation_tokens", 0) for r in results)
+    print(f"\n📊 Total generated tokens across all tests: {total_generated_tokens}")
+
     # Save to CSV
     common.save_results_csv(results, csv_path)
 
@@ -305,15 +309,15 @@ def main():
     chart_result = common.create_chart_ollama(results, model_name, hardware_info, str(chart_path), "Ollama CLI")
     print(f"Chart saved to {chart_path}")
 
-    # Generate tweet text
-    tweet = common.generate_tweet_text(results, model_name, "Ollama CLI", hardware_info)
-    print("\n--- Tweet Text ---")
-    print(tweet)
+    # Generate X post text
+    xpost = common.generate_xpost_text(results, model_name, "Ollama CLI", hardware_info)
+    print("\n--- X Post Text ---")
+    print(xpost)
 
-    # Save tweet to file
-    with open(tweet_path, "w") as f:
-        f.write(tweet)
-    print(f"\nTweet text saved to {tweet_path}")
+    # Save X post to file
+    with open(xpost_path, "w") as f:
+        f.write(xpost)
+    print(f"\nX Post text saved to {xpost_path}")
 
     # Generate and display table
     table = common.generate_table(results, model_name, "Ollama CLI", hardware_info)
