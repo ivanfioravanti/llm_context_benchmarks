@@ -130,7 +130,7 @@ def run_cli_benchmark(model_name, context_file, max_tokens=200):
 
     try:
         # Run the command and capture output
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # 10 minute timeout
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)  # 60 minute timeout
 
         # Calculate total wall time
         total_wall_time = time.time() - start_time

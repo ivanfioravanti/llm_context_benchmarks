@@ -39,7 +39,7 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200):
 
     try:
         with open(context_file, "r") as f:
-            result = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=600)  # 10 minute timeout
+            result = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=3600)  # 60 minute timeout
 
         # Calculate total wall time
         total_wall_time = time.time() - start_time
