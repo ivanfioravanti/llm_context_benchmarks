@@ -62,6 +62,7 @@ htmlcov/
 
 # Benchmark output directories
 output/
+comparison_results/
 
 # Logs
 *.log

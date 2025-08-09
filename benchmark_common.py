@@ -221,8 +221,8 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_tweet_text(results, model_name, framework, hardware_info=None):
-    """Generate tweet text with results.
+def generate_xpost_text(results, model_name, framework, hardware_info=None):
+    """Generate X post text with results.
 
     Args:
         results: List of benchmark results
@@ -230,19 +230,33 @@ def generate_tweet_text(results, model_name, framework, hardware_info=None):
         framework: Framework name (e.g., "Ollama API", "Ollama CLI", "MLX")
         hardware_info: Hardware information dictionary
     """
-    tweet = f"{model_name} {framework} Benchmark Results\n"
+    xpost = f"{model_name} {framework} Benchmark Results\n"
 
     # Add hardware info if available
     if hardware_info:
         hardware_str = format_hardware_string(hardware_info)
-        tweet += f"Hardware: {hardware_str}\n"
+        xpost += f"Hardware: {hardware_str}\n"
 
-    tweet += "\n"
+    xpost += "\n"
 
+    total_tokens = 0
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
-        tweet += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
+        # Handle N/A prompt TPS for LM Studio
+        if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+            xpost += (
+                f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s\n"
+            )
+        else:
+            xpost += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
+        total_tokens += r.get("generation_tokens", 0)
 
-    return tweet.strip()
+    xpost += f"\nTotal generated tokens: {total_tokens}"
+
+    return xpost.strip()
+
+
+# Add a backward compatibility alias
+generate_tweet_text = generate_xpost_text
 
 
 def generate_table(results, model_name, framework, hardware_info=None, include_memory=False):
@@ -263,21 +277,43 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
         hardware_str = format_hardware_string(hardware_info)
         table += f"Hardware: {hardware_str}\n"
 
+    total_tokens = 0
     if include_memory:
-        table += "\nContext | Prompt TPS | Gen TPS | Memory\n"
-        table += "--------|------------|---------|--------\n"
+        table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory\n"
+        table += "--------|------------|---------|------------|--------\n"
 
         # Add data rows with memory
         for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
-            table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r.get('peak_memory_gb', 0):>6.1f} GB\n"
+            gen_tokens = r.get("generation_tokens", 0)
+            # Handle N/A prompt TPS for LM Studio
+            if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+                prompt_str = f"{r.get('prompt_tokens', 0)} tok"
+            else:
+                prompt_str = f"{r['prompt_tps']:>10.1f}"
+            table += f"{r['context_size']:>7} | {prompt_str:>10} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {r.get('peak_memory_gb', 0):>6.1f} GB\n"
+            total_tokens += gen_tokens
     else:
-        table += "\nContext | Prompt TPS | Gen TPS | Total Time\n"
-        table += "--------|------------|---------|------------\n"
+        # Check if we need special handling for LM Studio
+        if "EXPERIMENTAL" in framework:
+            table += "\nContext | Prompt Tokens | Gen TPS | Gen Tokens | Total Time\n"
+            table += "--------|---------------|---------|------------|------------\n"
+        else:
+            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Total Time\n"
+            table += "--------|------------|---------|------------|------------\n"
 
         # Add data rows with total time
         for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
             total_time = r.get("total_time", r.get("wall_time", 0))
-            table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {total_time:>9.1f}s\n"
+            gen_tokens = r.get("generation_tokens", 0)
+            # Handle N/A prompt TPS for LM Studio
+            if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
+                prompt_str = f"{r.get('prompt_tokens', 0)} tok"
+                table += f"{r['context_size']:>7} | {prompt_str:>13} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+            else:
+                table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+            total_tokens += gen_tokens
+
+    table += f"\nTotal generated tokens: {total_tokens}"
 
     return table
 
@@ -402,12 +438,12 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax3_right.set_ylabel("Tokens Generated", color=color_tokens)
     ax3_right.tick_params(axis="y", labelcolor=color_tokens)
 
-    # Add value labels for tokens
+    # Add value labels for tokens positioned lower than bar labels
     if generation_tokens:
         for i, tokens in enumerate(generation_tokens):
             ax3_right.text(
                 i,
-                tokens + max(generation_tokens) * 0.03 if generation_tokens else 0,
+                tokens + max(generation_tokens) * 0.02 if generation_tokens else 0,
                 f"{tokens}",
                 ha="center",
                 va="bottom",
@@ -415,20 +451,16 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
                 color=color_tokens,
             )
 
-    ax3_right.set_ylim(0, max(generation_tokens) * 1.15 if generation_tokens and max(generation_tokens) > 0 else 1)
+    # Set right y-axis scale so the highest token point is positioned lower than the highest bar
+    max_tokens = max(generation_tokens) if generation_tokens else 1
+    if max_tokens > 0:
+        # Scale to 1.5 times the max value so the highest point appears lower
+        ax3_right.set_ylim(0, max_tokens * 1.5)
+    else:
+        ax3_right.set_ylim(0, 1)
 
     # Add grid
     ax3.grid(True, axis="y", alpha=0.3)
-
-    # Add legends
-    ax3.legend(loc="upper left")
-    ax3_right.legend(loc="upper right")
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
-    plt.close()
-
-    return output_path
 
 
 def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png"):
@@ -439,6 +471,7 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     gen_tps = []
     peak_memory = []
     generation_tokens = []
+    total_times = []
 
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
@@ -446,9 +479,10 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
         gen_tps.append(r["generation_tps"])
         peak_memory.append(r["peak_memory_gb"])
         generation_tokens.append(r["generation_tokens"])
+        total_times.append(r.get("total_time", 0))
 
-    # Create figure with three subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 11), gridspec_kw={"height_ratios": [1, 1, 1]})
+    # Create figure with four subplots with more spacing
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -492,19 +526,82 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, max(gen_tps) * 1.15 if gen_tps and max(gen_tps) > 0 else 1)
 
-    # Third subplot - Peak Memory Usage with Tokens Generated
-    ax3.set_title("Peak Memory Usage & Tokens Generated", fontsize=14, pad=10)
+    # Third subplot - Total Time vs Tokens Generated
+    ax3.set_title("Total Processing Time & Tokens Generated", fontsize=14, pad=10)
 
-    # Bar chart for memory (left y-axis)
+    # Bar chart for total time (left y-axis)
+    color_time = "#9C27B0"
+    bars = ax3.bar(x, total_times, color=color_time, width=0.6, alpha=0.7, label="Total Time")
+
+    # Add value labels on bars
+    if total_times:
+        max_time = max(total_times) if total_times else 1
+        for i, (bar, time_val) in enumerate(zip(bars, total_times)):
+            height = bar.get_height()
+            ax3.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height + max_time * 0.02,
+                f"{time_val:.1f}s",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color=color_time,
+            )
+
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(context_sizes)
+    ax3.set_ylabel("Time (seconds)", color=color_time)
+    ax3.tick_params(axis="y", labelcolor=color_time)
+    ax3.set_ylim(0, max(total_times) * 1.2 if total_times and max(total_times) > 0 else 1)
+
+    # Create second y-axis for tokens generated
+    ax3_right = ax3.twinx()
+    color_tokens = "#4CAF50"
+    ax3_right.plot(x, generation_tokens, "o-", color=color_tokens, linewidth=2, markersize=8, label="Tokens Generated")
+    ax3_right.set_ylabel("Tokens Generated", color=color_tokens)
+    ax3_right.tick_params(axis="y", labelcolor=color_tokens)
+
+    # Add value labels for tokens positioned lower than bar labels
+    if generation_tokens:
+        for i, tokens in enumerate(generation_tokens):
+            ax3_right.text(
+                i,
+                tokens + max(generation_tokens) * 0.02 if generation_tokens else 0,
+                f"{tokens}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color=color_tokens,
+            )
+
+    # Set right y-axis scale so the highest token point is positioned lower than the highest bar
+    max_tokens = max(generation_tokens) if generation_tokens else 1
+    if max_tokens > 0:
+        # Scale to 1.5 times the max value so the highest point appears lower
+        ax3_right.set_ylim(0, max_tokens * 1.5)
+    else:
+        ax3_right.set_ylim(0, 1)
+
+    # Add grid
+    ax3.grid(True, axis="y", alpha=0.3)
+
+    # Add legends
+    ax3.legend(loc="upper left")
+    ax3_right.legend(loc="upper right")
+
+    # Fourth subplot - Peak Memory Usage Only
+    ax4.set_title("Peak Memory Usage", fontsize=14, pad=10)
+
+    # Bar chart for memory
     color_memory = "#ff9800"
-    bars = ax3.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7, label="Peak Memory")
+    bars = ax4.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7)
 
     # Add value labels on bars
     if peak_memory:
         max_mem = max(peak_memory) if peak_memory else 1
         for i, (bar, mem) in enumerate(zip(bars, peak_memory)):
             height = bar.get_height()
-            ax3.text(
+            ax4.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 height + max_mem * 0.02,
                 f"{mem:.1f} GB",
@@ -514,42 +611,17 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
                 color=color_memory,
             )
 
-    ax3.set_xticks(x)
-    ax3.set_xticklabels(context_sizes)
-    ax3.set_ylabel("Memory (GB)", color=color_memory)
-    ax3.tick_params(axis="y", labelcolor=color_memory)
-    ax3.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
-
-    # Create second y-axis for tokens generated
-    ax3_right = ax3.twinx()
-    color_tokens = "#4CAF50"
-    ax3_right.plot(x, generation_tokens, "o-", color=color_tokens, linewidth=2, markersize=8, label="Tokens Generated")
-    ax3_right.set_ylabel("Tokens Generated", color=color_tokens)
-    ax3_right.tick_params(axis="y", labelcolor=color_tokens)
-
-    # Add value labels for tokens
-    if generation_tokens:
-        for i, tokens in enumerate(generation_tokens):
-            ax3_right.text(
-                i,
-                tokens + max(generation_tokens) * 0.03 if generation_tokens else 0,
-                f"{tokens}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                color=color_tokens,
-            )
-
-    ax3_right.set_ylim(0, max(generation_tokens) * 1.15 if generation_tokens and max(generation_tokens) > 0 else 1)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(context_sizes)
+    ax4.set_ylabel("Memory (GB)", color=color_memory)
+    ax4.tick_params(axis="y", labelcolor=color_memory)
+    ax4.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
 
     # Add grid
-    ax3.grid(True, axis="y", alpha=0.3)
+    ax4.grid(True, axis="y", alpha=0.3)
 
-    # Add legends
-    ax3.legend(loc="upper left")
-    ax3_right.legend(loc="upper right")
-
-    plt.tight_layout()
+    # Adjust layout with custom padding to prevent overlap
+    plt.subplots_adjust(top=0.9, bottom=0.1, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
 

@@ -6,7 +6,8 @@ Usage:
     python benchmark.py ollama-api gpt-oss:20b
     python benchmark.py ollama-cli llama3.2
     python benchmark.py mlx mlx-community/Qwen3-0.6B-4bit
-    python benchmark.py llamacpp ./models/llama-7b.gguf
+    python benchmark.py llamacpp gpt-oss:20b  # defaults to localhost:8080
+    python benchmark.py llamacpp gpt-oss:20b --port 9000  # custom port
     python benchmark.py lmstudio local-model
 """
 
@@ -34,18 +35,15 @@ def get_available_engines():
             "description": "MLX framework (Apple Silicon only)",
             "example": "mlx-community/Qwen3-0.6B-4bit",
         },
-        # Future engines
         "llamacpp": {
             "script": "llamacpp_benchmark.py",
-            "description": "llama.cpp with GGUF models",
-            "example": "./models/llama-7b.gguf",
-            "status": "planned",
+            "description": "llama.cpp server via HTTP API",
+            "example": "gpt-oss:20b --port 9000",
         },
         "lmstudio": {
             "script": "lmstudio_benchmark.py",
             "description": "LM Studio local server",
             "example": "local-model",
-            "status": "planned",
         },
     }
     return engines
@@ -191,6 +189,19 @@ Examples:
         help="KV cache bit size for MLX (e.g., 4 or 8)",
     )
 
+    parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host for llama.cpp server (default: localhost)",
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for llama.cpp server (default: 8080)",
+    )
+
     # Parse arguments
     args, unknown_args = parser.parse_known_args()
 
@@ -230,6 +241,10 @@ Examples:
     # Add engine-specific arguments
     if args.engine == "mlx" and args.kv_bit is not None:
         pass_through_args.extend(["--kv-bit", str(args.kv_bit)])
+
+    if args.engine == "llamacpp":
+        pass_through_args.extend(["--host", args.host])
+        pass_through_args.extend(["--port", str(args.port)])
 
     # Add any unknown arguments (for future compatibility)
     pass_through_args.extend(unknown_args)
