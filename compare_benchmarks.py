@@ -94,11 +94,26 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
 
     # Set up the plot style
     plt.style.use("default")
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
     fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold")
 
-    # Colors for different benchmarks
-    colors = plt.cm.Set3(np.linspace(0, 1, len(benchmark_data)))
+    # Colors for different benchmarks - using more readable, distinct colors
+    readable_colors = [
+        '#1f77b4',  # blue
+        '#ff7f0e',  # orange
+        '#2ca02c',  # green
+        '#d62728',  # red
+        '#9467bd',  # purple
+        '#8c564b',  # brown
+        '#e377c2',  # pink
+        '#7f7f7f',  # gray
+        '#bcbd22',  # olive
+        '#17becf',  # cyan
+    ]
+    colors = readable_colors[:len(benchmark_data)]
+    if len(benchmark_data) > len(readable_colors):
+        # Fall back to colormap if we have more data than predefined colors
+        colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
 
     # Prepare data for plotting
     for i, data in enumerate(benchmark_data):
@@ -114,6 +129,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         prompt_tps = [r.get("prompt_tps", 0) for r in results]
         generation_tps = [r.get("generation_tps", 0) for r in results]
         total_times = [r.get("total_time", 0) for r in results]
+        peak_memory = [r.get("peak_memory_gb", 0) for r in results]
 
         # Convert context sizes to numbers for sorting
         context_nums = []
@@ -124,21 +140,40 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
                 context_nums.append(int(ctx))
 
         # Sort all data by context size
-        sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times))
-        context_nums, context_sizes, prompt_tps, generation_tps, total_times = zip(*sorted_data)
+        sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, peak_memory))
+        context_nums, context_sizes, prompt_tps, generation_tps, total_times, peak_memory = zip(*sorted_data)
 
         # Plot 1: Prompt Processing Speed
-        ax1.plot(context_sizes, prompt_tps, marker="o", linewidth=2, label=display_name, color=color)
+        line1 = ax1.plot(context_sizes, prompt_tps, marker="o", linewidth=2, label=display_name, color=color)[0]
+        # Add value annotations
+        for x, y in zip(context_sizes, prompt_tps):
+            ax1.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
         # Plot 2: Generation Speed
-        ax2.plot(context_sizes, generation_tps, marker="s", linewidth=2, label=display_name, color=color)
+        line2 = ax2.plot(context_sizes, generation_tps, marker="s", linewidth=2, label=display_name, color=color)[0]
+        # Add value annotations
+        for x, y in zip(context_sizes, generation_tps):
+            ax2.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
         # Plot 3: Total Time
-        ax3.plot(context_sizes, total_times, marker="^", linewidth=2, label=display_name, color=color)
+        line3 = ax3.plot(context_sizes, total_times, marker="^", linewidth=2, label=display_name, color=color)[0]
+        # Add value annotations
+        for x, y in zip(context_sizes, total_times):
+            ax3.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
         # Plot 4: Efficiency (tokens/sec per context size)
         efficiency = [g_tps / (ctx_num / 1000) for g_tps, ctx_num in zip(generation_tps, context_nums)]
-        ax4.plot(context_sizes, efficiency, marker="d", linewidth=2, label=display_name, color=color)
+        line4 = ax4.plot(context_sizes, efficiency, marker="d", linewidth=2, label=display_name, color=color)[0]
+
+        # Plot 5: Peak Memory Usage
+        line5 = ax5.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)[0]
+        # Add value annotations
+        for x, y in zip(context_sizes, peak_memory):
+            ax5.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
+
+        # Plot 6: Memory Efficiency (GB per 1K context)
+        memory_efficiency = [mem / (ctx_num / 1000) for mem, ctx_num in zip(peak_memory, context_nums)]
+        line6 = ax6.plot(context_sizes, memory_efficiency, marker="h", linewidth=2, label=display_name, color=color)[0]
 
     # Configure subplot 1: Prompt Processing Speed
     ax1.set_title("Prompt Processing Speed", fontweight="bold")
@@ -165,12 +200,28 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     ax3.tick_params(axis="x", rotation=45)
 
     # Configure subplot 4: Efficiency
-    ax4.set_title("Generation Efficiency (tokens/sec per 1K context)", fontweight="bold")
+    ax4.set_title("Generation Efficiency (tokens/sec per 1K context)\nHigher is better", fontweight="bold")
     ax4.set_xlabel("Context Size")
     ax4.set_ylabel("Efficiency Ratio")
     ax4.legend()
     ax4.grid(True, alpha=0.3)
     ax4.tick_params(axis="x", rotation=45)
+
+    # Configure subplot 5: Peak Memory Usage
+    ax5.set_title("Peak Memory Usage", fontweight="bold")
+    ax5.set_xlabel("Context Size")
+    ax5.set_ylabel("Memory (GB)")
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    ax5.tick_params(axis="x", rotation=45)
+
+    # Configure subplot 6: Memory Efficiency
+    ax6.set_title("Memory Efficiency (GB per 1K context)\nLower is better", fontweight="bold")
+    ax6.set_xlabel("Context Size")
+    ax6.set_ylabel("GB per 1K tokens")
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    ax6.tick_params(axis="x", rotation=45)
 
     plt.tight_layout()
 
