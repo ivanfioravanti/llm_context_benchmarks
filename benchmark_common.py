@@ -462,6 +462,17 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     # Add grid
     ax3.grid(True, axis="y", alpha=0.3)
 
+    # Add legends
+    ax3.legend(loc="upper left")
+    ax3_right.legend(loc="upper right")
+
+    # Adjust layout with custom padding to prevent overlap
+    plt.subplots_adjust(top=0.9, bottom=0.1, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+
+    return output_path
+
 
 def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png"):
     """Create a chart for MLX benchmarks with memory information."""
