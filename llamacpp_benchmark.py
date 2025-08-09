@@ -183,6 +183,12 @@ def main():
         default="benchmark_chart.png",
         help="Output chart filename (default: benchmark_chart.png)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)",
+    )
 
     args = parser.parse_args()
 
