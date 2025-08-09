@@ -86,6 +86,7 @@ def benchmark_llamacpp(server_url, context_file, max_tokens=200):
         "top_k": 40,
         "top_p": 0.95,
         "stream": False,
+        "cache_prompt": False,
     }
 
     # Record start time

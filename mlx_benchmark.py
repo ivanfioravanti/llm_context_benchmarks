@@ -10,7 +10,7 @@ from pathlib import Path
 import benchmark_common as common
 
 
-def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=1800):
+def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=1800, max_kv_size=None):
     """Run MLX benchmark for a given context file."""
     print(f"Running benchmark for {context_file}...")
 
@@ -28,7 +28,9 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
         str(max_tokens),
     ]
 
-    # Only add kv-bit if explicitly specified
+    if max_kv_size is not None:
+        cmd.extend(["--max-kv-size", str(max_kv_size)])
+
     if kv_bit is not None:
         cmd.extend(["--kv-bit", str(kv_bit)])
 
@@ -117,6 +119,7 @@ def main():
         help="Comma-separated list of context sizes to benchmark (default: 2,4,8,16)",
     )
     parser.add_argument("--kv-bit", type=int, default=None, help="KV cache bit size (optional, e.g., 4 or 8)")
+    parser.add_argument("--max-kv-size", type=int, default=None, help="KV cache size in tokens (optional, e.g., 4096)")
     parser.add_argument("--max-tokens", type=int, default=200, help="Max tokens to generate (default: 200)")
     parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)")
     parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
@@ -162,7 +165,7 @@ def main():
     # Run benchmarks
     results = []
     for file in context_files:
-        result = run_benchmark(args.model, file, args.kv_bit, args.max_tokens, args.timeout)
+        result = run_benchmark(args.model, file, args.kv_bit, args.max_tokens, args.timeout, args.max_kv_size)
         if result:
             results.append(result)
 
