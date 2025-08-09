@@ -118,7 +118,7 @@ def main():
     )
     parser.add_argument("--kv-bit", type=int, default=None, help="KV cache bit size (optional, e.g., 4 or 8)")
     parser.add_argument("--max-tokens", type=int, default=200, help="Max tokens to generate (default: 200)")
-    parser.add_argument("--timeout", type=int, default=1800, help="Timeout in seconds for each benchmark (default: 1800 = 30 minutes)")
+    parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)")
     parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
     parser.add_argument("--output-chart", default="benchmark_chart.png", help="Output chart file")
     parser.add_argument("--save-responses", action="store_true", help="Save raw model responses to files")

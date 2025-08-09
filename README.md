@@ -176,12 +176,16 @@ python benchmark.py lmstudio local-model
 
 # Custom options
 python benchmark.py ollama-api gpt-oss:20b --contexts 2,4,8,16,32 --max-tokens 500 --save-responses
+
+# Increase timeout for large context benchmarks
+python benchmark.py mlx mlx-community/Qwen3-4B-Instruct-2507-4bit --contexts 64,128 --timeout 7200
 ```
 
 ##### Common Options
 
 - `--contexts`: Context sizes to test (default: 2,4,8,16)
 - `--max-tokens`: Maximum tokens to generate (default: 200)
+- `--timeout`: Timeout in seconds for each benchmark (default: 3600 = 60 minutes)
 - `--save-responses`: Save model responses to files
 - `--output-csv`: Output CSV filename
 - `--output-chart`: Output chart filename
@@ -215,6 +219,7 @@ python ollama_cli_benchmark.py gpt-oss:20b --contexts 2,4,8,16,32
 ```bash
 python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit
 python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --kv-bit 8
+python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --timeout 7200  # 2 hours for large contexts
 ```
 
 #### Output Files

@@ -182,6 +182,13 @@ Examples:
         help="Output chart filename (default: benchmark_chart.png)",
     )
 
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)",
+    )
+
     # Engine-specific options
     parser.add_argument(
         "--kv-bit",
@@ -231,6 +238,7 @@ Examples:
     # Add common arguments
     pass_through_args.extend(["--contexts", args.contexts])
     pass_through_args.extend(["--max-tokens", str(args.max_tokens)])
+    pass_through_args.extend(["--timeout", str(args.timeout)])
 
     if args.save_responses:
         pass_through_args.append("--save-responses")
