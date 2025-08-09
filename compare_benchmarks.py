@@ -92,9 +92,18 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
 def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     """Create comparison charts from multiple benchmark results."""
 
+    # Check if any benchmark has memory data
+    has_memory_data = any(
+        any(r.get("peak_memory_gb", 0) > 0 for r in data["results"])
+        for data in benchmark_data
+    )
+
     # Set up the plot style
     plt.style.use("default")
-    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
+    if has_memory_data:
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
+    else:
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold")
 
     # Colors for different benchmarks - using more readable, distinct colors
@@ -165,15 +174,17 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         efficiency = [g_tps / (ctx_num / 1000) for g_tps, ctx_num in zip(generation_tps, context_nums)]
         line4 = ax4.plot(context_sizes, efficiency, marker="d", linewidth=2, label=display_name, color=color)[0]
 
-        # Plot 5: Peak Memory Usage
-        line5 = ax5.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)[0]
-        # Add value annotations
-        for x, y in zip(context_sizes, peak_memory):
-            ax5.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
+        if has_memory_data:
+            # Plot 5: Peak Memory Usage
+            line5 = ax5.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)[0]
+            # Add value annotations
+            for x, y in zip(context_sizes, peak_memory):
+                if y > 0:  # Only annotate non-zero values
+                    ax5.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
-        # Plot 6: Memory Efficiency (GB per 1K context)
-        memory_efficiency = [mem / (ctx_num / 1000) for mem, ctx_num in zip(peak_memory, context_nums)]
-        line6 = ax6.plot(context_sizes, memory_efficiency, marker="h", linewidth=2, label=display_name, color=color)[0]
+            # Plot 6: Memory Efficiency (GB per 1K context)
+            memory_efficiency = [mem / (ctx_num / 1000) if ctx_num > 0 else 0 for mem, ctx_num in zip(peak_memory, context_nums)]
+            line6 = ax6.plot(context_sizes, memory_efficiency, marker="h", linewidth=2, label=display_name, color=color)[0]
 
     # Configure subplot 1: Prompt Processing Speed
     ax1.set_title("Prompt Processing Speed", fontweight="bold")
@@ -207,21 +218,22 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     ax4.grid(True, alpha=0.3)
     ax4.tick_params(axis="x", rotation=45)
 
-    # Configure subplot 5: Peak Memory Usage
-    ax5.set_title("Peak Memory Usage", fontweight="bold")
-    ax5.set_xlabel("Context Size")
-    ax5.set_ylabel("Memory (GB)")
-    ax5.legend()
-    ax5.grid(True, alpha=0.3)
-    ax5.tick_params(axis="x", rotation=45)
+    if has_memory_data:
+        # Configure subplot 5: Peak Memory Usage
+        ax5.set_title("Peak Memory Usage", fontweight="bold")
+        ax5.set_xlabel("Context Size")
+        ax5.set_ylabel("Memory (GB)")
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+        ax5.tick_params(axis="x", rotation=45)
 
-    # Configure subplot 6: Memory Efficiency
-    ax6.set_title("Memory Efficiency (GB per 1K context)\nLower is better", fontweight="bold")
-    ax6.set_xlabel("Context Size")
-    ax6.set_ylabel("GB per 1K tokens")
-    ax6.legend()
-    ax6.grid(True, alpha=0.3)
-    ax6.tick_params(axis="x", rotation=45)
+        # Configure subplot 6: Memory Efficiency
+        ax6.set_title("Memory Efficiency (GB per 1K context)\nLower is better", fontweight="bold")
+        ax6.set_xlabel("Context Size")
+        ax6.set_ylabel("GB per 1K tokens")
+        ax6.legend()
+        ax6.grid(True, alpha=0.3)
+        ax6.tick_params(axis="x", rotation=45)
 
     plt.tight_layout()
 

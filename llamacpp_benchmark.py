@@ -63,13 +63,14 @@ def get_server_info(server_url):
     return {}
 
 
-def benchmark_llamacpp(server_url, context_file, max_tokens=200):
+def benchmark_llamacpp(server_url, context_file, max_tokens=200, timeout=3600):
     """Benchmark llama.cpp server with a given context file.
 
     Args:
         server_url: URL of the llama.cpp server
         context_file: Path to the context file
         max_tokens: Maximum number of tokens to generate
+        timeout: Request timeout in seconds
 
     Returns:
         Dictionary with benchmark results
@@ -95,7 +96,7 @@ def benchmark_llamacpp(server_url, context_file, max_tokens=200):
     # Make the request to the server
     try:
         response = requests.post(
-            f"{server_url}/completion", json=payload, timeout=300  # 5 minute timeout for large contexts
+            f"{server_url}/completion", json=payload, timeout=timeout
         )
         response.raise_for_status()
         result = response.json()
@@ -246,7 +247,7 @@ def main():
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
 
-        result = benchmark_llamacpp(server_url, context_file, args.max_tokens)
+        result = benchmark_llamacpp(server_url, context_file, args.max_tokens, args.timeout)
 
         if result:
             results.append(result)
