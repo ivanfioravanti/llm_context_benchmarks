@@ -79,7 +79,7 @@ def get_server_info(server_url):
     return {"model": "lmstudio-model"}
 
 
-def benchmark_lmstudio(server_url, context_file, max_tokens=200, model_name=None):
+def benchmark_lmstudio(server_url, context_file, max_tokens=200, model_name=None, timeout=300):
     """Benchmark LM Studio server with a given context file using native API.
 
     Args:
@@ -87,6 +87,7 @@ def benchmark_lmstudio(server_url, context_file, max_tokens=200, model_name=None
         context_file: Path to the context file
         max_tokens: Maximum number of tokens to generate
         model_name: Optional model name to use
+        timeout: Request timeout in seconds
 
     Returns:
         Dictionary with benchmark results
@@ -114,7 +115,7 @@ def benchmark_lmstudio(server_url, context_file, max_tokens=200, model_name=None
     # Use LM Studio native API for accurate metrics
     try:
         response = requests.post(
-            f"{server_url}/api/v0/chat/completions", json=payload, timeout=300  # 5 minute timeout for large contexts
+            f"{server_url}/api/v0/chat/completions", json=payload, timeout=timeout
         )
         response.raise_for_status()
         result = response.json()
@@ -215,6 +216,12 @@ def main():
         default="benchmark_chart.png",
         help="Output chart filename (default: benchmark_chart.png)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Timeout in seconds for each benchmark (default: 300)",
+    )
 
     args = parser.parse_args()
 
@@ -277,7 +284,7 @@ def main():
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
 
-        result = benchmark_lmstudio(server_url, context_file, args.max_tokens, model_name)
+        result = benchmark_lmstudio(server_url, context_file, args.max_tokens, model_name, args.timeout)
 
         if result:
             results.append(result)
