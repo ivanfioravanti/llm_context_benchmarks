@@ -241,6 +241,7 @@ def main():
         default="2,4,8,16",
         help="Comma-separated list of context sizes to benchmark (default: 2,4,8,16)",
     )
+    parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds (default: 3600)")
     parser.add_argument("--max-tokens", type=int, default=200, help="Max tokens to generate (default: 200)")
     parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
     parser.add_argument("--output-chart", default="benchmark_chart.png", help="Output chart file")
