@@ -195,6 +195,11 @@ Examples:
         type=int,
         help="KV cache bit size for MLX (e.g., 4 or 8)",
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="(MLX) Allow running custom model/tokenizer code when loading",
+    )
 
     parser.add_argument(
         "--host",
@@ -249,6 +254,8 @@ Examples:
     # Add engine-specific arguments
     if args.engine == "mlx" and args.kv_bit is not None:
         pass_through_args.extend(["--kv-bit", str(args.kv_bit)])
+    if args.engine == "mlx" and args.trust_remote_code:
+        pass_through_args.append("--trust-remote-code")
 
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])

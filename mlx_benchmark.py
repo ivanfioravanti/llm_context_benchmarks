@@ -1,17 +1,47 @@
 #!/usr/bin/env python3
+"""
+Benchmark script for MLX framework on Apple Silicon.
+
+This script runs benchmarks using MLX-LM for efficient inference on Apple Silicon Macs.
+
+Usage:
+    python mlx_benchmark.py mlx-community/Qwen3-0.6B-4bit
+    python mlx_benchmark.py mlx-community/Qwen3-0.6B-4bit --kv-bit 4 --max-tokens 500
+"""
+
 import argparse
 import re
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
+from typing import Dict, Optional
 
 import benchmark_common as common
 
 
-def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=1800, max_kv_size=None):
-    """Run MLX benchmark for a given context file."""
+def run_benchmark(
+    model_url: str,
+    context_file: Path,
+    kv_bit: Optional[int] = None,
+    max_tokens: int = 200,
+    timeout: int = 1800,
+    max_kv_size: Optional[int] = None,
+    trust_remote_code: bool = False,
+) -> Optional[Dict]:
+    """Run MLX benchmark for a given context file.
+    
+    Args:
+        model_url: MLX model URL
+        context_file: Path to the context file
+        kv_bit: KV cache bit size (optional)
+        max_tokens: Maximum tokens to generate
+        timeout: Timeout in seconds
+        max_kv_size: Maximum KV cache size in tokens (optional)
+    
+    Returns:
+        Dictionary with benchmark results or None if failed
+    """
     print(f"Running benchmark for {context_file}...")
 
     # Check if we're in a virtual environment and use the correct python
@@ -28,6 +58,9 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
         str(max_tokens),
     ]
 
+    if trust_remote_code:
+        cmd.append("--trust-remote-code")
+
     if max_kv_size is not None:
         cmd.extend(["--max-kv-size", str(max_kv_size)])
 
@@ -41,7 +74,9 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
 
     try:
         with open(context_file, "r") as f:
-            result = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                cmd, stdin=f, capture_output=True, text=True, timeout=timeout
+            )
 
         # Calculate total wall time
         total_wall_time = time.time() - start_time
@@ -52,7 +87,7 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
 
         # Parse the output - MLX outputs metrics to stdout
         output = result.stdout
-        
+
         # Extract the generated text (everything before the metrics section)
         metrics_start = output.find("\n==========\nPrompt:")
         if metrics_start != -1:
@@ -60,13 +95,19 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
             metrics_section = output[metrics_start:]
         else:
             # Fallback if separator not found
-            generated_text = output.split("Prompt:")[0].strip() if "Prompt:" in output else ""
+            generated_text = (
+                output.split("Prompt:")[0].strip() if "Prompt:" in output else ""
+            )
             metrics_section = output
 
         # Extract metrics using regex from MLX output format
-        # MLX outputs: "Prompt: X tokens, Y tokens-per-sec"
-        prompt_match = re.search(r"Prompt:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec", metrics_section)
-        gen_match = re.search(r"Generation:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec", metrics_section)
+        prompt_match = re.search(
+            r"Prompt:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec", metrics_section
+        )
+        gen_match = re.search(
+            r"Generation:\s*(\d+)\s*tokens,\s*([\d.]+)\s*tokens-per-sec",
+            metrics_section,
+        )
         memory_match = re.search(r"Peak memory:\s*([\d.]+)\s*GB", metrics_section)
 
         if not all([prompt_match, gen_match, memory_match]):
@@ -75,8 +116,12 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
             return None
 
         # Display the metrics as MLX outputs them
-        print(f"  Prompt: {prompt_match.group(1)} tokens, {prompt_match.group(2)} tokens-per-sec")
-        print(f"  Generation: {gen_match.group(1)} tokens, {gen_match.group(2)} tokens-per-sec")
+        print(
+            f"  Prompt: {prompt_match.group(1)} tokens, {prompt_match.group(2)} tokens-per-sec"
+        )
+        print(
+            f"  Generation: {gen_match.group(1)} tokens, {gen_match.group(2)} tokens-per-sec"
+        )
         print(f"  Peak memory: {memory_match.group(1)} GB")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
@@ -92,125 +137,123 @@ def run_benchmark(model_url, context_file, kv_bit=None, max_tokens=200, timeout=
         }
 
     except subprocess.TimeoutExpired:
-        print(f"Timeout running benchmark")
+        print(f"Timeout running benchmark for {context_file}")
         return None
     except Exception as e:
         print(f"Error running benchmark: {e}")
         return None
 
 
-def check_mlx_installed():
+def check_mlx_installed() -> bool:
     """Check if MLX-LM is installed."""
     try:
         import mlx_lm
-
         return True
     except ImportError:
         return False
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run MLX benchmarks on context files")
-    parser.add_argument("model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)")
-    parser.add_argument(
-        "--contexts",
-        type=str,
-        default="2,4,8,16",
-        help="Comma-separated list of context sizes to benchmark (default: 2,4,8,16)",
+def main() -> int:
+    """Main function to run MLX benchmarks."""
+    parser = argparse.ArgumentParser(
+        description="Run MLX benchmarks on context files"
     )
-    parser.add_argument("--kv-bit", type=int, default=None, help="KV cache bit size (optional, e.g., 4 or 8)")
-    parser.add_argument("--max-kv-size", type=int, default=None, help="KV cache size in tokens (optional, e.g., 4096)")
-    parser.add_argument("--max-tokens", type=int, default=200, help="Max tokens to generate (default: 200)")
-    parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)")
-    parser.add_argument("--output-csv", default="benchmark_results.csv", help="Output CSV file")
-    parser.add_argument("--output-chart", default="benchmark_chart.png", help="Output chart file")
-    parser.add_argument("--save-responses", action="store_true", help="Save raw model responses to files")
-
+    parser.add_argument(
+        "model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)"
+    )
+    parser.add_argument(
+        "--kv-bit",
+        type=int,
+        default=None,
+        help="KV cache bit size (optional, e.g., 4 or 8)",
+    )
+    parser.add_argument(
+        "--max-kv-size",
+        type=int,
+        default=None,
+        help="KV cache size in tokens (optional, e.g., 4096)",
+    )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow running custom model/tokenizer code when loading (HF)",
+    )
+    
+    # Add common arguments
+    common.setup_common_args(parser)
+    
     args = parser.parse_args()
 
     # Check if MLX-LM is installed
     if not check_mlx_installed():
         print("MLX-LM is not installed. Please install it with: pip install mlx-lm")
-        return
+        return 1
 
-    # Extract model name from URL and create output directory
+    # Extract model name from URL
     model_name = args.model.split("/")[-1]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_output_dir = Path("output")
-    base_output_dir.mkdir(exist_ok=True)
-    output_dir = base_output_dir / f"benchmark_mlx_{model_name}_{timestamp}"
-    output_dir.mkdir(exist_ok=True)
-
-    # Update output paths to use the new directory
-    csv_path = output_dir / args.output_csv
-    chart_path = output_dir / args.output_chart
-    xpost_path = output_dir / "xpost.txt"
-    table_path = output_dir / "table.txt"
-    hardware_path = output_dir / "hardware_info.json"
+    
+    # Create output directory using common function
+    output_dir = common.create_output_directory("mlx", model_name)
 
     # Find context files using common module
     context_files = common.find_context_files(args.contexts)
     if not context_files:
-        return
+        return 1
 
     # Get hardware information
     print("\nCollecting hardware information...")
     hardware_info = common.get_hardware_info()
     hardware_str = common.format_hardware_string(hardware_info)
     print(f"Hardware: {hardware_str}")
-
-    # Save hardware info
-    common.save_hardware_info(hardware_info, hardware_path)
+    print(f"Model: {args.model}")
+    print(f"Max tokens: {args.max_tokens}")
+    if args.kv_bit:
+        print(f"KV cache bits: {args.kv_bit}")
+    if args.max_kv_size:
+        print(f"Max KV size: {args.max_kv_size}")
 
     # Run benchmarks
+    import time
+    start_time = time.time()
     results = []
     for file in context_files:
-        result = run_benchmark(args.model, file, args.kv_bit, args.max_tokens, args.timeout, args.max_kv_size)
+        print(f"\n{'=' * 50}")
+        print(f"Benchmarking {file.name}...")
+        print(f"{'=' * 50}")
+        
+        result = run_benchmark(
+            args.model,
+            file,
+            args.kv_bit,
+            args.max_tokens,
+            args.timeout,
+            args.max_kv_size,
+            args.trust_remote_code,
+        )
         if result:
             results.append(result)
 
             # Save the generated text if requested
             if args.save_responses:
-                output_filename = output_dir / f"generated_{result['context_size']}.txt"
+                output_filename = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, output_filename, "MLX")
+    
+    total_benchmark_time = time.time() - start_time
 
     if not results:
-        print("No successful benchmark results")
-        return
+        print("\nNo successful benchmark results")
+        return 1
 
-    # Calculate total generated tokens
-    total_generated_tokens = sum(r.get("generation_tokens", 0) for r in results)
-    print(f"\n📊 Total generated tokens across all tests: {total_generated_tokens}")
+    # Save all outputs using common function
+    common.save_all_outputs(
+        results, output_dir, model_name, "MLX", hardware_info, args, include_memory=True
+    )
 
-    # Save to CSV
-    common.save_results_csv(results, csv_path)
+    # Print summary using common function
+    common.print_benchmark_summary(results, model_name, "MLX", hardware_info, output_dir, total_benchmark_time)
 
-    # Create chart
-    chart_result = common.create_chart_mlx(results, model_name, hardware_info, str(chart_path))
-    print(f"Chart saved to {chart_path}")
-
-    # Generate X post text
-    xpost = common.generate_xpost_text(results, model_name, "MLX", hardware_info)
-    print("\n--- X Post Text ---")
-    print(xpost)
-
-    # Save X post to file
-    with open(xpost_path, "w") as f:
-        f.write(xpost)
-    print(f"\nX Post text saved to {xpost_path}")
-
-    # Generate and display table (with memory info for MLX)
-    table = common.generate_table(results, model_name, "MLX", hardware_info, include_memory=True)
-    print("\n--- Table for X/Twitter Thread ---")
-    print(table)
-
-    # Save table to file
-    with open(table_path, "w") as f:
-        f.write(table)
-    print(f"\nTable saved to {table_path}")
-
-    print(f"\n✅ All outputs saved to: {output_dir}/")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

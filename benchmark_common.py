@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Common utilities for LLM benchmarking scripts."""
 
+import argparse
 import json
 import platform
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -243,11 +246,15 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None):
     for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
         # Handle N/A prompt TPS for LM Studio
         if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
-            xpost += (
-                f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s\n"
-            )
+            line = f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s"
         else:
-            xpost += f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s\n"
+            line = f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s"
+        
+        # Add memory information if available
+        if "peak_memory_gb" in r:
+            line += f" - {r['peak_memory_gb']:.1f}GB"
+        
+        xpost += line + "\n"
         total_tokens += r.get("generation_tokens", 0)
 
     xpost += f"\nTotal generated tokens: {total_tokens}"
@@ -637,3 +644,175 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     plt.close()
 
     return output_path
+def create_output_directory(framework_name: str, model_name: str, base_dir: str = "output") -> Path:
+    """Create timestamped output directory for benchmark results.
+    
+    Args:
+        framework_name: Name of the framework (e.g., "ollama", "mlx", "llamacpp")
+        model_name: Name of the model being benchmarked
+        base_dir: Base directory for output (default: "output")
+    
+    Returns:
+        Path object for the created directory
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_output_dir = Path(base_dir)
+    base_output_dir.mkdir(exist_ok=True)
+    
+    # Sanitize model name for filesystem
+    model_safe = model_name.replace("/", "_").replace(":", "_")
+    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}_{timestamp}"
+    output_dir.mkdir(exist_ok=True)
+    
+    return output_dir
+
+
+def setup_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add common command-line arguments to parser.
+    
+    Args:
+        parser: ArgumentParser instance to add arguments to
+    """
+    parser.add_argument(
+        "--contexts",
+        help="Comma-separated list of context sizes to benchmark (e.g., 2,4,8,16)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=200,
+        help="Maximum tokens to generate (default: 200)",
+    )
+    parser.add_argument(
+        "--save-responses",
+        action="store_true",
+        help="Save model responses to files",
+    )
+    parser.add_argument(
+        "--output-csv",
+        default="benchmark_results.csv",
+        help="Output CSV filename (default: benchmark_results.csv)",
+    )
+    parser.add_argument(
+        "--output-chart",
+        default="benchmark_chart.png",
+        help="Output chart filename (default: benchmark_chart.png)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)",
+    )
+
+
+def save_all_outputs(
+    results: List[Dict],
+    output_dir: Path,
+    model_name: str,
+    framework: str,
+    hardware_info: Dict,
+    args: argparse.Namespace,
+    include_memory: bool = False,
+) -> None:
+    """Save all benchmark outputs to files.
+    
+    Args:
+        results: List of benchmark result dictionaries
+        output_dir: Directory to save outputs
+        model_name: Name of the model
+        framework: Framework name (e.g., "Ollama API", "MLX")
+        hardware_info: Hardware information dictionary
+        args: Command-line arguments namespace
+        include_memory: Whether to include memory in table (for MLX)
+    """
+    # Save hardware info
+    hardware_path = output_dir / "hardware_info.json"
+    save_hardware_info(hardware_info, hardware_path)
+    
+    # Save CSV results
+    csv_path = output_dir / args.output_csv
+    save_results_csv(results, csv_path)
+    
+    # Generate and save chart
+    chart_path = output_dir / args.output_chart
+    if "MLX" in framework:
+        create_chart_mlx(results, model_name, hardware_info, chart_path)
+    else:
+        create_chart_ollama(results, model_name, hardware_info, chart_path, framework)
+    print(f"Chart saved to {chart_path}")
+    
+    # Generate and save table
+    table = generate_table(results, model_name, framework, hardware_info, include_memory)
+    table_path = output_dir / "table.txt"
+    with open(table_path, "w") as f:
+        f.write(table)
+    print(f"Table saved to {table_path}")
+    
+    # Generate and save X post
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info)
+    xpost_path = output_dir / "xpost.txt"
+    with open(xpost_path, "w") as f:
+        f.write(xpost)
+    print(f"X Post text saved to {xpost_path}")
+
+
+def print_benchmark_summary(
+    results: List[Dict],
+    model_name: str,
+    framework: str,
+    hardware_info: Dict,
+    output_dir: Path,
+    total_benchmark_time: float = None,
+) -> None:
+    """Print benchmark summary to console.
+    
+    Args:
+        results: List of benchmark result dictionaries
+        model_name: Name of the model
+        framework: Framework name
+        hardware_info: Hardware information dictionary
+        output_dir: Directory where outputs were saved
+        total_benchmark_time: Total time to run all benchmarks in seconds
+    """
+    # Calculate total generated tokens
+    total_generated_tokens = sum(r.get("generation_tokens", 0) for r in results)
+    print(f"\n📊 Total generated tokens across all tests: {total_generated_tokens}")
+    
+    # Print total benchmark time if provided
+    if total_benchmark_time is not None:
+        print(f"⏱️  Total time to run benchmarks: {total_benchmark_time:.1f} seconds")
+    
+    # Print summary table
+    print("\n" + "=" * 50)
+    print("SUMMARY TABLE")
+    print("=" * 50)
+    table = generate_table(results, model_name, framework, hardware_info)
+    print(table)
+    
+    # Print X post text
+    print("\n" + "=" * 50)
+    print("X POST TEXT")
+    print("=" * 50)
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info)
+    print(xpost)
+    
+    print(f"\n✅ All outputs saved to: {output_dir}/")
+
+
+def validate_model_connection(test_func, *args, **kwargs) -> bool:
+    """Generic function to validate model/server connection.
+    
+    Args:
+        test_func: Function to test connection
+        *args: Arguments to pass to test function
+        **kwargs: Keyword arguments to pass to test function
+        
+    Returns:
+        True if connection successful, False otherwise
+    """
+    try:
+        return test_func(*args, **kwargs)
+    except Exception as e:
+        print(f"Connection test failed: {e}")
+        return False
