@@ -144,7 +144,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         context_nums = []
         for ctx in context_sizes:
             if ctx.endswith("k"):
-                context_nums.append(int(ctx[:-1]) * 1000)
+                context_nums.append(float(ctx[:-1]) * 1000)
             else:
                 context_nums.append(int(ctx))
 

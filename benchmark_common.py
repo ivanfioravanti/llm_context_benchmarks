@@ -136,13 +136,24 @@ def find_context_files(contexts_arg=None):
             return []
 
         # Sort by size
-        context_files = sorted(context_files, key=lambda x: int(x.stem[:-1]))
+        context_files = sorted(context_files, key=lambda x: float(x.stem[:-1]))
     else:
         # Find all .txt files in current directory
         try:
+            # Filter files that have a numeric prefix followed by 'k' (e.g., 0.5k.txt, 2k.txt)
+            def is_valid_context_file(f):
+                stem = f.stem
+                if len(stem) > 1 and stem.endswith('k'):
+                    try:
+                        float(stem[:-1])
+                        return True
+                    except ValueError:
+                        return False
+                return False
+
             context_files = sorted(
-                [f for f in Path(".").glob("*.txt") if len(f.stem) > 1 and f.stem[:-1].isdigit()],
-                key=lambda x: int(x.stem[:-1]),
+                [f for f in Path(".").glob("*.txt") if is_valid_context_file(f)],
+                key=lambda x: float(x.stem[:-1]),
             )
         except:
             context_files = []
@@ -243,7 +254,7 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None):
     xpost += "\n"
 
     total_tokens = 0
-    for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
+    for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         # Handle N/A prompt TPS for LM Studio
         if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
             line = f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s"
@@ -290,7 +301,7 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
         table += "--------|------------|---------|------------|--------\n"
 
         # Add data rows with memory
-        for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
+        for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
             gen_tokens = r.get("generation_tokens", 0)
             # Handle N/A prompt TPS for LM Studio
             if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
@@ -309,7 +320,7 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
             table += "--------|------------|---------|------------|------------\n"
 
         # Add data rows with total time
-        for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
+        for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
             total_time = r.get("total_time", r.get("wall_time", 0))
             gen_tokens = r.get("generation_tokens", 0)
             # Handle N/A prompt TPS for LM Studio
@@ -334,7 +345,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     total_times = []
     generation_tokens = []
 
-    for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
+    for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
         prompt_tps.append(r["prompt_tps"])
         gen_tps.append(r["generation_tps"])
@@ -491,7 +502,7 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     generation_tokens = []
     total_times = []
 
-    for r in sorted(results, key=lambda x: int(x["context_size"][:-1])):
+    for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
         prompt_tps.append(r["prompt_tps"])
         gen_tps.append(r["generation_tps"])
@@ -675,7 +686,8 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
     """
     parser.add_argument(
         "--contexts",
-        help="Comma-separated list of context sizes to benchmark (e.g., 2,4,8,16)",
+        default="0.5,1,2,4,8,16,32",
+        help="Comma-separated list of context sizes to benchmark (default: 0.5,1,2,4,8,16,32)",
     )
     parser.add_argument(
         "--max-tokens",

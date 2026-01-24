@@ -9,6 +9,7 @@ Usage:
     python benchmark.py llamacpp gpt-oss:20b  # defaults to localhost:8080
     python benchmark.py llamacpp gpt-oss:20b --port 9000  # custom port
     python benchmark.py lmstudio local-model
+    python benchmark.py exo local-model  # defaults to http://0.0.0.0:52415
 """
 
 import argparse
@@ -43,6 +44,11 @@ def get_available_engines():
         "lmstudio": {
             "script": "lmstudio_benchmark.py",
             "description": "LM Studio local server",
+            "example": "local-model",
+        },
+        "exo": {
+            "script": "exo_benchmark.py",
+            "description": "Exo OpenAI-compatible endpoint",
             "example": "local-model",
         },
     }
@@ -123,6 +129,7 @@ Examples:
   python benchmark.py ollama-api gpt-oss:20b
   python benchmark.py ollama-cli llama3.2 --contexts 2,4,8
   python benchmark.py mlx mlx-community/Qwen3-0.6B-4bit --kv-bit 4
+  python benchmark.py exo local-model --base-url http://0.0.0.0:52415
   
   # List available engines
   python benchmark.py --list-engines
@@ -153,8 +160,8 @@ Examples:
     # Common options that will be passed through
     parser.add_argument(
         "--contexts",
-        default="2,4,8,16",
-        help="Comma-separated list of context sizes to benchmark (default: 2,4,8,16)",
+        default="0.5,1,2,4,8,16,32",
+        help="Comma-separated list of context sizes to benchmark (default: 0.5,1,2,4,8,16,32)",
     )
 
     parser.add_argument(

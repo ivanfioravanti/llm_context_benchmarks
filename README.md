@@ -1,10 +1,10 @@
 # LLM Context Benchmarks
 
-A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, llama.cpp, and LM Studio (beta).
+A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible).
 
 ## Features
 
-- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, llama.cpp, and LM Studio
+- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible)
 - 🔧 **Automatic Hardware Detection**: Captures system specs including:
   - CPU cores (with performance/efficiency breakdown on Apple Silicon)
   - GPU cores (Apple Silicon)
@@ -25,7 +25,7 @@ A comprehensive benchmarking tool for testing Large Language Models (LLMs) with 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install dependencies
-uv pip install -r requirements.txt
+uv sync
 ```
 
 2. Install framework-specific requirements:
@@ -41,11 +41,8 @@ uv pip install -r requirements.txt
   ```
 
 ### For MLX (Apple Silicon only):
-- Install MLX-LM:
-  ```bash
-  pip install mlx-lm
-  ```
-- Models will be downloaded automatically from Hugging Face when running benchmarks
+- Requires Apple Silicon and the `mlx-lm` dependency (installed via `uv sync`).
+- Models will be downloaded automatically from Hugging Face when running benchmarks.
 
 ### For llama.cpp:
 - Run a llama.cpp server instance:
@@ -73,154 +70,116 @@ pre-commit run --all-files
 
 ```bash
 # 1. Generate test data
-python generate_context_files.py pride_and_prejudice.txt
+uv run generate-context-files -- pride_and_prejudice.txt
 
 # 2. Run benchmark with unified interface
-python benchmark.py ollama-api gpt-oss:20b
+uv run benchmark -- ollama-api gpt-oss:20b
 
 # 3. View available engines
-python benchmark.py --list-engines
+uv run benchmark -- --list-engines
 ```
 
 ## Usage
 
-### Step 1: Generate Test Data
+All scripts can still be run directly with `python <script>.py ...`, but the
+recommended approach is `uv run <command> -- ...` using the script entry points
+defined in `pyproject.toml`.
 
-Use `generate_context_files.py` to create test files from any source text (e.g., Pride and Prejudice or any other text file).
+Common commands:
 
-#### Basic Usage
+```bash
+uv run benchmark -- --list-engines
+uv run compare-benchmarks -- --output my_comparison
+uv run generate-context-files -- pride_and_prejudice.txt --sizes 2,4,8,16
+```
+
+### Generate Context Files
+
+Use `uv run generate-context-files -- <source> [options]` to create test files from any source text.
 
 ```bash
 # Generate context files from Pride and Prejudice
-python generate_context_files.py pride_and_prejudice.txt
-```
+uv run generate-context-files -- pride_and_prejudice.txt
 
-This will create files in the root directory:
-
-- `2k.txt` (2,000 tokens)
-- `4k.txt` (4,000 tokens)
-- `8k.txt` (8,000 tokens)
-- `16k.txt` (16,000 tokens)
-- `32k.txt` (32,000 tokens)
-- `64k.txt` (64,000 tokens)
-- `128k.txt` (128,000 tokens)
-
-#### Custom Sizes
-
-```bash
 # Generate specific context sizes (in thousands of tokens)
-python generate_context_files.py source.txt --sizes 2,4,8,16,32,64,128
+uv run generate-context-files -- source.txt --sizes 2,4,8,16,32,64,128
 ```
 
-#### Options
+Options:
 
 - `--sizes`: Comma-separated list of sizes in thousands of tokens (default: 2,4,8,16,32,64,128)
 - `--encoding`: Tiktoken encoding to use (default: cl100k_base for GPT-3.5/GPT-4)
 - `--output-dir`: Directory to save context files (default: current directory)
 - `--prompt-suffix`: Custom prompt to append to each file (default: "Please provide a summary of the above text.")
 
-### Step 2: Run Benchmarks
-
-Run benchmarks with different engines and models to collect performance data.
-
-### Step 3: Compare Results (Optional)
-
-After running multiple benchmarks, use the comparison tool to analyze performance differences:
-
-```bash
-# Compare all benchmark results in output directory
-python compare_benchmarks.py
-
-# Compare specific benchmark folders
-python compare_benchmarks.py output/benchmark_ollama_* output/benchmark_mlx_*
-
-# Save comparison to custom location
-python compare_benchmarks.py --output my_comparison
-```
-
-The comparison tool generates:
-- **comparison_chart.png**: Side-by-side performance charts
-- **comparison_results.csv**: Aggregated metrics in CSV format  
-- **comparison_table.txt**: Formatted comparison table
-
-### Step 2 (Alternative): Run Individual Benchmarks
-
-#### Unified Benchmark Interface (Recommended)
-
-The simplest way to run benchmarks is using the unified `benchmark.py` script:
+### Run Benchmarks
 
 ```bash
 # List available engines
-python benchmark.py --list-engines
+uv run benchmark -- --list-engines
 
 # Run Ollama API benchmark
-python benchmark.py ollama-api gpt-oss:20b
+uv run benchmark -- ollama-api gpt-oss:20b
 
 # Run Ollama CLI benchmark
-python benchmark.py ollama-cli llama3.2
+uv run benchmark -- ollama-cli llama3.2
 
 # Run MLX benchmark (Apple Silicon only)
-python benchmark.py mlx mlx-community/Qwen3-4B-Instruct-2507-4bit
+uv run benchmark -- mlx mlx-community/Qwen3-4B-Instruct-2507-4bit
 
 # Run llama.cpp benchmark (defaults to localhost:8080)
-python benchmark.py llamacpp gpt-oss:20b
-
-# Run llama.cpp with custom port (e.g., 9000)
-python benchmark.py llamacpp gpt-oss:20b --port 9000
+uv run benchmark -- llamacpp gpt-oss:20b
 
 # Run llama.cpp with custom host and port
-python benchmark.py llamacpp gpt-oss:20b --host 192.168.1.100 --port 9000
+uv run benchmark -- llamacpp gpt-oss:20b --host 192.168.1.100 --port 9000
 
 # Run LM Studio benchmark (Beta - requires LM Studio server)
-python benchmark.py lmstudio local-model
+uv run benchmark -- lmstudio local-model
+
+# Run Exo benchmark (OpenAI-compatible endpoint on http://0.0.0.0:52415)
+uv run benchmark -- exo local-model
 
 # Custom options
-python benchmark.py ollama-api gpt-oss:20b --contexts 2,4,8,16,32 --max-tokens 500 --save-responses
+uv run benchmark -- ollama-api gpt-oss:20b --contexts 0.5,1,2,4,8,16,32 --max-tokens 500 --save-responses
 
 # Increase timeout for large context benchmarks
-python benchmark.py mlx mlx-community/Qwen3-4B-Instruct-2507-4bit --contexts 64,128 --timeout 7200
+uv run benchmark -- mlx mlx-community/Qwen3-4B-Instruct-2507-4bit --contexts 64,128 --timeout 7200
 ```
 
-##### Common Options
+Common options:
 
-- `--contexts`: Context sizes to test (default: 2,4,8,16)
+- `--contexts`: Context sizes to test (default: 0.5,1,2,4,8,16,32)
 - `--max-tokens`: Maximum tokens to generate (default: 200)
 - `--timeout`: Timeout in seconds for each benchmark (default: 3600 = 60 minutes)
 - `--save-responses`: Save model responses to files
 - `--output-csv`: Output CSV filename
 - `--output-chart`: Output chart filename
 
-##### Engine-Specific Options
+Engine-specific options:
 
 - `--kv-bit`: KV cache bit size for MLX (e.g., 4 or 8)
 - `--host`: Host for llama.cpp server (default: localhost)
 - `--port`: Port for llama.cpp server (default: 8080)
 
-#### Direct Script Usage (Alternative)
+### Compare Results (Optional)
 
-You can also run the benchmark scripts directly:
-
-##### Ollama API Benchmark
+After running multiple benchmarks, use the comparison tool to analyze performance differences:
 
 ```bash
-python ollama_api_benchmark.py gpt-oss:20b
-python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16 --max-tokens 200
+# Compare all benchmark results in output directory
+uv run compare-benchmarks
+
+# Compare specific benchmark folders
+uv run compare-benchmarks -- output/benchmark_ollama_* output/benchmark_mlx_*
+
+# Save comparison to custom location
+uv run compare-benchmarks -- --output my_comparison
 ```
 
-##### Ollama CLI Benchmark
-
-```bash
-python ollama_cli_benchmark.py gpt-oss:20b
-python ollama_cli_benchmark.py gpt-oss:20b --contexts 2,4,8,16,32
-```
-
-##### MLX Benchmark (Apple Silicon Only)
-
-```bash
-python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit
-python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --kv-bit 8
-python mlx_benchmark.py mlx-community/Qwen3-4B-Instruct-2507-4bit --timeout 7200  # 2 hours for large contexts
-```
+The comparison tool generates:
+- **comparison_chart.png**: Side-by-side performance charts
+- **comparison_results.csv**: Aggregated metrics in CSV format  
+- **comparison_table.txt**: Formatted comparison table
 
 #### Output Files
 
@@ -278,127 +237,6 @@ The project includes `ollama_benchmark_notebook.ipynb` for interactive benchmark
 - Create comparison charts
 - Display hardware information
 
-## Example Workflows
-
-### Multi-Engine Comparison Workflow
-
-```bash
-# 1. Install dependencies
-uv pip install -r requirements.txt
-
-# 2. Generate context files (only needed once)
-python generate_context_files.py pride_and_prejudice.txt --sizes 2,4,8,16
-
-# 3. Run benchmarks on different engines
-# Ollama (requires model pulled)
-python benchmark.py ollama-api gpt-oss:20b --contexts 2,4,8,16
-
-# MLX (Apple Silicon, auto-downloads model)
-python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit --contexts 2,4,8,16
-
-# llama.cpp (requires server running on port 9000)
-python benchmark.py llamacpp gpt-oss:20b --port 9000 --contexts 2,4,8,16
-
-# 4. Compare all results
-python compare_benchmarks.py
-
-# View results
-ls comparison_results/
-```
-
-This creates a comprehensive comparison showing:
-- **Prompt processing speed** across engines
-- **Text generation speed** by context size  
-- **Total processing time** comparison
-- **Efficiency metrics** (tokens/sec per 1K context)
-
-### Single Engine Workflows
-
-### Quick Benchmark with Unified Interface
-
-```bash
-# 1. Install dependencies
-uv pip install -r requirements.txt
-
-# 2. Download a source text
-curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
-
-# 3. Generate context files (only needed once)
-python generate_context_files.py pride_and_prejudice.txt --sizes 2,4,8,16
-
-# 4. List available engines
-python benchmark.py --list-engines
-
-# 5. Run benchmarks using unified interface
-# Ollama API (requires: ollama pull gpt-oss:20b)
-python benchmark.py ollama-api gpt-oss:20b
-
-# Ollama CLI
-python benchmark.py ollama-cli llama3.2
-
-# MLX (Apple Silicon only, auto-downloads model)
-python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit
-
-# llama.cpp (defaults to localhost:8080)
-python benchmark.py llamacpp gpt-oss:20b
-
-# llama.cpp with custom port
-python benchmark.py llamacpp gpt-oss:20b --port 9000
-
-# LM Studio (Beta - requires LM Studio server)
-python benchmark.py lmstudio local-model
-
-# 6. View results
-ls benchmark_*/
-```
-
-### Detailed Ollama Workflow
-
-```bash
-# 1. Install dependencies
-uv pip install -r requirements.txt
-
-# 2. Download source text
-curl https://www.gutenberg.org/files/1342/1342-0.txt -o pride_and_prejudice.txt
-
-# 3. Generate context files
-python generate_context_files.py pride_and_prejudice.txt
-
-# 4. Pull Ollama model
-ollama pull gpt-oss:20b
-
-# 5. Run benchmark with unified interface
-python benchmark.py ollama-api gpt-oss:20b
-
-# Or run directly
-python ollama_api_benchmark.py gpt-oss:20b --contexts 2,4,8,16 --max-tokens 200
-
-# 6. View results
-ls benchmark_ollama_*/
-cat benchmark_ollama_*/hardware_info.json
-```
-
-### MLX Workflow (Apple Silicon)
-
-```bash
-# 1. Install dependencies
-uv pip install -r requirements.txt
-pip install mlx-lm
-
-# 2. Generate test data
-python generate_context_files.py pride_and_prejudice.txt
-
-# 3. Run MLX benchmark (model downloads automatically)
-python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit
-
-# With KV cache quantization
-python benchmark.py mlx mlx-community/Qwen2.5-3B-Instruct-4bit --kv-bit 4
-
-# 4. View results
-ls benchmark_mlx_*/
-cat benchmark_mlx_*/hardware_info.json
-```
-
 ## Hardware Detection
 
 The tool automatically detects and reports:
@@ -454,7 +292,8 @@ llm_context_benchmarks/
 ├── compare_benchmarks.py        # Multi-benchmark comparison tool
 ├── generate_context_files.py    # Context file generation
 ├── ollama_benchmark_notebook.ipynb  # Interactive notebook
-├── requirements.txt             # Python dependencies
+├── pyproject.toml               # Python dependencies (uv)
+├── uv.lock                      # Resolved dependency lockfile (uv)
 ├── .pre-commit-config.yaml     # Pre-commit configuration
 ├── .gitignore                  # Git ignore rules
 └── README.md                   # This file
@@ -485,7 +324,7 @@ This helps the community understand performance across different systems!
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.13+
 - Sufficient RAM for the model and context sizes you want to test
 - psutil (for hardware detection)
 - matplotlib, numpy (for charts)
