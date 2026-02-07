@@ -257,13 +257,15 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None):
     for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         # Handle N/A prompt TPS for LM Studio
         if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
-            line = f"{r['context_size']} Prompt: {r.get('prompt_tokens', 0)} tokens - Gen: {r['generation_tps']:.0f} t/s"
+            prompt_part = f"pp {r.get('prompt_tokens', 0)} tok"
         else:
-            line = f"{r['context_size']} Prompt: {r['prompt_tps']:.0f} - Gen: {r['generation_tps']:.0f} t/s"
-        
+            prompt_part = f"pp {r['prompt_tps']:.0f}"
+
+        line = f"{r['context_size']} {prompt_part} tg {r['generation_tps']:.0f} t/s"
+
         # Add memory information if available
         if "peak_memory_gb" in r:
-            line += f" - {r['peak_memory_gb']:.1f}GB"
+            line += f" {r['peak_memory_gb']:.1f}GB"
         
         xpost += line + "\n"
         total_tokens += r.get("generation_tokens", 0)
