@@ -8,6 +8,7 @@ Usage:
     python benchmark.py mlx mlx-community/Qwen3-0.6B-4bit
     python benchmark.py llamacpp gpt-oss:20b  # defaults to localhost:8080
     python benchmark.py llamacpp gpt-oss:20b --port 9000  # custom port
+    python benchmark.py mlx-distributed /path/to/model --hostfile ./m3-ultra-jaccl.json --backend jaccl
     python benchmark.py lmstudio local-model
     python benchmark.py exo local-model  # defaults to http://0.0.0.0:52415
 """
@@ -36,6 +37,11 @@ def get_available_engines():
             "description": "MLX framework (Apple Silicon only)",
             "example": "mlx-community/Qwen3-0.6B-4bit",
         },
+        "mlx-distributed": {
+            "script": "mlx_distributed_benchmark.py",
+            "description": "MLX distributed generate via mlx.launch (e.g. JACCL)",
+            "example": "/path/to/model --hostfile ./m3-ultra-jaccl.json --backend jaccl",
+        },
         "llamacpp": {
             "script": "llamacpp_benchmark.py",
             "description": "llama.cpp server via HTTP API",
@@ -59,13 +65,13 @@ def list_engines():
     """Print available engines and their descriptions."""
     engines = get_available_engines()
     print("\nAvailable benchmark engines:\n")
-    print(f"{'Engine':<12} {'Status':<10} {'Description':<40} {'Example Model'}")
+    print(f"{'Engine':<16} {'Status':<10} {'Description':<40} {'Example Model'}")
     print("-" * 90)
 
     for name, info in engines.items():
         status = info.get("status", "ready")
         status_symbol = "✓" if status == "ready" else "○"
-        print(f"{name:<12} {status_symbol} {status:<8} {info['description']:<40} {info['example']}")
+        print(f"{name:<16} {status_symbol} {status:<8} {info['description']:<40} {info['example']}")
 
     print("\nUsage: python benchmark.py <engine> <model> [options]")
     print("\nExamples:")
@@ -129,6 +135,7 @@ Examples:
   python benchmark.py ollama-api gpt-oss:20b
   python benchmark.py ollama-cli llama3.2 --contexts 2,4,8
   python benchmark.py mlx mlx-community/Qwen3-0.6B-4bit --kv-bit 4
+  python benchmark.py mlx-distributed /path/to/model --hostfile ./m3-ultra-jaccl.json --backend jaccl
   python benchmark.py exo local-model --base-url http://0.0.0.0:52415
   
   # List available engines
@@ -203,6 +210,11 @@ Examples:
         help="KV cache bit size for MLX (e.g., 4 or 8)",
     )
     parser.add_argument(
+        "--max-kv-size",
+        type=int,
+        help="KV cache size in tokens for MLX engines",
+    )
+    parser.add_argument(
         "--trust-remote-code",
         action="store_true",
         help="(MLX) Allow running custom model/tokenizer code when loading",
@@ -211,7 +223,7 @@ Examples:
     parser.add_argument(
         "--host",
         default="localhost",
-        help="Host for llama.cpp server (default: localhost)",
+        help="Host for server engines (llama.cpp, mlx-distributed) (default: localhost)",
     )
 
     parser.add_argument(
@@ -219,6 +231,37 @@ Examples:
         type=int,
         default=8080,
         help="Port for llama.cpp server (default: 8080)",
+    )
+
+    parser.add_argument(
+        "--backend",
+        default="jaccl",
+        help="Backend for mlx-distributed launch (default: jaccl)",
+    )
+    parser.add_argument(
+        "--hostfile",
+        help="Hostfile JSON path for mlx-distributed launch",
+    )
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        help="Environment variable for mlx-distributed launch, KEY=VALUE (repeatable)",
+    )
+    parser.add_argument(
+        "--launcher",
+        default="mlx.launch",
+        help="Launcher command for mlx-distributed (default: mlx.launch)",
+    )
+    parser.add_argument(
+        "--sharded-script",
+        default="mlx_lm/examples/sharded_generate.py",
+        help="Path to sharded_generate.py for mlx-distributed",
+    )
+    parser.add_argument(
+        "--pipeline",
+        action="store_true",
+        help="Use pipeline parallelism for mlx-distributed",
     )
 
     # Parse arguments
@@ -261,12 +304,27 @@ Examples:
     # Add engine-specific arguments
     if args.engine == "mlx" and args.kv_bit is not None:
         pass_through_args.extend(["--kv-bit", str(args.kv_bit)])
+    if args.engine == "mlx" and args.max_kv_size is not None:
+        pass_through_args.extend(["--max-kv-size", str(args.max_kv_size)])
     if args.engine == "mlx" and args.trust_remote_code:
         pass_through_args.append("--trust-remote-code")
 
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
+    if args.engine == "mlx-distributed":
+        if not args.hostfile:
+            print("Error: --hostfile is required for engine 'mlx-distributed'.")
+            print("Example: python benchmark.py mlx-distributed /path/to/model --hostfile ./m3-ultra-jaccl.json")
+            return 1
+        pass_through_args.extend(["--backend", args.backend])
+        pass_through_args.extend(["--hostfile", args.hostfile])
+        pass_through_args.extend(["--launcher", args.launcher])
+        pass_through_args.extend(["--sharded-script", args.sharded_script])
+        if args.pipeline:
+            pass_through_args.append("--pipeline")
+        for env_var in args.env:
+            pass_through_args.extend(["--env", env_var])
 
     # Add any unknown arguments (for future compatibility)
     pass_through_args.extend(unknown_args)
