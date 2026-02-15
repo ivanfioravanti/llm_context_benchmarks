@@ -259,14 +259,6 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
             marker = markers[i % len(markers)]
             ax.plot(x_vals, y_vals, marker=marker, linewidth=2,
                     label=clean_names[i], color=colors[i], markersize=6)
-            # Add value annotations
-            for x, y in zip(x_vals, y_vals):
-                if key == "ttft":
-                    ax.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
-                elif key == "total_time":
-                    ax.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
-                else:
-                    ax.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
 
     # Single shared legend at the top of the figure
     handles, labels = axes_all[0].get_legend_handles_labels()
@@ -352,6 +344,43 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     csv_path = output_dir / "comparison_results.csv"
     df.to_csv(csv_path, index=False)
     print(f"Comparison results saved to: {csv_path}")
+
+    # Create detailed data table with all context sizes
+    detailed_data = []
+    for data in benchmark_data:
+        results = data["results"]
+        display_name = _clean_display_name(data["display_name"])
+        if not results:
+            continue
+        for r in results:
+            detailed_data.append({
+                "Model": display_name,
+                "Context": r["context_size"],
+                "Prompt TPS": r.get("prompt_tps", 0),
+                "Generation TPS": r.get("generation_tps", 0),
+                "Total Time": r.get("total_time", 0),
+                "TTFT": r.get("time_to_first_token", r.get("prompt_eval_duration", 0)),
+                "Peak Memory GB": r.get("peak_memory_gb", 0),
+            })
+        # Add batch data if present
+        batch = data.get("batch_data")
+        if batch:
+            for b in batch:
+                detailed_data.append({
+                    "Model": display_name,
+                    "Context": f"batch_{b['batch_size']}",
+                    "Prompt TPS": b.get("prompt_tps", 0),
+                    "Generation TPS": b.get("generation_tps", 0),
+                    "Total Time": "",
+                    "TTFT": "",
+                    "Peak Memory GB": b.get("peak_memory_gb", 0),
+                })
+
+    if detailed_data:
+        detailed_df = pd.DataFrame(detailed_data)
+        detailed_csv_path = output_dir / "comparison_detailed.csv"
+        detailed_df.to_csv(detailed_csv_path, index=False)
+        print(f"Detailed results saved to: {detailed_csv_path}")
 
     # Create X post-friendly comparison text
     xpost_text = "LLM Benchmark Comparison\n"
