@@ -356,11 +356,11 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
             detailed_data.append({
                 "Model": display_name,
                 "Context": r["context_size"],
-                "Prompt TPS": r.get("prompt_tps", 0),
-                "Generation TPS": r.get("generation_tps", 0),
-                "Total Time": r.get("total_time", 0),
-                "TTFT": r.get("time_to_first_token", r.get("prompt_eval_duration", 0)),
-                "Peak Memory GB": r.get("peak_memory_gb", 0),
+                "Prompt TPS": round(r.get("prompt_tps", 0), 2),
+                "Generation TPS": round(r.get("generation_tps", 0), 2),
+                "Total Time": round(r.get("total_time", 0), 2),
+                "TTFT": round(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)), 2),
+                "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
             })
         # Add batch data if present
         batch = data.get("batch_data")
@@ -369,11 +369,11 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 detailed_data.append({
                     "Model": display_name,
                     "Context": f"batch_{b['batch_size']}",
-                    "Prompt TPS": b.get("prompt_tps", 0),
-                    "Generation TPS": b.get("generation_tps", 0),
+                    "Prompt TPS": round(b.get("prompt_tps", 0), 2),
+                    "Generation TPS": round(b.get("generation_tps", 0), 2),
                     "Total Time": "",
                     "TTFT": "",
-                    "Peak Memory GB": b.get("peak_memory_gb", 0),
+                    "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
                 })
 
     if detailed_data:
