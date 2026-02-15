@@ -147,7 +147,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     if has_perplexity_data:
         subplot_specs.append(("perplexity", "Perplexity (lower is better)", "Perplexity"))
     if has_batch_data:
-        subplot_specs.append(("batch", "Batch Generation TPS", "Tokens/sec"))
+        subplot_specs.append(("batch_prompt", "Batch Prompt TPS", "Tokens/sec"))
+        subplot_specs.append(("batch_gen", "Batch Generation TPS", "Tokens/sec"))
 
     num_plots = len(subplot_specs)
     num_rows = (num_plots + 1) // 2
@@ -229,16 +230,19 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
                             f"{val:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
             continue
 
-        if key == "batch":
-            # Batch generation TPS vs batch size (no annotations, clean)
+        if key in ("batch_prompt", "batch_gen"):
+            # Batch prompt/generation TPS vs batch size
+            data_key = "prompt_tps" if key == "batch_prompt" else "generation_tps"
+            title = "Batch Prompt TPS" if key == "batch_prompt" else "Batch Generation TPS"
+            ax.set_title(title, fontweight="bold", fontsize=13)
             for i, data in enumerate(benchmark_data):
                 batch = data.get("batch_data")
                 if not batch:
                     continue
                 batch_sizes = [r["batch_size"] for r in batch]
-                batch_gen_tps = [r["generation_tps"] for r in batch]
+                batch_tps = [r[data_key] for r in batch]
                 marker = markers[i % len(markers)]
-                ax.plot(batch_sizes, batch_gen_tps, marker=marker, linewidth=2,
+                ax.plot(batch_sizes, batch_tps, marker=marker, linewidth=2,
                         label=clean_names[i], color=colors[i])
             ax.set_xlabel("Batch Size")
             ax.legend(fontsize=9)
@@ -319,9 +323,12 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         batch = data.get("batch_data")
         if batch:
             peak_batch_gen = max(r["generation_tps"] for r in batch)
+            peak_batch_prompt = max(r["prompt_tps"] for r in batch)
             peak_batch_str = f"{peak_batch_gen:.1f}"
+            peak_batch_prompt_str = f"{peak_batch_prompt:.1f}"
         else:
             peak_batch_str = "N/A"
+            peak_batch_prompt_str = "N/A"
 
         table_data.append(
             {
@@ -331,6 +338,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Perplexity": ppl_str,
+                "Peak Batch Prompt TPS": peak_batch_prompt_str,
                 "Peak Batch Gen TPS": peak_batch_str,
                 "Total Tokens": f"{total_tokens_generated:,}",
                 "Total Time": f"{total_time:.1f}s",
@@ -365,8 +373,10 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
             xpost_text += f"\n  Peak Memory: {entry['Peak Memory']}"
         if entry.get("Perplexity", "N/A") != "N/A":
             xpost_text += f"\n  Perplexity: {entry['Perplexity']}"
+        if entry.get("Peak Batch Prompt TPS", "N/A") != "N/A":
+            xpost_text += f"\n  Peak Batch pp: {entry['Peak Batch Prompt TPS']}"
         if entry.get("Peak Batch Gen TPS", "N/A") != "N/A":
-            xpost_text += f"\n  Peak Batch Gen TPS: {entry['Peak Batch Gen TPS']}"
+            xpost_text += f"\n  Peak Batch tg: {entry['Peak Batch Gen TPS']}"
         xpost_text += "\n\n"
 
     table_path = output_dir / "comparison_table.txt"
