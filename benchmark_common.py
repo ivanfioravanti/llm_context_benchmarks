@@ -346,6 +346,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     gen_tps = []
     total_times = []
     generation_tokens = []
+    ttft_times = []
 
     for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
@@ -353,9 +354,10 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
         gen_tps.append(r["generation_tps"])
         total_times.append(r.get("total_time", r.get("wall_time", 0)))
         generation_tokens.append(r["generation_tokens"])
+        ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
 
-    # Create figure with three subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 11), gridspec_kw={"height_ratios": [1, 1, 1]})
+    # Create figure with four subplots (2x2 grid)
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -486,6 +488,24 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax3.legend(loc="upper left")
     ax3_right.legend(loc="upper right")
 
+    # Fourth subplot - Time to First Token (TTFT)
+    ax4.set_title("Time to First Token (TTFT)", fontsize=14, pad=10)
+    color_ttft = "#E91E63"  # Pink
+    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8)
+    ax4.set_ylabel("Time (seconds)", color=color_ttft)
+    ax4.tick_params(axis="y", labelcolor=color_ttft)
+
+    # Add value labels for TTFT
+    if ttft_times:
+        max_ttft = max(ttft_times) if ttft_times else 1
+        for i, t in enumerate(ttft_times):
+            ax4.text(i, t + max_ttft * 0.03, f"{t:.2f}s", ha="center", va="bottom", fontsize=9, color=color_ttft)
+
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(context_sizes)
+    ax4.grid(True, alpha=0.3)
+    ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
+
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.9, bottom=0.1, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
@@ -503,6 +523,7 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     peak_memory = []
     generation_tokens = []
     total_times = []
+    ttft_times = []
 
     for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
@@ -511,9 +532,10 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
         peak_memory.append(r["peak_memory_gb"])
         generation_tokens.append(r["generation_tokens"])
         total_times.append(r.get("total_time", 0))
+        ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
 
-    # Create figure with four subplots with more spacing
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
+    # Create figure with six subplots (3x2 grid) with more spacing
+    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 16), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -620,19 +642,37 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     ax3.legend(loc="upper left")
     ax3_right.legend(loc="upper right")
 
-    # Fourth subplot - Peak Memory Usage Only
-    ax4.set_title("Peak Memory Usage", fontsize=14, pad=10)
+    # Fourth subplot - Time to First Token (TTFT)
+    ax4.set_title("Time to First Token (TTFT)", fontsize=14, pad=10)
+    color_ttft = "#E91E63"  # Pink
+    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8)
+    ax4.set_ylabel("Time (seconds)", color=color_ttft)
+    ax4.tick_params(axis="y", labelcolor=color_ttft)
+
+    # Add value labels for TTFT
+    if ttft_times:
+        max_ttft = max(ttft_times) if ttft_times else 1
+        for i, t in enumerate(ttft_times):
+            ax4.text(i, t + max_ttft * 0.03, f"{t:.2f}s", ha="center", va="bottom", fontsize=9, color=color_ttft)
+
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(context_sizes)
+    ax4.grid(True, alpha=0.3)
+    ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
+
+    # Fifth subplot - Peak Memory Usage
+    ax5.set_title("Peak Memory Usage", fontsize=14, pad=10)
 
     # Bar chart for memory
     color_memory = "#ff9800"
-    bars = ax4.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7)
+    bars = ax5.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7)
 
     # Add value labels on bars
     if peak_memory:
         max_mem = max(peak_memory) if peak_memory else 1
         for i, (bar, mem) in enumerate(zip(bars, peak_memory)):
             height = bar.get_height()
-            ax4.text(
+            ax5.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 height + max_mem * 0.02,
                 f"{mem:.1f} GB",
@@ -642,17 +682,20 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
                 color=color_memory,
             )
 
-    ax4.set_xticks(x)
-    ax4.set_xticklabels(context_sizes)
-    ax4.set_ylabel("Memory (GB)", color=color_memory)
-    ax4.tick_params(axis="y", labelcolor=color_memory)
-    ax4.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(context_sizes)
+    ax5.set_ylabel("Memory (GB)", color=color_memory)
+    ax5.tick_params(axis="y", labelcolor=color_memory)
+    ax5.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
 
     # Add grid
-    ax4.grid(True, axis="y", alpha=0.3)
+    ax5.grid(True, axis="y", alpha=0.3)
+
+    # Sixth subplot - unused, hide it
+    ax6.set_visible(False)
 
     # Adjust layout with custom padding to prevent overlap
-    plt.subplots_adjust(top=0.9, bottom=0.1, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
+    plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
 

@@ -101,7 +101,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     # Set up the plot style
     plt.style.use("default")
     if has_memory_data:
-        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax_unused)) = plt.subplots(3, 2, figsize=(16, 18))
+        ax_unused.set_visible(False)
     else:
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold")
@@ -138,6 +139,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         prompt_tps = [r.get("prompt_tps", 0) for r in results]
         generation_tps = [r.get("generation_tps", 0) for r in results]
         total_times = [r.get("total_time", 0) for r in results]
+        ttft_times = [r.get("time_to_first_token", r.get("prompt_eval_duration", 0)) for r in results]
         peak_memory = [r.get("peak_memory_gb", 0) for r in results]
 
         # Convert context sizes to numbers for sorting
@@ -149,8 +151,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
                 context_nums.append(int(ctx))
 
         # Sort all data by context size
-        sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, peak_memory))
-        context_nums, context_sizes, prompt_tps, generation_tps, total_times, peak_memory = zip(*sorted_data)
+        sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory))
+        context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory = zip(*sorted_data)
 
         # Plot 1: Prompt Processing Speed
         line1 = ax1.plot(context_sizes, prompt_tps, marker="o", linewidth=2, label=display_name, color=color)[0]
@@ -170,9 +172,11 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         for x, y in zip(context_sizes, total_times):
             ax3.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
-        # Plot 4: Efficiency (tokens/sec per context size)
-        efficiency = [g_tps / (ctx_num / 1000) for g_tps, ctx_num in zip(generation_tps, context_nums)]
-        line4 = ax4.plot(context_sizes, efficiency, marker="d", linewidth=2, label=display_name, color=color)[0]
+        # Plot 4: Time to First Token (TTFT)
+        line4 = ax4.plot(context_sizes, ttft_times, marker="d", linewidth=2, label=display_name, color=color)[0]
+        # Add value annotations
+        for x, y in zip(context_sizes, ttft_times):
+            ax4.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
         if has_memory_data:
             # Plot 5: Peak Memory Usage
@@ -181,10 +185,6 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
             for x, y in zip(context_sizes, peak_memory):
                 if y > 0:  # Only annotate non-zero values
                     ax5.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
-
-            # Plot 6: Memory Efficiency (GB per 1K context)
-            memory_efficiency = [mem / (ctx_num / 1000) if ctx_num > 0 else 0 for mem, ctx_num in zip(peak_memory, context_nums)]
-            line6 = ax6.plot(context_sizes, memory_efficiency, marker="h", linewidth=2, label=display_name, color=color)[0]
 
     # Configure subplot 1: Prompt Processing Speed
     ax1.set_title("Prompt Processing Speed", fontweight="bold")
@@ -210,10 +210,10 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     ax3.grid(True, alpha=0.3)
     ax3.tick_params(axis="x", rotation=45)
 
-    # Configure subplot 4: Efficiency
-    ax4.set_title("Generation Efficiency (tokens/sec per 1K context)\nHigher is better", fontweight="bold")
+    # Configure subplot 4: TTFT
+    ax4.set_title("Time to First Token (TTFT)\nLower is better", fontweight="bold")
     ax4.set_xlabel("Context Size")
-    ax4.set_ylabel("Efficiency Ratio")
+    ax4.set_ylabel("Time (seconds)")
     ax4.legend()
     ax4.grid(True, alpha=0.3)
     ax4.tick_params(axis="x", rotation=45)
@@ -227,14 +227,6 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         ax5.grid(True, alpha=0.3)
         ax5.tick_params(axis="x", rotation=45)
 
-        # Configure subplot 6: Memory Efficiency
-        ax6.set_title("Memory Efficiency (GB per 1K context)\nLower is better", fontweight="bold")
-        ax6.set_xlabel("Context Size")
-        ax6.set_ylabel("GB per 1K tokens")
-        ax6.legend()
-        ax6.grid(True, alpha=0.3)
-        ax6.tick_params(axis="x", rotation=45)
-
     plt.tight_layout()
 
     # Save the chart
@@ -246,7 +238,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
 
 
 def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
-    """Create a comparison table with key metrics."""
+    """Create a comparison table with key metrics in X post-friendly format."""
 
     table_data = []
 
@@ -264,6 +256,10 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         total_tokens_generated = sum([r.get("generation_tokens", 0) for r in results])
         total_time = sum([r.get("total_time", 0) for r in results])
 
+        # Peak memory (max across all context sizes)
+        peak_mem_values = [r.get("peak_memory_gb", 0) for r in results]
+        peak_memory = max(peak_mem_values) if peak_mem_values else 0
+
         # Hardware info
         chip = hardware_info.get("chip", "Unknown")
         memory = hardware_info.get("memory_gb", 0)
@@ -275,6 +271,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Hardware": f"{chip}, {memory}GB RAM, {cores} cores",
                 "Avg Prompt TPS": f"{avg_prompt_tps:.1f}",
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
+                "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Total Tokens": f"{total_tokens_generated:,}",
                 "Total Time": f"{total_time:.1f}s",
             }
@@ -288,21 +285,35 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     df.to_csv(csv_path, index=False)
     print(f"Comparison results saved to: {csv_path}")
 
-    # Create formatted table text
-    table_text = "LLM Benchmark Comparison Results\n"
-    table_text += "=" * 80 + "\n\n"
-    table_text += df.to_string(index=False)
+    # Create X post-friendly comparison text
+    xpost_text = "LLM Benchmark Comparison\n"
+
+    # Add hardware info from first benchmark if available
+    if benchmark_data and benchmark_data[0].get("hardware_info"):
+        hw = benchmark_data[0]["hardware_info"]
+        chip = hw.get("chip", "Unknown")
+        memory = hw.get("memory_gb", 0)
+        xpost_text += f"Hardware: {chip}, {memory}GB RAM\n"
+
+    xpost_text += "\n"
+
+    for entry in table_data:
+        xpost_text += f"{entry['Engine/Model']}\n"
+        xpost_text += f"  pp {entry['Avg Prompt TPS']} tg {entry['Avg Gen TPS']} t/s"
+        if entry["Peak Memory"] != "N/A":
+            xpost_text += f" {entry['Peak Memory']}"
+        xpost_text += f"\n  {entry['Total Tokens']} tokens in {entry['Total Time']}\n\n"
 
     table_path = output_dir / "comparison_table.txt"
     with open(table_path, "w") as f:
-        f.write(table_text)
+        f.write(xpost_text.strip())
     print(f"Comparison table saved to: {table_path}")
 
     # Print to console
     print("\n" + "=" * 80)
     print("COMPARISON RESULTS")
     print("=" * 80)
-    print(df.to_string(index=False))
+    print(xpost_text.strip())
 
     return csv_path, table_path
 
