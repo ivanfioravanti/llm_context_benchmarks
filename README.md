@@ -1,10 +1,10 @@
 # LLM Context Benchmarks
 
-A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible).
+A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible).
 
 ## Features
 
-- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible)
+- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible)
 - 🔧 **Automatic Hardware Detection**: Captures system specs including:
   - CPU cores (with performance/efficiency breakdown on Apple Silicon)
   - GPU cores (Apple Silicon)
@@ -43,6 +43,7 @@ uv sync
 ### For MLX (Apple Silicon only):
 - Requires Apple Silicon and the `mlx-lm` dependency (installed via `uv sync`).
 - Models will be downloaded automatically from Hugging Face when running benchmarks.
+- The model is loaded once and reused across all context sizes, with an automatic warmup pass before benchmarking begins.
 
 ### For llama.cpp:
 - Run a llama.cpp server instance:
@@ -127,6 +128,13 @@ uv run benchmark -- ollama-cli llama3.2
 # Run MLX benchmark (Apple Silicon only)
 uv run benchmark -- mlx mlx-community/Qwen3-4B-Instruct-2507-4bit
 
+# Run MLX distributed benchmark via mlx.launch (Beta - for example JACCL)
+uv run benchmark -- mlx-distributed /Users/ifioravanti/MiniMax-M2.5-6bit \
+  --hostfile /Users/ifioravanti/github/mlx-lm/m3-ultra-jaccl.json \
+  --backend jaccl \
+  --env MLX_METAL_FAST_SYNCH=1 \
+  --env HF_HOME=/Users/Shared/.cache/huggingface
+
 # Run llama.cpp benchmark (defaults to localhost:8080)
 uv run benchmark -- llamacpp gpt-oss:20b
 
@@ -160,6 +168,13 @@ Engine-specific options:
 - `--kv-bit`: KV cache bit size for MLX (e.g., 4 or 8)
 - `--host`: Host for llama.cpp server (default: localhost)
 - `--port`: Port for llama.cpp server (default: 8080)
+- `--backend`: Distributed backend for `mlx-distributed` (default: `jaccl`)
+- `--hostfile`: Required hostfile JSON for `mlx-distributed`
+- `--env`: Repeatable `KEY=VALUE` for `mlx.launch` environment variables in `mlx-distributed`
+- `--sharded-script`: Path to `mlx_lm/examples/sharded_generate.py` for `mlx-distributed`
+- `--pipeline`: Enable pipeline parallelism for `mlx-distributed`
+- `--max-kv-size`: KV cache size in tokens for `mlx`
+- `--base-url`: Override OpenAI-compatible endpoint (`exo` only)
 
 ### Compare Results (Optional)
 
@@ -201,6 +216,7 @@ All benchmark scripts create a timestamped directory containing:
    - Prompt tokens and tokens per second
    - Generation tokens and tokens per second
    - Total processing time
+   - Additional engine-specific timing columns may appear (e.g., `prompt_eval_duration`, `time_to_first_token`)
    - Peak memory usage (MLX only)
 
 3. **benchmark_chart.png** - Visual charts showing:
@@ -286,7 +302,8 @@ llm_context_benchmarks/
 ├── benchmark_common.py          # Shared utilities and functions
 ├── ollama_api_benchmark.py      # Ollama API-based benchmarking
 ├── ollama_cli_benchmark.py      # Ollama CLI-based benchmarking
-├── mlx_benchmark.py             # MLX framework benchmarking
+├── mlx_benchmark.py             # MLX single-node benchmarking (loads model once + warmup)
+├── mlx_distributed_benchmark.py # MLX distributed benchmarking via mlx.launch (Beta)
 ├── llamacpp_benchmark.py        # llama.cpp server benchmarking
 ├── lmstudio_benchmark.py        # LM Studio benchmarking (Beta)
 ├── compare_benchmarks.py        # Multi-benchmark comparison tool
@@ -333,6 +350,7 @@ This helps the community understand performance across different systems!
 ### Framework-specific:
 - **Ollama**: Ollama installed and running
 - **MLX**: Apple Silicon Mac (M1/M2/M3/M4), mlx-lm package
+- **MLX Distributed** (Beta): `mlx.launch` available and a valid hostfile JSON (for example with `--backend jaccl`)
 - **llama.cpp**: llama.cpp server running
 - **LM Studio** (Beta): LM Studio installed with server running
 
@@ -344,7 +362,8 @@ This helps the community understand performance across different systems!
 - Hardware information is automatically collected on macOS (Apple Silicon) and Linux systems
 - Generated text files include both the model's thinking process (if shown) and final response (Ollama only)
 - All outputs are organized in timestamped directories for easy comparison
-- MLX models are optimized for Apple Silicon and provide excellent performance with low memory usage
-- MLX supports quantized models (4-bit, 8-bit) for efficient inference
+- MLX benchmark loads the model once and runs a warmup pass before benchmarking, using the `mlx_lm` Python API directly for efficient inference
+- MLX supports quantized models (4-bit, 8-bit) for efficient inference on Apple Silicon
+- MLX Distributed (beta) launches `mlx_lm/examples/sharded_generate.py` through `mlx.launch` on each benchmark run
 - llama.cpp integration requires a running server instance with your model loaded
 - LM Studio support is currently in beta - ensure your server is running before benchmarking
