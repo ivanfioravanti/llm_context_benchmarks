@@ -87,6 +87,10 @@ def run_benchmark(
         if max_kv_size is not None:
             kwargs["max_kv_size"] = max_kv_size
 
+        # Reset peak memory before each run to get per-context-size measurement
+        import mlx.core as mx
+        mx.reset_peak_memory()
+
         start_time = time.time()
 
         last_response = None
