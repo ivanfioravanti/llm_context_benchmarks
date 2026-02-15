@@ -76,6 +76,13 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         engine = "unknown"
         model = "unknown"
 
+    # Read perplexity data if available
+    perplexity_file = folder_path / "perplexity.json"
+    perplexity_data = None
+    if perplexity_file.exists():
+        with open(perplexity_file) as f:
+            perplexity_data = json.load(f)
+
     # Create display name
     display_name = f"{engine}: {model}"
 
@@ -86,6 +93,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         "model": model,
         "folder_name": folder_name,
         "display_name": display_name,
+        "perplexity_data": perplexity_data,
     }, display_name
 
 
@@ -98,13 +106,33 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         for data in benchmark_data
     )
 
+    # Check if any benchmark has perplexity data
+    has_perplexity_data = any(
+        data.get("perplexity_data") is not None
+        for data in benchmark_data
+    )
+
     # Set up the plot style
     plt.style.use("default")
-    if has_memory_data:
+    # Determine grid layout based on available data
+    num_extra_plots = int(has_memory_data) + int(has_perplexity_data)
+    if num_extra_plots == 2:
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
+        ax_memory = ax5 if has_memory_data else None
+        ax_ppl = ax6 if has_perplexity_data else None
+    elif num_extra_plots == 1:
         fig, ((ax1, ax2), (ax3, ax4), (ax5, ax_unused)) = plt.subplots(3, 2, figsize=(16, 18))
         ax_unused.set_visible(False)
+        if has_memory_data:
+            ax_memory = ax5
+            ax_ppl = None
+        else:
+            ax_memory = None
+            ax_ppl = ax5
     else:
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        ax_memory = None
+        ax_ppl = None
     fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold")
 
     # Colors for different benchmarks - using more readable, distinct colors
@@ -178,13 +206,13 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         for x, y in zip(context_sizes, ttft_times):
             ax4.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
-        if has_memory_data:
-            # Plot 5: Peak Memory Usage
-            line5 = ax5.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)[0]
+        if has_memory_data and ax_memory is not None:
+            # Plot: Peak Memory Usage
+            ax_memory.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)
             # Add value annotations
             for x, y in zip(context_sizes, peak_memory):
                 if y > 0:  # Only annotate non-zero values
-                    ax5.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
+                    ax_memory.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
 
     # Configure subplot 1: Prompt Processing Speed
     ax1.set_title("Prompt Processing Speed", fontweight="bold")
@@ -218,14 +246,40 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     ax4.grid(True, alpha=0.3)
     ax4.tick_params(axis="x", rotation=45)
 
-    if has_memory_data:
-        # Configure subplot 5: Peak Memory Usage
-        ax5.set_title("Peak Memory Usage", fontweight="bold")
-        ax5.set_xlabel("Context Size")
-        ax5.set_ylabel("Memory (GB)")
-        ax5.legend()
-        ax5.grid(True, alpha=0.3)
-        ax5.tick_params(axis="x", rotation=45)
+    if has_memory_data and ax_memory is not None:
+        ax_memory.set_title("Peak Memory Usage", fontweight="bold")
+        ax_memory.set_xlabel("Context Size")
+        ax_memory.set_ylabel("Memory (GB)")
+        ax_memory.legend()
+        ax_memory.grid(True, alpha=0.3)
+        ax_memory.tick_params(axis="x", rotation=45)
+
+    if has_perplexity_data and ax_ppl is not None:
+        # Build perplexity bar chart
+        ppl_names = []
+        ppl_values = []
+        ppl_errors = []
+        ppl_colors = []
+        for i, data in enumerate(benchmark_data):
+            ppl_data = data.get("perplexity_data")
+            if ppl_data is not None:
+                ppl_names.append(data["display_name"])
+                ppl_values.append(ppl_data["perplexity"])
+                ppl_errors.append(ppl_data.get("std_error", 0))
+                ppl_colors.append(colors[i])
+
+        if ppl_values:
+            bars = ax_ppl.bar(range(len(ppl_values)), ppl_values, yerr=ppl_errors,
+                              color=ppl_colors, alpha=0.8, capsize=5, width=0.6)
+            ax_ppl.set_title("Perplexity (lower is better)", fontweight="bold")
+            ax_ppl.set_ylabel("Perplexity")
+            ax_ppl.set_xticks(range(len(ppl_names)))
+            ax_ppl.set_xticklabels(ppl_names, rotation=30, ha="right", fontsize=9)
+            ax_ppl.grid(True, axis="y", alpha=0.3)
+            # Add value labels on bars
+            for bar, val in zip(bars, ppl_values):
+                ax_ppl.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(),
+                            f"{val:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
     plt.tight_layout()
 
@@ -265,6 +319,10 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         memory = hardware_info.get("memory_gb", 0)
         cores = hardware_info.get("total_cores", hardware_info.get("cpu_count", 0))
 
+        # Perplexity
+        ppl_data = data.get("perplexity_data")
+        ppl_str = f"{ppl_data['perplexity']:.2f}" if ppl_data else "N/A"
+
         table_data.append(
             {
                 "Engine/Model": display_name,
@@ -272,6 +330,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Avg Prompt TPS": f"{avg_prompt_tps:.1f}",
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
+                "Perplexity": ppl_str,
                 "Total Tokens": f"{total_tokens_generated:,}",
                 "Total Time": f"{total_time:.1f}s",
             }
@@ -302,7 +361,10 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         xpost_text += f"  pp {entry['Avg Prompt TPS']} tg {entry['Avg Gen TPS']} t/s"
         if entry["Peak Memory"] != "N/A":
             xpost_text += f" {entry['Peak Memory']}"
-        xpost_text += f"\n  {entry['Total Tokens']} tokens in {entry['Total Time']}\n\n"
+        xpost_text += f"\n  {entry['Total Tokens']} tokens in {entry['Total Time']}"
+        if entry.get("Perplexity", "N/A") != "N/A":
+            xpost_text += f"\n  Perplexity: {entry['Perplexity']}"
+        xpost_text += "\n\n"
 
     table_path = output_dir / "comparison_table.txt"
     with open(table_path, "w") as f:

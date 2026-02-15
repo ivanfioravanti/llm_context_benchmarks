@@ -238,6 +238,37 @@ def main() -> int:
     except Exception as e:
         print(f"Warmup failed (continuing anyway): {e}")
 
+    # Compute perplexity
+    print("\nComputing perplexity...")
+    perplexity = None
+    perplexity_data = None
+    try:
+        from mlx_lm.perplexity import eval_ppl, load_data
+
+        import mlx.core as mx
+
+        np_seed = 123
+        import numpy as np_rng
+        np_rng.random.seed(np_seed)
+        mx.random.seed(np_seed)
+
+        ppl_num_samples = 256
+        ppl_seq_length = 512
+        ppl_dataset = "allenai/tulu-3-sft-mixture"
+        data = load_data(tokenizer, ppl_dataset, num_samples=ppl_num_samples, sequence_length=ppl_seq_length)
+        ppl, ppl_se = eval_ppl(model, data, batch_size=8)
+        perplexity = float(ppl)
+        perplexity_data = {
+            "perplexity": perplexity,
+            "std_error": float(ppl_se),
+            "dataset": ppl_dataset,
+            "num_samples": ppl_num_samples,
+            "sequence_length": ppl_seq_length,
+        }
+        print(f"Perplexity: {perplexity:.2f} (±{float(ppl_se):.2f})")
+    except Exception as e:
+        print(f"Perplexity computation failed (continuing): {e}")
+
     # Run benchmarks
     start_time = time.time()
     results = []
@@ -270,11 +301,15 @@ def main() -> int:
 
     # Save all outputs using common function
     common.save_all_outputs(
-        results, output_dir, model_name, "MLX", hardware_info, args, include_memory=True
+        results, output_dir, model_name, "MLX", hardware_info, args,
+        include_memory=True, perplexity=perplexity, perplexity_data=perplexity_data,
     )
 
     # Print summary using common function
-    common.print_benchmark_summary(results, model_name, "MLX", hardware_info, output_dir, total_benchmark_time)
+    common.print_benchmark_summary(
+        results, model_name, "MLX", hardware_info, output_dir,
+        total_benchmark_time, perplexity=perplexity,
+    )
 
     return 0
 

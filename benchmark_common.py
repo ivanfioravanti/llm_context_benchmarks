@@ -235,7 +235,7 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_xpost_text(results, model_name, framework, hardware_info=None):
+def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None):
     """Generate X post text with results.
 
     Args:
@@ -272,6 +272,9 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None):
 
     xpost += f"\nTotal generated tokens: {total_tokens}"
 
+    if perplexity is not None:
+        xpost += f"\nPerplexity: {perplexity:.2f}"
+
     return xpost.strip()
 
 
@@ -279,7 +282,7 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None):
 generate_tweet_text = generate_xpost_text
 
 
-def generate_table(results, model_name, framework, hardware_info=None, include_memory=False):
+def generate_table(results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None):
     """Generate a formatted table for posting to X/Twitter.
 
     Args:
@@ -334,6 +337,9 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
             total_tokens += gen_tokens
 
     table += f"\nTotal generated tokens: {total_tokens}"
+
+    if perplexity is not None:
+        table += f"\nPerplexity: {perplexity:.2f}"
 
     return table
 
@@ -514,7 +520,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     return output_path
 
 
-def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png"):
+def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None):
     """Create a chart for MLX benchmarks with memory information."""
     # Sort results by context size
     context_sizes = []
@@ -691,8 +697,32 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     # Add grid
     ax5.grid(True, axis="y", alpha=0.3)
 
-    # Sixth subplot - unused, hide it
-    ax6.set_visible(False)
+    # Sixth subplot - Perplexity info or hidden
+    if perplexity is not None:
+        ax6.set_visible(True)
+        ax6.axis("off")
+        ax6.text(
+            0.5, 0.5,
+            f"Perplexity: {perplexity:.2f}",
+            transform=ax6.transAxes,
+            fontsize=24,
+            fontweight="bold",
+            ha="center",
+            va="center",
+            color="#d62728",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="#fff3f3", edgecolor="#d62728", alpha=0.8),
+        )
+        ax6.text(
+            0.5, 0.2,
+            "Dataset: allenai/tulu-3-sft-mixture\n256 samples, seq_len 512",
+            transform=ax6.transAxes,
+            fontsize=10,
+            ha="center",
+            va="center",
+            color="#666666",
+        )
+    else:
+        ax6.set_visible(False)
 
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
@@ -771,9 +801,11 @@ def save_all_outputs(
     hardware_info: Dict,
     args: argparse.Namespace,
     include_memory: bool = False,
+    perplexity: Optional[float] = None,
+    perplexity_data: Optional[Dict] = None,
 ) -> None:
     """Save all benchmark outputs to files.
-    
+
     Args:
         results: List of benchmark result dictionaries
         output_dir: Directory to save outputs
@@ -782,32 +814,41 @@ def save_all_outputs(
         hardware_info: Hardware information dictionary
         args: Command-line arguments namespace
         include_memory: Whether to include memory in table (for MLX)
+        perplexity: Perplexity score (optional, MLX only)
+        perplexity_data: Full perplexity data dict to save as JSON (optional)
     """
     # Save hardware info
     hardware_path = output_dir / "hardware_info.json"
     save_hardware_info(hardware_info, hardware_path)
-    
+
     # Save CSV results
     csv_path = output_dir / args.output_csv
     save_results_csv(results, csv_path)
-    
+
+    # Save perplexity data if available
+    if perplexity_data is not None:
+        ppl_path = output_dir / "perplexity.json"
+        with open(ppl_path, "w") as f:
+            json.dump(perplexity_data, f, indent=2)
+        print(f"Perplexity data saved to {ppl_path}")
+
     # Generate and save chart
     chart_path = output_dir / args.output_chart
     if "MLX" in framework:
-        create_chart_mlx(results, model_name, hardware_info, chart_path)
+        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity)
     else:
         create_chart_ollama(results, model_name, hardware_info, chart_path, framework)
     print(f"Chart saved to {chart_path}")
-    
+
     # Generate and save table
-    table = generate_table(results, model_name, framework, hardware_info, include_memory)
+    table = generate_table(results, model_name, framework, hardware_info, include_memory, perplexity=perplexity)
     table_path = output_dir / "table.txt"
     with open(table_path, "w") as f:
         f.write(table)
     print(f"Table saved to {table_path}")
-    
+
     # Generate and save X post
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info)
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity)
     xpost_path = output_dir / "xpost.txt"
     with open(xpost_path, "w") as f:
         f.write(xpost)
@@ -821,9 +862,10 @@ def print_benchmark_summary(
     hardware_info: Dict,
     output_dir: Path,
     total_benchmark_time: float = None,
+    perplexity: Optional[float] = None,
 ) -> None:
     """Print benchmark summary to console.
-    
+
     Args:
         results: List of benchmark result dictionaries
         model_name: Name of the model
@@ -831,29 +873,34 @@ def print_benchmark_summary(
         hardware_info: Hardware information dictionary
         output_dir: Directory where outputs were saved
         total_benchmark_time: Total time to run all benchmarks in seconds
+        perplexity: Perplexity score (optional)
     """
     # Calculate total generated tokens
     total_generated_tokens = sum(r.get("generation_tokens", 0) for r in results)
     print(f"\n📊 Total generated tokens across all tests: {total_generated_tokens}")
-    
+
     # Print total benchmark time if provided
     if total_benchmark_time is not None:
         print(f"⏱️  Total time to run benchmarks: {total_benchmark_time:.1f} seconds")
-    
+
+    # Print perplexity if available
+    if perplexity is not None:
+        print(f"🎯 Perplexity: {perplexity:.2f}")
+
     # Print summary table
     print("\n" + "=" * 50)
     print("SUMMARY TABLE")
     print("=" * 50)
-    table = generate_table(results, model_name, framework, hardware_info)
+    table = generate_table(results, model_name, framework, hardware_info, perplexity=perplexity)
     print(table)
-    
+
     # Print X post text
     print("\n" + "=" * 50)
     print("X POST TEXT")
     print("=" * 50)
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info)
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity)
     print(xpost)
-    
+
     print(f"\n✅ All outputs saved to: {output_dir}/")
 
 

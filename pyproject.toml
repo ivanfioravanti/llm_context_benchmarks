@@ -13,6 +13,7 @@ dependencies = [
   "charset-normalizer>=3.4.3",
   "contourpy>=1.3.3",
   "cycler>=0.12.1",
+  "datasets>=4.5.0",
   "distlib>=0.4.0",
   "filelock>=3.19.1",
   "fonttools>=4.60.1",
@@ -30,7 +31,7 @@ dependencies = [
   "markupsafe>=3.0.3",
   "matplotlib>=3.10.6",
   "mlx>=0.30.6",
-  "mlx-lm==0.30.6",
+  "mlx-lm==0.30.7",
   "mlx-metal>=0.30.6",
   "nodeenv>=1.9.1",
   "numpy>=2.3.3",
@@ -73,6 +74,7 @@ generate-context-files = "generate_context_files:main"
 ollama-api-benchmark = "ollama_api_benchmark:main"
 ollama-cli-benchmark = "ollama_cli_benchmark:main"
 mlx-benchmark = "mlx_benchmark:main"
+mlx-distributed-benchmark = "mlx_distributed_benchmark:main"
 llamacpp-benchmark = "llamacpp_benchmark:main"
 lmstudio-benchmark = "lmstudio_benchmark:main"
 exo-benchmark = "exo_benchmark:main"
@@ -96,6 +98,7 @@ py-modules = [
   "llamacpp_benchmark",
   "lmstudio_benchmark",
   "mlx_benchmark",
+  "mlx_distributed_benchmark",
   "ollama_api_benchmark",
   "ollama_cli_benchmark",
 ]
