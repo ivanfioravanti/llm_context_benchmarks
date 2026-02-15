@@ -19,6 +19,7 @@ Usage:
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -26,6 +27,11 @@ from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+
+def _clean_display_name(name: str) -> str:
+    """Strip trailing timestamp suffixes like _20260215 from display names."""
+    return re.sub(r"_\d{8,}$", "", name)
 
 
 def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
@@ -83,6 +89,13 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         with open(perplexity_file) as f:
             perplexity_data = json.load(f)
 
+    # Read batch benchmark data if available
+    batch_file = folder_path / "batch_benchmark.json"
+    batch_data = None
+    if batch_file.exists():
+        with open(batch_file) as f:
+            batch_data = json.load(f)
+
     # Create display name
     display_name = f"{engine}: {model}"
 
@@ -94,6 +107,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         "folder_name": folder_name,
         "display_name": display_name,
         "perplexity_data": perplexity_data,
+        "batch_data": batch_data,
     }, display_name
 
 
@@ -112,57 +126,60 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         for data in benchmark_data
     )
 
+    # Check if any benchmark has batch data
+    has_batch_data = any(
+        data.get("batch_data") is not None
+        for data in benchmark_data
+    )
+
     # Set up the plot style
     plt.style.use("default")
-    # Determine grid layout based on available data
-    num_extra_plots = int(has_memory_data) + int(has_perplexity_data)
-    if num_extra_plots == 2:
-        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
-        ax_memory = ax5 if has_memory_data else None
-        ax_ppl = ax6 if has_perplexity_data else None
-    elif num_extra_plots == 1:
-        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax_unused)) = plt.subplots(3, 2, figsize=(16, 18))
-        ax_unused.set_visible(False)
-        if has_memory_data:
-            ax_memory = ax5
-            ax_ppl = None
-        else:
-            ax_memory = None
-            ax_ppl = ax5
-    else:
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        ax_memory = None
-        ax_ppl = None
-    fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold")
 
-    # Colors for different benchmarks - using more readable, distinct colors
+    # Build list of subplot specs: each is (key, title, ylabel, is_bar)
+    subplot_specs = [
+        ("prompt_tps", "Prompt Processing Speed", "Tokens/sec"),
+        ("generation_tps", "Text Generation Speed", "Tokens/sec"),
+        ("total_time", "Total Processing Time", "Seconds"),
+        ("ttft", "Time to First Token (TTFT) — Lower is better", "Time (seconds)"),
+    ]
+    if has_memory_data:
+        subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
+    if has_perplexity_data:
+        subplot_specs.append(("perplexity", "Perplexity (lower is better)", "Perplexity"))
+    if has_batch_data:
+        subplot_specs.append(("batch", "Batch Generation TPS", "Tokens/sec"))
+
+    num_plots = len(subplot_specs)
+    num_rows = (num_plots + 1) // 2
+    fig, axes_flat = plt.subplots(num_rows, 2, figsize=(16, 5.5 * num_rows))
+    if num_rows == 1:
+        axes_flat = np.array([axes_flat])
+    axes_all = axes_flat.flatten()
+
+    # Hide unused axes
+    for idx in range(num_plots, len(axes_all)):
+        axes_all[idx].set_visible(False)
+
+    # Colors for different benchmarks
     readable_colors = [
-        '#1f77b4',  # blue
-        '#ff7f0e',  # orange
-        '#2ca02c',  # green
-        '#d62728',  # red
-        '#9467bd',  # purple
-        '#8c564b',  # brown
-        '#e377c2',  # pink
-        '#7f7f7f',  # gray
-        '#bcbd22',  # olive
-        '#17becf',  # cyan
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
     ]
     colors = readable_colors[:len(benchmark_data)]
     if len(benchmark_data) > len(readable_colors):
-        # Fall back to colormap if we have more data than predefined colors
         colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
 
-    # Prepare data for plotting
+    # Clean display names (strip timestamps)
+    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+
+    # Pre-extract and sort data per benchmark
+    all_series = []
     for i, data in enumerate(benchmark_data):
         results = data["results"]
-        display_name = data["display_name"]
-        color = colors[i]
-
         if not results:
+            all_series.append(None)
             continue
 
-        # Extract context sizes and metrics
         context_sizes = [r["context_size"] for r in results]
         prompt_tps = [r.get("prompt_tps", 0) for r in results]
         generation_tps = [r.get("generation_tps", 0) for r in results]
@@ -170,122 +187,97 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         ttft_times = [r.get("time_to_first_token", r.get("prompt_eval_duration", 0)) for r in results]
         peak_memory = [r.get("peak_memory_gb", 0) for r in results]
 
-        # Convert context sizes to numbers for sorting
         context_nums = []
         for ctx in context_sizes:
-            if ctx.endswith("k"):
-                context_nums.append(float(ctx[:-1]) * 1000)
-            else:
-                context_nums.append(int(ctx))
+            context_nums.append(float(ctx[:-1]) * 1000 if ctx.endswith("k") else int(ctx))
 
-        # Sort all data by context size
         sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory))
-        context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory = zip(*sorted_data)
+        cn, cs, pp, gn, tt, tf, pm = zip(*sorted_data)
+        all_series.append({
+            "context_nums": cn, "context_labels": cs,
+            "prompt_tps": pp, "generation_tps": gn,
+            "total_time": tt, "ttft": tf, "memory": pm,
+        })
 
-        # Plot 1: Prompt Processing Speed
-        line1 = ax1.plot(context_sizes, prompt_tps, marker="o", linewidth=2, label=display_name, color=color)[0]
-        # Add value annotations
-        for x, y in zip(context_sizes, prompt_tps):
-            ax1.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
+    # Markers for each series
+    markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
 
-        # Plot 2: Generation Speed
-        line2 = ax2.plot(context_sizes, generation_tps, marker="s", linewidth=2, label=display_name, color=color)[0]
-        # Add value annotations
-        for x, y in zip(context_sizes, generation_tps):
-            ax2.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
+    # Plot each subplot
+    for plot_idx, (key, title, ylabel) in enumerate(subplot_specs):
+        ax = axes_all[plot_idx]
+        ax.set_title(title, fontweight="bold", fontsize=13)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
 
-        # Plot 3: Total Time
-        line3 = ax3.plot(context_sizes, total_times, marker="^", linewidth=2, label=display_name, color=color)[0]
-        # Add value annotations
-        for x, y in zip(context_sizes, total_times):
-            ax3.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
-
-        # Plot 4: Time to First Token (TTFT)
-        line4 = ax4.plot(context_sizes, ttft_times, marker="d", linewidth=2, label=display_name, color=color)[0]
-        # Add value annotations
-        for x, y in zip(context_sizes, ttft_times):
-            ax4.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
-
-        if has_memory_data and ax_memory is not None:
-            # Plot: Peak Memory Usage
-            ax_memory.plot(context_sizes, peak_memory, marker="p", linewidth=2, label=display_name, color=color)
-            # Add value annotations
-            for x, y in zip(context_sizes, peak_memory):
-                if y > 0:  # Only annotate non-zero values
-                    ax_memory.annotate(f'{y:.1f}GB', (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color=color)
-
-    # Configure subplot 1: Prompt Processing Speed
-    ax1.set_title("Prompt Processing Speed", fontweight="bold")
-    ax1.set_xlabel("Context Size")
-    ax1.set_ylabel("Tokens/sec")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    ax1.tick_params(axis="x", rotation=45)
-
-    # Configure subplot 2: Generation Speed
-    ax2.set_title("Text Generation Speed", fontweight="bold")
-    ax2.set_xlabel("Context Size")
-    ax2.set_ylabel("Tokens/sec")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    ax2.tick_params(axis="x", rotation=45)
-
-    # Configure subplot 3: Total Time
-    ax3.set_title("Total Processing Time", fontweight="bold")
-    ax3.set_xlabel("Context Size")
-    ax3.set_ylabel("Seconds")
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
-    ax3.tick_params(axis="x", rotation=45)
-
-    # Configure subplot 4: TTFT
-    ax4.set_title("Time to First Token (TTFT)\nLower is better", fontweight="bold")
-    ax4.set_xlabel("Context Size")
-    ax4.set_ylabel("Time (seconds)")
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-    ax4.tick_params(axis="x", rotation=45)
-
-    if has_memory_data and ax_memory is not None:
-        ax_memory.set_title("Peak Memory Usage", fontweight="bold")
-        ax_memory.set_xlabel("Context Size")
-        ax_memory.set_ylabel("Memory (GB)")
-        ax_memory.legend()
-        ax_memory.grid(True, alpha=0.3)
-        ax_memory.tick_params(axis="x", rotation=45)
-
-    if has_perplexity_data and ax_ppl is not None:
-        # Build perplexity bar chart
-        ppl_names = []
-        ppl_values = []
-        ppl_errors = []
-        ppl_colors = []
-        for i, data in enumerate(benchmark_data):
-            ppl_data = data.get("perplexity_data")
-            if ppl_data is not None:
-                ppl_names.append(data["display_name"])
-                ppl_values.append(ppl_data["perplexity"])
-                ppl_errors.append(ppl_data.get("std_error", 0))
-                ppl_colors.append(colors[i])
-
-        if ppl_values:
-            bars = ax_ppl.bar(range(len(ppl_values)), ppl_values, yerr=ppl_errors,
+        if key == "perplexity":
+            # Bar chart for perplexity
+            ppl_names, ppl_values, ppl_errors, ppl_colors = [], [], [], []
+            for i, data in enumerate(benchmark_data):
+                ppl_data = data.get("perplexity_data")
+                if ppl_data is not None:
+                    ppl_names.append(clean_names[i])
+                    ppl_values.append(ppl_data["perplexity"])
+                    ppl_errors.append(ppl_data.get("std_error", 0))
+                    ppl_colors.append(colors[i])
+            if ppl_values:
+                bars = ax.bar(range(len(ppl_values)), ppl_values, yerr=ppl_errors,
                               color=ppl_colors, alpha=0.8, capsize=5, width=0.6)
-            ax_ppl.set_title("Perplexity (lower is better)", fontweight="bold")
-            ax_ppl.set_ylabel("Perplexity")
-            ax_ppl.set_xticks(range(len(ppl_names)))
-            ax_ppl.set_xticklabels(ppl_names, rotation=30, ha="right", fontsize=9)
-            ax_ppl.grid(True, axis="y", alpha=0.3)
-            # Add value labels on bars
-            for bar, val in zip(bars, ppl_values):
-                ax_ppl.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(),
+                ax.set_xticks(range(len(ppl_names)))
+                ax.set_xticklabels(ppl_names, rotation=30, ha="right", fontsize=9)
+                for bar, val in zip(bars, ppl_values):
+                    ax.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(),
                             f"{val:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+            continue
 
-    plt.tight_layout()
+        if key == "batch":
+            # Batch generation TPS vs batch size (no annotations, clean)
+            for i, data in enumerate(benchmark_data):
+                batch = data.get("batch_data")
+                if not batch:
+                    continue
+                batch_sizes = [r["batch_size"] for r in batch]
+                batch_gen_tps = [r["generation_tps"] for r in batch]
+                marker = markers[i % len(markers)]
+                ax.plot(batch_sizes, batch_gen_tps, marker=marker, linewidth=2,
+                        label=clean_names[i], color=colors[i])
+            ax.set_xlabel("Batch Size")
+            ax.legend(fontsize=9)
+            continue
+
+        # Line charts: context-size based
+        ax.set_xlabel("Context Size")
+        ax.tick_params(axis="x", rotation=45)
+        for i, series in enumerate(all_series):
+            if series is None:
+                continue
+            x_vals = series["context_labels"]
+            y_vals = series[key]
+            marker = markers[i % len(markers)]
+            ax.plot(x_vals, y_vals, marker=marker, linewidth=2,
+                    label=clean_names[i], color=colors[i], markersize=6)
+            # Add value annotations
+            for x, y in zip(x_vals, y_vals):
+                if key == "ttft":
+                    ax.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                elif key == "total_time":
+                    ax.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                else:
+                    ax.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+
+    # Single shared legend at the top of the figure
+    handles, labels = axes_all[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", ncol=min(len(handles), 4),
+                   fontsize=10, bbox_to_anchor=(0.5, 1.0), frameon=True,
+                   fancybox=True, shadow=True)
+
+    fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold", y=1.03)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     # Save the chart
     chart_path = output_dir / "comparison_chart.png"
     plt.savefig(chart_path, dpi=300, bbox_inches="tight")
+    plt.close()
     print(f"Comparison chart saved to: {chart_path}")
 
     return chart_path
@@ -299,7 +291,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     for data in benchmark_data:
         results = data["results"]
         hardware_info = data["hardware_info"]
-        display_name = data["display_name"]
+        display_name = _clean_display_name(data["display_name"])
 
         if not results:
             continue
@@ -323,6 +315,14 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         ppl_data = data.get("perplexity_data")
         ppl_str = f"{ppl_data['perplexity']:.2f}" if ppl_data else "N/A"
 
+        # Peak batch generation TPS
+        batch = data.get("batch_data")
+        if batch:
+            peak_batch_gen = max(r["generation_tps"] for r in batch)
+            peak_batch_str = f"{peak_batch_gen:.1f}"
+        else:
+            peak_batch_str = "N/A"
+
         table_data.append(
             {
                 "Engine/Model": display_name,
@@ -331,6 +331,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Perplexity": ppl_str,
+                "Peak Batch Gen TPS": peak_batch_str,
                 "Total Tokens": f"{total_tokens_generated:,}",
                 "Total Time": f"{total_time:.1f}s",
             }
@@ -359,11 +360,13 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     for entry in table_data:
         xpost_text += f"{entry['Engine/Model']}\n"
         xpost_text += f"  pp {entry['Avg Prompt TPS']} tg {entry['Avg Gen TPS']} t/s"
-        if entry["Peak Memory"] != "N/A":
-            xpost_text += f" {entry['Peak Memory']}"
         xpost_text += f"\n  {entry['Total Tokens']} tokens in {entry['Total Time']}"
+        if entry["Peak Memory"] != "N/A":
+            xpost_text += f"\n  Peak Memory: {entry['Peak Memory']}"
         if entry.get("Perplexity", "N/A") != "N/A":
             xpost_text += f"\n  Perplexity: {entry['Perplexity']}"
+        if entry.get("Peak Batch Gen TPS", "N/A") != "N/A":
+            xpost_text += f"\n  Peak Batch Gen TPS: {entry['Peak Batch Gen TPS']}"
         xpost_text += "\n\n"
 
     table_path = output_dir / "comparison_table.txt"

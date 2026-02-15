@@ -235,7 +235,7 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None):
+def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None, batch_results=None):
     """Generate X post text with results.
 
     Args:
@@ -275,6 +275,10 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
     if perplexity is not None:
         xpost += f"\nPerplexity: {perplexity:.2f}"
 
+    if batch_results:
+        parts = [f"b{r['batch_size']} {r['generation_tps']:.0f}" for r in batch_results]
+        xpost += f"\nBatch TPS: {' '.join(parts)}"
+
     return xpost.strip()
 
 
@@ -282,7 +286,7 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
 generate_tweet_text = generate_xpost_text
 
 
-def generate_table(results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None):
+def generate_table(results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None):
     """Generate a formatted table for posting to X/Twitter.
 
     Args:
@@ -340,6 +344,13 @@ def generate_table(results, model_name, framework, hardware_info=None, include_m
 
     if perplexity is not None:
         table += f"\nPerplexity: {perplexity:.2f}"
+
+    if batch_results:
+        table += "\n\nBatch Benchmark\n"
+        table += "Batch | Prompt TPS | Gen TPS | Memory\n"
+        table += "------|------------|---------|--------\n"
+        for r in batch_results:
+            table += f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB\n"
 
     return table
 
@@ -520,7 +531,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     return output_path
 
 
-def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None):
+def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None, batch_results=None):
     """Create a chart for MLX benchmarks with memory information."""
     # Sort results by context size
     context_sizes = []
@@ -540,8 +551,15 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
         total_times.append(r.get("total_time", 0))
         ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
 
-    # Create figure with six subplots (3x2 grid) with more spacing
-    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 16), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
+    # Create figure - 4x2 grid if batch results present, else 3x2
+    num_rows = 4 if batch_results else 3
+    fig_height = 20 if batch_results else 16
+    fig, axes = plt.subplots(num_rows, 2, figsize=(15, fig_height), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
+    ax1, ax2 = axes[0]
+    ax3, ax4 = axes[1]
+    ax5, ax6 = axes[2]
+    if batch_results:
+        ax7, ax8 = axes[3]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -724,12 +742,54 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     else:
         ax6.set_visible(False)
 
+    # Row 4: Batch benchmark charts (if present)
+    if batch_results:
+        batch_sizes = [r["batch_size"] for r in batch_results]
+        batch_prompt_tps = [r["prompt_tps"] for r in batch_results]
+        batch_gen_tps = [r["generation_tps"] for r in batch_results]
+        bx = np.arange(len(batch_sizes))
+        batch_labels = [str(bs) for bs in batch_sizes]
+
+        # Batch Prompt TPS
+        ax7.set_title("Batch Prompt Tokens per Second", fontsize=14, pad=10)
+        color_bp = "#3F51B5"
+        ax7.plot(bx, batch_prompt_tps, "o-", color=color_bp, linewidth=2, markersize=8)
+        ax7.set_ylabel("Tokens/sec", color=color_bp)
+        ax7.set_xlabel("Batch Size")
+        ax7.tick_params(axis="y", labelcolor=color_bp)
+        if batch_prompt_tps:
+            max_bp = max(batch_prompt_tps) if batch_prompt_tps else 1
+            for i, p in enumerate(batch_prompt_tps):
+                ax7.text(i, p + max_bp * 0.03, f"{p:.1f}", ha="center", va="bottom", fontsize=9, color=color_bp)
+        ax7.set_xticks(bx)
+        ax7.set_xticklabels(batch_labels)
+        ax7.grid(True, alpha=0.3)
+        ax7.set_ylim(0, max(batch_prompt_tps) * 1.15 if batch_prompt_tps and max(batch_prompt_tps) > 0 else 1)
+
+        # Batch Generation TPS
+        ax8.set_title("Batch Generation Tokens per Second", fontsize=14, pad=10)
+        color_bg = "#009688"
+        ax8.plot(bx, batch_gen_tps, "o-", color=color_bg, linewidth=2, markersize=8)
+        ax8.set_ylabel("Tokens/sec", color=color_bg)
+        ax8.set_xlabel("Batch Size")
+        ax8.tick_params(axis="y", labelcolor=color_bg)
+        if batch_gen_tps:
+            max_bg = max(batch_gen_tps) if batch_gen_tps else 1
+            for i, g in enumerate(batch_gen_tps):
+                ax8.text(i, g + max_bg * 0.03, f"{g:.1f}", ha="center", va="bottom", fontsize=9, color=color_bg)
+        ax8.set_xticks(bx)
+        ax8.set_xticklabels(batch_labels)
+        ax8.grid(True, alpha=0.3)
+        ax8.set_ylim(0, max(batch_gen_tps) * 1.15 if batch_gen_tps and max(batch_gen_tps) > 0 else 1)
+
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
 
     return output_path
+
+
 def create_output_directory(framework_name: str, model_name: str, base_dir: str = "output") -> Path:
     """Create timestamped output directory for benchmark results.
     
@@ -803,6 +863,7 @@ def save_all_outputs(
     include_memory: bool = False,
     perplexity: Optional[float] = None,
     perplexity_data: Optional[Dict] = None,
+    batch_results: Optional[List[Dict]] = None,
 ) -> None:
     """Save all benchmark outputs to files.
 
@@ -832,23 +893,30 @@ def save_all_outputs(
             json.dump(perplexity_data, f, indent=2)
         print(f"Perplexity data saved to {ppl_path}")
 
+    # Save batch benchmark results if available
+    if batch_results:
+        batch_path = output_dir / "batch_benchmark.json"
+        with open(batch_path, "w") as f:
+            json.dump(batch_results, f, indent=2)
+        print(f"Batch benchmark saved to {batch_path}")
+
     # Generate and save chart
     chart_path = output_dir / args.output_chart
     if "MLX" in framework:
-        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity)
+        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity, batch_results=batch_results)
     else:
         create_chart_ollama(results, model_name, hardware_info, chart_path, framework)
     print(f"Chart saved to {chart_path}")
 
     # Generate and save table
-    table = generate_table(results, model_name, framework, hardware_info, include_memory, perplexity=perplexity)
+    table = generate_table(results, model_name, framework, hardware_info, include_memory, perplexity=perplexity, batch_results=batch_results)
     table_path = output_dir / "table.txt"
     with open(table_path, "w") as f:
         f.write(table)
     print(f"Table saved to {table_path}")
 
     # Generate and save X post
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity)
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
     xpost_path = output_dir / "xpost.txt"
     with open(xpost_path, "w") as f:
         f.write(xpost)
@@ -863,6 +931,7 @@ def print_benchmark_summary(
     output_dir: Path,
     total_benchmark_time: float = None,
     perplexity: Optional[float] = None,
+    batch_results: Optional[List[Dict]] = None,
 ) -> None:
     """Print benchmark summary to console.
 
@@ -887,18 +956,26 @@ def print_benchmark_summary(
     if perplexity is not None:
         print(f"🎯 Perplexity: {perplexity:.2f}")
 
+    # Print batch results if available
+    if batch_results:
+        print("\n" + "=" * 50)
+        print("BATCH BENCHMARK RESULTS")
+        print("=" * 50)
+        for r in batch_results:
+            print(f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s, {r['peak_memory_gb']:.2f} GB")
+
     # Print summary table
     print("\n" + "=" * 50)
     print("SUMMARY TABLE")
     print("=" * 50)
-    table = generate_table(results, model_name, framework, hardware_info, perplexity=perplexity)
+    table = generate_table(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
     print(table)
 
     # Print X post text
     print("\n" + "=" * 50)
     print("X POST TEXT")
     print("=" * 50)
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity)
+    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
     print(xpost)
 
     print(f"\n✅ All outputs saved to: {output_dir}/")
