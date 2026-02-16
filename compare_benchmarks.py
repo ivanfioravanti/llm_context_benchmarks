@@ -259,6 +259,14 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
             marker = markers[i % len(markers)]
             ax.plot(x_vals, y_vals, marker=marker, linewidth=2,
                     label=clean_names[i], color=colors[i], markersize=6)
+            # Add value annotations
+            for x, y in zip(x_vals, y_vals):
+                if key == "ttft":
+                    ax.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                elif key == "total_time":
+                    ax.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                else:
+                    ax.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
 
     # Single shared legend at the top of the figure
     handles, labels = axes_all[0].get_legend_handles_labels()
