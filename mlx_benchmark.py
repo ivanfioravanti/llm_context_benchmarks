@@ -11,11 +11,12 @@ Usage:
 """
 
 import argparse
+import json
 import statistics
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import benchmark_common as common
 
@@ -53,6 +54,39 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
     return model, tokenizer
 
 
+def prepare_prompt(
+    prompt_text: str,
+    tokenizer,
+    ignore_chat_template: bool = False,
+    chat_template_config: Optional[str] = None,
+) -> Union[str, List[int]]:
+    """Prepare prompt input for mlx_lm.stream_generate.
+
+    Mirrors mlx_lm.generate CLI behavior: when a tokenizer has a chat template,
+    wrap the raw text as a user message and add the generation prompt.
+    """
+    has_chat_template = bool(
+        getattr(tokenizer, "has_chat_template", False)
+        or getattr(tokenizer, "chat_template", None) is not None
+    )
+    if ignore_chat_template or not has_chat_template:
+        return prompt_text
+
+    template_kwargs = {}
+    if chat_template_config:
+        template_kwargs = json.loads(chat_template_config)
+
+    messages = [{"role": "user", "content": prompt_text}]
+    templated_prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        continue_final_message=False,
+        add_generation_prompt=True,
+        **template_kwargs,
+    )
+    return tokenizer.encode(templated_prompt, add_special_tokens=False)
+
+
 def run_benchmark(
     model,
     tokenizer,
@@ -60,6 +94,8 @@ def run_benchmark(
     kv_bit: Optional[int] = None,
     max_tokens: int = 200,
     max_kv_size: Optional[int] = None,
+    ignore_chat_template: bool = False,
+    chat_template_config: Optional[str] = None,
 ) -> Optional[Dict]:
     """Run MLX benchmark for a given context file.
 
@@ -70,6 +106,8 @@ def run_benchmark(
         kv_bit: KV cache bit size (optional)
         max_tokens: Maximum tokens to generate
         max_kv_size: Maximum KV cache size in tokens (optional)
+        ignore_chat_template: If true, skip tokenizer chat template wrapping
+        chat_template_config: JSON config passed to apply_chat_template
 
     Returns:
         Dictionary with benchmark results or None if failed
@@ -81,6 +119,13 @@ def run_benchmark(
     try:
         with open(context_file, "r") as f:
             prompt = f.read()
+
+        prepared_prompt = prepare_prompt(
+            prompt,
+            tokenizer,
+            ignore_chat_template=ignore_chat_template,
+            chat_template_config=chat_template_config,
+        )
 
         kwargs = {}
         if kv_bit is not None:
@@ -97,7 +142,7 @@ def run_benchmark(
         last_response = None
         generated_text = ""
         for response in mlx_lm.stream_generate(
-            model, tokenizer, prompt=prompt, max_tokens=max_tokens, **kwargs
+            model, tokenizer, prompt=prepared_prompt, max_tokens=max_tokens, **kwargs
         ):
             last_response = response
             generated_text += response.text
@@ -261,6 +306,16 @@ def main() -> int:
         help="Allow running custom model/tokenizer code when loading (HF)",
     )
     parser.add_argument(
+        "--ignore-chat-template",
+        action="store_true",
+        help="Use raw prompt text instead of tokenizer chat template",
+    )
+    parser.add_argument(
+        "--chat-template-config",
+        default=None,
+        help="JSON config passed to tokenizer.apply_chat_template",
+    )
+    parser.add_argument(
         "--batch-sizes",
         default="1,2,4,8,16,32",
         help="Comma-separated batch sizes for batch benchmark (default: 1,2,4,8,16,32)",
@@ -284,9 +339,22 @@ def main() -> int:
         help="Number of trials per batch size, takes median (default: 3)",
     )
     parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        dest="no_batch",
+        help="Skip batch benchmark",
+    )
+    # Backward-compatible alias for older invocations.
+    parser.add_argument(
         "--no-batch-benchmark",
         action="store_true",
-        help="Skip batch benchmark",
+        dest="no_batch",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-perplexity",
+        action="store_true",
+        help="Skip perplexity computation",
     )
 
     # Add common arguments
@@ -332,6 +400,10 @@ def main() -> int:
         print(f"KV cache bits: {args.kv_bit}")
     if args.max_kv_size:
         print(f"Max KV size: {args.max_kv_size}")
+    if args.ignore_chat_template:
+        print("Chat template: disabled (raw prompt)")
+    else:
+        print("Chat template: enabled when tokenizer provides one")
 
     # Warmup run using the smallest context file
     warmup_file = context_files[0]
@@ -347,48 +419,57 @@ def main() -> int:
     try:
         with open(warmup_file, "r") as f:
             warmup_prompt = f.read()
+        warmup_prepared_prompt = prepare_prompt(
+            warmup_prompt,
+            tokenizer,
+            ignore_chat_template=args.ignore_chat_template,
+            chat_template_config=args.chat_template_config,
+        )
         for _ in mlx_lm.stream_generate(
-            model, tokenizer, prompt=warmup_prompt, max_tokens=1, **warmup_kwargs
+            model, tokenizer, prompt=warmup_prepared_prompt, max_tokens=1, **warmup_kwargs
         ):
             pass
         print("Warmup complete (result discarded)")
     except Exception as e:
         print(f"Warmup failed (continuing anyway): {e}")
 
-    # Compute perplexity
-    print("\nComputing perplexity...")
     perplexity = None
     perplexity_data = None
-    try:
-        from mlx_lm.perplexity import eval_ppl, load_data
+    if args.no_perplexity:
+        print("\nSkipping perplexity (--no-perplexity)")
+    else:
+        # Compute perplexity
+        print("\nComputing perplexity...")
+        try:
+            from mlx_lm.perplexity import eval_ppl, load_data
 
-        import mlx.core as mx
+            import mlx.core as mx
 
-        np_seed = 123
-        import numpy as np_rng
-        np_rng.random.seed(np_seed)
-        mx.random.seed(np_seed)
+            np_seed = 123
+            import numpy as np_rng
+            np_rng.random.seed(np_seed)
+            mx.random.seed(np_seed)
 
-        ppl_num_samples = 256
-        ppl_seq_length = 512
-        ppl_dataset = "allenai/tulu-3-sft-mixture"
-        data = load_data(tokenizer, ppl_dataset, num_samples=ppl_num_samples, sequence_length=ppl_seq_length)
-        ppl, ppl_se = eval_ppl(model, data, batch_size=8)
-        perplexity = float(ppl)
-        perplexity_data = {
-            "perplexity": perplexity,
-            "std_error": float(ppl_se),
-            "dataset": ppl_dataset,
-            "num_samples": ppl_num_samples,
-            "sequence_length": ppl_seq_length,
-        }
-        print(f"Perplexity: {perplexity:.2f} (±{float(ppl_se):.2f})")
-    except Exception as e:
-        print(f"Perplexity computation failed (continuing): {e}")
+            ppl_num_samples = 256
+            ppl_seq_length = 512
+            ppl_dataset = "allenai/tulu-3-sft-mixture"
+            data = load_data(tokenizer, ppl_dataset, num_samples=ppl_num_samples, sequence_length=ppl_seq_length)
+            ppl, ppl_se = eval_ppl(model, data, batch_size=8)
+            perplexity = float(ppl)
+            perplexity_data = {
+                "perplexity": perplexity,
+                "std_error": float(ppl_se),
+                "dataset": ppl_dataset,
+                "num_samples": ppl_num_samples,
+                "sequence_length": ppl_seq_length,
+            }
+            print(f"Perplexity: {perplexity:.2f} (±{float(ppl_se):.2f})")
+        except Exception as e:
+            print(f"Perplexity computation failed (continuing): {e}")
 
     # Run batch benchmark
     batch_results = None
-    if not args.no_batch_benchmark:
+    if not args.no_batch:
         batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
         print(f"\nRunning batch benchmark (sizes: {batch_sizes})...")
 
@@ -426,6 +507,8 @@ def main() -> int:
             args.kv_bit,
             args.max_tokens,
             args.max_kv_size,
+            args.ignore_chat_template,
+            args.chat_template_config,
         )
         if result:
             results.append(result)
