@@ -134,6 +134,8 @@ def benchmark_llamacpp(
         "prompt_tokens": prompt_tokens,
         "generation_tokens": generation_tokens,
         "prompt_time": prompt_time,
+        "prompt_eval_duration": prompt_time,
+        "time_to_first_token": prompt_time,
         "eval_duration": predict_time,
         "total_time": total_time,
         "prompt_tps": prompt_tps,
