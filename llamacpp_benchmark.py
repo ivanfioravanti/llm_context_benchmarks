@@ -86,29 +86,50 @@ def benchmark_llamacpp(
         "temperature": 0.7,
         "top_k": 40,
         "top_p": 0.95,
-        "stream": False,
+        "stream": True,
         "cache_prompt": False,
     }
 
     # Record start time
     start_time = time.time()
+    first_token_time = None
+    generated_text = ""
+    result = {}
 
     # Make the request to the server
     try:
+        import json
         response = requests.post(
-            f"{server_url}/completion", json=payload, timeout=timeout
+            f"{server_url}/completion", json=payload, timeout=timeout, stream=True
         )
         response.raise_for_status()
-        result = response.json()
+        
+        for line in response.iter_lines():
+            if line:
+                line = line.decode('utf-8')
+                if line.startswith('data: '):
+                    data_str = line[6:]
+                    try:
+                        chunk = json.loads(data_str)
+                        # Mark first token time when we receive content
+                        if first_token_time is None and chunk.get("content"):
+                            first_token_time = time.time()
+                            
+                        generated_text += chunk.get("content", "")
+                        
+                        # Stop chunk usually contains timings
+                        if chunk.get("stop"):
+                            result = chunk
+                            break
+                    except json.JSONDecodeError:
+                        pass
     except requests.exceptions.RequestException as e:
         print(f"Error during benchmark: {e}")
         return None
 
     # Calculate timings
     total_time = time.time() - start_time
-
-    # Extract metrics from response
-    generated_text = result.get("content", "")
+    time_to_first_token = (first_token_time - start_time) if first_token_time else 0.0
 
     # llama.cpp server provides timing information
     timings = result.get("timings", {})
@@ -135,7 +156,7 @@ def benchmark_llamacpp(
         "generation_tokens": generation_tokens,
         "prompt_time": prompt_time,
         "prompt_eval_duration": prompt_time,
-        "time_to_first_token": prompt_time,
+        "time_to_first_token": time_to_first_token,
         "eval_duration": predict_time,
         "total_time": total_time,
         "prompt_tps": prompt_tps,
@@ -228,6 +249,7 @@ def main() -> int:
             print(f"\nResults for {context_file.name}:")
             print(f"  Prompt tokens: {result['prompt_tokens']}")
             print(f"  Generated tokens: {result['generation_tokens']}")
+            print(f"  Time to first token: {result['time_to_first_token']:.2f}s")
             print(f"  Prompt time: {result['prompt_time']:.2f}s")
             print(f"  Generation time: {result['eval_duration']:.2f}s")
             print(f"  Total time: {result['total_time']:.2f}s")
