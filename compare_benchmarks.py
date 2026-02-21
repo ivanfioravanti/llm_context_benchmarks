@@ -111,7 +111,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
     }, display_name
 
 
-def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
+def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, charts: List[str] = None):
     """Create comparison charts from multiple benchmark results."""
 
     # Check if any benchmark has memory data
@@ -139,8 +139,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     subplot_specs = [
         ("prompt_tps", "Prompt Processing Speed", "Tokens/sec"),
         ("generation_tps", "Text Generation Speed", "Tokens/sec"),
-        ("total_time", "Total Processing Time", "Seconds"),
-        ("ttft", "Time to First Token (TTFT) — Lower is better", "Time (seconds)"),
+        ("ttft", "Time to First Token (TTFT)", "Time (seconds)"),
     ]
     if has_memory_data:
         subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
@@ -150,12 +149,19 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
         subplot_specs.append(("batch_prompt", "Batch Prompt TPS", "Tokens/sec"))
         subplot_specs.append(("batch_gen", "Batch Generation TPS", "Tokens/sec"))
 
+    if charts:
+        subplot_specs = [spec for spec in subplot_specs if spec[0] in charts]
+
     num_plots = len(subplot_specs)
+    if num_plots == 0:
+        print("No valid charts to generate based on requested elements.")
+        return None
+
     num_rows = (num_plots + 1) // 2
-    fig, axes_flat = plt.subplots(num_rows, 2, figsize=(16, 5.5 * num_rows))
-    if num_rows == 1:
-        axes_flat = np.array([axes_flat])
-    axes_all = axes_flat.flatten()
+    cols = 2 if num_plots > 1 else 1
+    
+    fig, axes_flat = plt.subplots(num_rows, cols, figsize=(8 * cols, 5.5 * num_rows))
+    axes_all = np.array(axes_flat).flatten()
 
     # Hide unused axes
     for idx in range(num_plots, len(axes_all)):
@@ -203,10 +209,37 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
     # Markers for each series
     markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
 
+    # For TTFT labels, annotate only the lowest value for each context size.
+    min_ttft_by_context = {}
+    for series in all_series:
+        if series is None:
+            continue
+        for ctx, ttft in zip(series["context_labels"], series["ttft"]):
+            current = min_ttft_by_context.get(ctx)
+            if current is None or ttft < current:
+                min_ttft_by_context[ctx] = ttft
+
     # Plot each subplot
     for plot_idx, (key, title, ylabel) in enumerate(subplot_specs):
         ax = axes_all[plot_idx]
-        ax.set_title(title, fontweight="bold", fontsize=13)
+        if key == "ttft":
+            ax.set_title(
+                "Time to First Token (TTFT)",
+                fontweight="bold",
+                fontsize=13,
+                pad=22,
+            )
+            ax.text(
+                0.5,
+                1.005,
+                "(only lower values labeled)",
+                transform=ax.transAxes,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        else:
+            ax.set_title(title, fontweight="bold", fontsize=13)
         ax.set_ylabel(ylabel)
         ax.grid(True, alpha=0.3)
 
@@ -244,6 +277,16 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
                 marker = markers[i % len(markers)]
                 ax.plot(batch_sizes, batch_tps, marker=marker, linewidth=2,
                         label=clean_names[i], color=colors[i])
+                for x, y in zip(batch_sizes, batch_tps):
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
             ax.set_xlabel("Batch Size")
             ax.legend(fontsize=9)
             continue
@@ -262,11 +305,26 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path):
             # Add value annotations
             for x, y in zip(x_vals, y_vals):
                 if key == "ttft":
-                    ax.annotate(f'{y:.2f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
-                elif key == "total_time":
-                    ax.annotate(f'{y:.1f}s', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                    if np.isclose(y, min_ttft_by_context.get(x, y)):
+                        ax.annotate(
+                            f"{y:.2f}s",
+                            (x, y),
+                            textcoords="offset points",
+                            xytext=(0, 8),
+                            ha="center",
+                            fontsize=7,
+                            color=colors[i],
+                        )
                 else:
-                    ax.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7, color=colors[i])
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
 
     # Single shared legend at the top of the figure
     handles, labels = axes_all[0].get_legend_handles_labels()
@@ -480,6 +538,13 @@ Examples:
         help="Output directory for comparison results (default: comparison_results)",
     )
 
+    parser.add_argument(
+        "--charts",
+        nargs="+",
+        choices=["prompt_tps", "generation_tps", "ttft", "memory", "perplexity", "batch_prompt", "batch_gen"],
+        help="Specific charts to generate (default: all available)",
+    )
+
     args = parser.parse_args()
 
     # Find benchmark folders
@@ -514,7 +579,7 @@ Examples:
     output_dir.mkdir(exist_ok=True)
 
     # Create comparison charts and tables
-    create_comparison_charts(benchmark_data, output_dir)
+    create_comparison_charts(benchmark_data, output_dir, charts=args.charts)
     create_comparison_table(benchmark_data, output_dir)
 
     print(f"\n✅ Comparison complete! Results saved to: {output_dir}/")

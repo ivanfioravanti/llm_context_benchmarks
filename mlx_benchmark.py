@@ -36,7 +36,7 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         trust_remote_code: Allow running custom model/tokenizer code
 
     Returns:
-        Tuple of (model, tokenizer)
+        Tuple of (model, tokenizer, config)
     """
     import mlx_lm
 
@@ -46,12 +46,13 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         model_config["trust_remote_code"] = True
         tokenizer_config["trust_remote_code"] = True
 
-    model, tokenizer = mlx_lm.load(
+    model, tokenizer, config = mlx_lm.load(
         model_url,
         model_config=model_config,
         tokenizer_config=tokenizer_config,
+        return_config=True,
     )
-    return model, tokenizer
+    return model, tokenizer, config
 
 
 def prepare_prompt(
@@ -194,6 +195,7 @@ def run_batch_benchmark(
     prompt_tokens: int = 2048,
     gen_tokens: int = 256,
     num_trials: int = 3,
+    vocab_size: Optional[int] = None,
 ) -> List[Dict]:
     """Run batch benchmark measuring throughput at different batch sizes.
 
@@ -204,6 +206,7 @@ def run_batch_benchmark(
         prompt_tokens: Number of prompt tokens per sequence
         gen_tokens: Number of tokens to generate
         num_trials: Number of trials per batch size (takes median)
+        vocab_size: Vocabulary size to sample synthetic prompts from
 
     Returns:
         List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
@@ -211,62 +214,76 @@ def run_batch_benchmark(
     import mlx.core as mx
     from mlx_lm import batch_generate, stream_generate
 
-    vocab_size = tokenizer.vocab_size
+    if vocab_size is None:
+        vocab_size = tokenizer.vocab_size
     batch_results = []
 
-    for bs in batch_sizes:
-        print(f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
-        mx.reset_peak_memory()
+    # Match mlx_lm.benchmark: disable EOS to avoid early stopping on random prompts.
+    original_eos = set(getattr(tokenizer, "eos_token_ids", set()))
+    restored_via_private_attr = hasattr(tokenizer, "_eos_token_ids")
+    if restored_via_private_attr:
+        tokenizer._eos_token_ids = set()
+    else:
+        tokenizer.eos_token_ids = set()
+    try:
+        for bs in batch_sizes:
+            print(f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
+            mx.reset_peak_memory()
 
-        # Generate prompts once (same for all trials) - like mlx_lm.benchmark
-        prompts = mx.random.randint(0, vocab_size, (bs, prompt_tokens)).tolist()
+            # Generate prompts once (same for all trials) - like mlx_lm.benchmark
+            prompts = mx.random.randint(0, vocab_size, (bs, prompt_tokens)).tolist()
 
-        # Warmup run
-        print("    Warmup...")
-        if bs == 1:
-            for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
-                pass
-        else:
-            batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
-
-        # Actual trials - reuse same prompts
-        trial_prompt_tps = []
-        trial_gen_tps = []
-
-        for trial in range(num_trials):
+            # Warmup run
+            print("    Warmup...")
             if bs == 1:
-                # Pass token IDs directly to stream_generate (like mlx_lm.benchmark)
-                last_response = None
-                for response in stream_generate(
-                    model, tokenizer, prompts[0], max_tokens=gen_tokens
-                ):
-                    last_response = response
-                if last_response is not None:
-                    trial_prompt_tps.append(last_response.prompt_tps)
-                    trial_gen_tps.append(last_response.generation_tps)
-                    print(f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s")
+                for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
+                    pass
             else:
-                # batch_generate expects List[List[int]] of token IDs
-                resp = batch_generate(
-                    model, tokenizer, prompts=prompts, max_tokens=gen_tokens
-                )
-                trial_prompt_tps.append(resp.stats.prompt_tps)
-                trial_gen_tps.append(resp.stats.generation_tps)
-                print(f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s")
+                batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
 
-        if trial_prompt_tps:
-            avg_prompt_tps = statistics.mean(trial_prompt_tps)
-            avg_gen_tps = statistics.mean(trial_gen_tps)
-            peak_mem = mx.get_peak_memory() / 1e9
+            # Actual trials - reuse same prompts
+            trial_prompt_tps = []
+            trial_gen_tps = []
 
-            print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, peak mem {peak_mem:.2f} GB")
+            for trial in range(num_trials):
+                if bs == 1:
+                    # Pass token IDs directly to stream_generate (like mlx_lm.benchmark)
+                    last_response = None
+                    for response in stream_generate(
+                        model, tokenizer, prompts[0], max_tokens=gen_tokens
+                    ):
+                        last_response = response
+                    if last_response is not None:
+                        trial_prompt_tps.append(last_response.prompt_tps)
+                        trial_gen_tps.append(last_response.generation_tps)
+                        print(f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s")
+                else:
+                    # batch_generate expects List[List[int]] of token IDs
+                    resp = batch_generate(
+                        model, tokenizer, prompts=prompts, max_tokens=gen_tokens
+                    )
+                    trial_prompt_tps.append(resp.stats.prompt_tps)
+                    trial_gen_tps.append(resp.stats.generation_tps)
+                    print(f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s")
 
-            batch_results.append({
-                "batch_size": bs,
-                "prompt_tps": round(avg_prompt_tps, 2),
-                "generation_tps": round(avg_gen_tps, 2),
-                "peak_memory_gb": round(peak_mem, 3),
-            })
+            if trial_prompt_tps:
+                avg_prompt_tps = statistics.mean(trial_prompt_tps)
+                avg_gen_tps = statistics.mean(trial_gen_tps)
+                peak_mem = mx.get_peak_memory() / 1e9
+
+                print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, peak mem {peak_mem:.2f} GB")
+
+                batch_results.append({
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt_tps, 2),
+                    "generation_tps": round(avg_gen_tps, 2),
+                    "peak_memory_gb": round(peak_mem, 3),
+                })
+    finally:
+        if restored_via_private_attr:
+            tokenizer._eos_token_ids = original_eos
+        else:
+            tokenizer.eos_token_ids = original_eos
 
     return batch_results
 
@@ -382,7 +399,7 @@ def main() -> int:
     print(f"\nLoading model: {args.model}...")
     load_start = time.time()
     try:
-        model, tokenizer = load_model(args.model, args.trust_remote_code)
+        model, tokenizer, model_config = load_model(args.model, args.trust_remote_code)
     except Exception as e:
         print(f"Failed to load model: {e}")
         return 1
@@ -472,6 +489,11 @@ def main() -> int:
     if not args.no_batch:
         batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
         print(f"\nRunning batch benchmark (sizes: {batch_sizes})...")
+        model_vocab_size = (
+            model_config.get("vocab_size")
+            or model_config.get("text_config", {}).get("vocab_size")
+            or tokenizer.vocab_size
+        )
 
         # Set seed for reproducibility (like mlx_lm.benchmark)
         import mlx.core as mx
@@ -484,6 +506,7 @@ def main() -> int:
                 prompt_tokens=args.batch_prompt_tokens,
                 gen_tokens=args.batch_gen_tokens,
                 num_trials=args.batch_trials,
+                vocab_size=model_vocab_size,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
