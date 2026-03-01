@@ -379,6 +379,27 @@ def main() -> int:
 
     output_dir = common.create_output_directory("grok", args.model)
 
+    # Warmup run
+    warmup_file = common.find_warmup_file()
+    if warmup_file:
+        print(f"\n{'=' * 50}")
+        print(f"Warmup run (excluded from results): {warmup_file.name}")
+        print(f"{'=' * 50}")
+        run_benchmark(
+            model_name=args.model,
+            context_file=warmup_file,
+            client=client,
+            request_model=request_model,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            timeout=args.timeout,
+            stream=args.stream,
+        )
+        print("Warmup complete.")
+    else:
+        print("Warning: 0.5k.txt not found, skipping warmup.")
+
     results = []
     benchmark_start = time.time()
 

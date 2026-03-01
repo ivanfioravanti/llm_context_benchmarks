@@ -111,6 +111,12 @@ def format_hardware_string(hw_info):
     return ", ".join(parts) if parts else "Unknown hardware"
 
 
+def find_warmup_file() -> Optional[Path]:
+    """Return the 0.5k.txt warmup file if it exists in the current directory."""
+    warmup = Path("0.5k.txt")
+    return warmup if warmup.exists() else None
+
+
 def find_context_files(contexts_arg=None):
     """Find context files based on user input or auto-discover.
 

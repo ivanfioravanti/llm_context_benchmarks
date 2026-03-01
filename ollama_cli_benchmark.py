@@ -325,6 +325,17 @@ def main() -> int:
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
 
+    # Warmup run
+    warmup_file = common.find_warmup_file()
+    if warmup_file:
+        print(f"\n{'=' * 50}")
+        print(f"Warmup run (excluded from results): {warmup_file.name}")
+        print(f"{'=' * 50}")
+        run_cli_benchmark(args.model, warmup_file, args.max_tokens)
+        print("Warmup complete.")
+    else:
+        print("Warning: 0.5k.txt not found, skipping warmup.")
+
     # Run benchmarks
     import time
     start_time = time.time()

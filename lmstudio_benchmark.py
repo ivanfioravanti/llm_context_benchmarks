@@ -32,6 +32,7 @@ import requests
 from benchmark_common import (
     create_chart_ollama,
     find_context_files,
+    find_warmup_file,
     format_hardware_string,
     generate_table,
     generate_xpost_text,
@@ -275,6 +276,17 @@ def main():
 
     # Save hardware info
     save_hardware_info(hardware_info, output_dir / "hardware_info.json")
+
+    # Warmup run
+    warmup_file = find_warmup_file()
+    if warmup_file:
+        print(f"\n{'=' * 50}")
+        print(f"Warmup run (excluded from results): {warmup_file.name}")
+        print(f"{'=' * 50}")
+        benchmark_lmstudio(server_url, warmup_file, args.max_tokens, model_name, args.timeout)
+        print("Warmup complete.")
+    else:
+        print("Warning: 0.5k.txt not found, skipping warmup.")
 
     results = []
 
