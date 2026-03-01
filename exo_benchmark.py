@@ -17,22 +17,63 @@ import benchmark_common as common
 EXO_API_URL = "http://0.0.0.0:52415"
 
 
-def ensure_endpoint(url: str) -> str:
-    """Normalize an OpenAI-compatible endpoint to include /v1."""
+def ensure_endpoint(url: str, bench_mode: bool = False) -> str:
+    """Normalize an Exo endpoint URL.
 
+    In bench_mode, points to /bench (disables prefix caching server-side).
+    Otherwise points to /v1 (standard OpenAI-compatible path).
+    """
     if not url:
-        return EXO_API_URL
+        url = EXO_API_URL
 
     normalized = url.strip()
 
-    if normalized.endswith("/chat/completions"):
-        normalized = normalized[: -len("/chat/completions")]
+    # Strip any trailing path components so we always start from the host:port
+    for suffix in ("/chat/completions", "/v1", "/bench"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
 
     normalized = normalized.rstrip("/")
-    if not normalized.endswith("/v1"):
-        normalized = f"{normalized}/v1"
+    return f"{normalized}/bench" if bench_mode else f"{normalized}/v1"
 
-    return normalized
+
+def call_exo_bench(
+    bench_base_url: str,
+    api_key: str,
+    request_model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    timeout: int,
+) -> Dict:
+    """POST to exo's /bench/chat/completions endpoint.
+
+    The bench endpoint always returns a non-streaming JSON response with a
+    custom `generation_stats` field containing server-side measured throughput.
+    prefix caching is disabled server-side so numbers reflect cold prefill.
+    """
+    import httpx
+
+    url = bench_base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {
+        "model": request_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+    }
+
+    start_time = time.time()
+    with httpx.Client(timeout=timeout) as http:
+        response = http.post(url, json=payload, headers=headers)
+    total_time = time.time() - start_time
+
+    response.raise_for_status()
+    data = response.json()
+    data["_total_time"] = total_time
+    return data
 
 
 def call_exo(
@@ -124,11 +165,13 @@ def call_exo_streaming(
             delta = chunk_choices[0].delta
 
             content = getattr(delta, "content", None)
-            if content:
-                if first_token_time is None:
-                    first_token_time = time.time()
-                message_parts.append(content)
-                token_count += 1  # Each chunk typically = 1 token
+            if content is not None:
+                # Count all non-None chunks; exo sends empty strings for some tokens
+                token_count += 1
+                if content:
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                    message_parts.append(content)
 
             reasoning_delta = getattr(delta, "reasoning_content", None)
             if reasoning_delta:
@@ -198,6 +241,7 @@ def run_benchmark(
     top_p: float,
     timeout: int,
     stream: bool = True,
+    bench_mode: bool = True,
 ) -> Optional[Dict]:
     """Benchmark Exo for a given context file."""
     print(f"Running benchmark for {context_file}...")
@@ -206,7 +250,67 @@ def run_benchmark(
         prompt = handle.read()
 
     try:
-        if stream:
+        if bench_mode:
+            # /bench endpoint: always non-streaming, returns server-side generation_stats
+            # with prefix caching disabled — most accurate source of truth for tps.
+            raw = call_exo_bench(
+                bench_base_url=str(client.base_url),
+                api_key=str(client.api_key),
+                request_model=request_model,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                timeout=timeout,
+            )
+            gen_stats = raw.get("generation_stats") or {}
+            prompt_tps = float(gen_stats.get("prompt_tps", 0.0))
+            generation_tps = float(gen_stats.get("generation_tps", 0.0))
+            prompt_tokens = int(gen_stats.get("prompt_tokens", 0))
+            generation_tokens = int(gen_stats.get("generation_tokens", 0))
+            total_time = float(raw.get("_total_time", 0.0))
+            choices = raw.get("choices", [])
+            message = choices[0].get("message", {}) if choices else {}
+            generated_text = message.get("content", "") or ""
+            reasoning_text = message.get("reasoning_content", "") or ""
+            peak_memory_bytes = gen_stats.get("peak_memory_usage", {}).get("inBytes")
+
+            # Derive durations from server-side tps for reporting consistency
+            prompt_eval_duration = prompt_tokens / prompt_tps if prompt_tps > 0 else 0.0
+            eval_duration = generation_tokens / generation_tps if generation_tps > 0 else 0.0
+
+            print(f"  Prompt tokens: {prompt_tokens}")
+            print(f"  Generation tokens: {generation_tokens}")
+            print(f"  Total tokens: {prompt_tokens + generation_tokens}")
+            if prompt_tps > 0:
+                print(f"  Prompt throughput: {prompt_tps:.2f} tokens/sec (server-side)")
+            print(f"  Generation throughput: {generation_tps:.2f} tokens/sec (server-side)")
+            print(f"  Total time: {total_time:.2f}s")
+            if peak_memory_bytes:
+                print(f"  Peak memory: {peak_memory_bytes / 1024**3:.1f} GB")
+
+            result: Dict[str, object] = {
+                "context_size": context_file.stem,
+                "prompt_tokens": prompt_tokens,
+                "cached_tokens": 0,
+                "fresh_prompt_tokens": prompt_tokens,
+                "generation_tokens": generation_tokens,
+                "prompt_tps": prompt_tps,
+                "generation_tps": generation_tps,
+                "total_time": total_time,
+                "eval_duration": eval_duration,
+                "prompt_eval_duration": prompt_eval_duration,
+                "time_to_first_token": prompt_eval_duration,
+                "generated_text": generated_text,
+                "total_tokens": prompt_tokens + generation_tokens,
+            }
+            if peak_memory_bytes:
+                result["peak_memory_bytes"] = peak_memory_bytes
+            if reasoning_text:
+                result["reasoning_text"] = reasoning_text
+            return result
+
+        elif stream:
             stream_result = call_exo_streaming(
                 client=client,
                 request_model=request_model,
@@ -262,6 +366,17 @@ def run_benchmark(
             generation_tokens = inferred
     reasoning_tokens = usage.get("reasoning_tokens")
 
+    # Extract cached tokens from prompt_tokens_details (exo reports KV cache hits).
+    # Prompt throughput must be based on fresh (non-cached) tokens only; cached tokens
+    # skip prefill entirely, so including them inflates pp by orders of magnitude when
+    # running sequential benchmarks over files that share a common prefix.
+    prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+    if isinstance(prompt_tokens_details, dict):
+        cached_tokens = prompt_tokens_details.get("cached_tokens", 0) or 0
+    else:
+        cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
+    fresh_prompt_tokens = prompt_tokens - cached_tokens
+
     if stream and not usage:
         print("Note: API did not include token usage; using client-side token counting.")
 
@@ -269,26 +384,37 @@ def run_benchmark(
     eval_duration = generation_duration if generation_duration > 0 else total_time
 
     prompt_tps = (
-        prompt_tokens / prompt_eval_duration if prompt_eval_duration and prompt_eval_duration > 0 else 0.0
+        fresh_prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 and fresh_prompt_tokens > 0 else 0.0
+    )
+    # When streaming, the first output token is generated during the TTFT window,
+    # so subtract it from the count used for generation throughput to avoid double-counting.
+    tps_generation_tokens = (
+        max(generation_tokens - 1, 0) if stream and prompt_eval_duration > 0 else generation_tokens
     )
     generation_tps = (
-        generation_tokens / eval_duration if eval_duration and eval_duration > 0 else 0.0
+        tps_generation_tokens / eval_duration if eval_duration and eval_duration > 0 else 0.0
     )
 
     print(f"  Prompt tokens: {prompt_tokens}")
+    if cached_tokens > 0:
+        print(f"  Cached tokens: {cached_tokens} (excluded from prompt throughput)")
+        print(f"  Fresh prompt tokens: {fresh_prompt_tokens}")
     print(f"  Generation tokens: {generation_tokens}")
     if reasoning_tokens:
         print(f"  Reasoning tokens: {reasoning_tokens}")
     print(f"  Total tokens: {total_tokens}")
     if prompt_eval_duration > 0:
         print(f"  Time to first token: {prompt_eval_duration:.2f}s")
-        print(f"  Prompt throughput: {prompt_tps:.2f} tokens/sec")
+        if fresh_prompt_tokens > 0:
+            print(f"  Prompt throughput: {prompt_tps:.2f} tokens/sec (fresh tokens only)")
     print(f"  Generation throughput: {generation_tps:.2f} tokens/sec")
     print(f"  Total time: {total_time:.2f}s")
 
     result: Dict[str, object] = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
+        "cached_tokens": cached_tokens,
+        "fresh_prompt_tokens": fresh_prompt_tokens,
         "generation_tokens": generation_tokens,
         "prompt_tps": prompt_tps,
         "generation_tps": generation_tps,
@@ -352,6 +478,19 @@ def main() -> int:
         help="Disable streaming responses (prompt TPS will be 0)",
     )
     parser.set_defaults(stream=True)
+    parser.add_argument(
+        "--bench-mode",
+        action="store_true",
+        default=True,
+        help="Use exo's /bench/chat/completions endpoint which disables prefix caching "
+             "for accurate prompt throughput measurement (default: on)",
+    )
+    parser.add_argument(
+        "--no-bench-mode",
+        dest="bench_mode",
+        action="store_false",
+        help="Use the standard /v1/chat/completions endpoint (prefix caching enabled)",
+    )
 
     args = parser.parse_args()
 
@@ -360,7 +499,7 @@ def main() -> int:
         api_key = "local"
         print("No API key provided; using a placeholder key for local Exo server.")
 
-    base_url = ensure_endpoint(args.base_url)
+    base_url = ensure_endpoint(args.base_url, bench_mode=args.bench_mode)
     request_model = args.request_model or args.model
 
     context_files = common.find_context_files(args.contexts)
@@ -385,6 +524,10 @@ def main() -> int:
 
     print("\nConnection details:")
     print(f"Endpoint: {base_url}")
+    if args.bench_mode:
+        print("Prefix caching: disabled (/bench endpoint)")
+    else:
+        print("Prefix caching: enabled (/v1 endpoint) — prompt TPS may be inflated")
     print(f"Model: {args.model}")
     if request_model != args.model:
         print(f"Request model: {request_model}")
@@ -410,6 +553,7 @@ def main() -> int:
             top_p=args.top_p,
             timeout=args.timeout,
             stream=args.stream,
+            bench_mode=args.bench_mode,
         )
 
         if result:
