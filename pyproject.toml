@@ -80,6 +80,7 @@ lmstudio-benchmark = "lmstudio_benchmark:main"
 exo-benchmark = "exo_benchmark:main"
 deepseek-benchmark = "deepseek_benchmark:main"
 grok-benchmark = "grok_benchmark:main"
+openai-benchmark = "openai_benchmark:main"
 
 [build-system]
 requires = ["setuptools>=69.0"]
@@ -101,4 +102,5 @@ py-modules = [
   "mlx_distributed_benchmark",
   "ollama_api_benchmark",
   "ollama_cli_benchmark",
+  "openai_benchmark",
 ]

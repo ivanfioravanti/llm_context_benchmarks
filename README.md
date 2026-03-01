@@ -1,10 +1,10 @@
 # LLM Context Benchmarks
 
-A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible).
+A comprehensive benchmarking tool for testing Large Language Models (LLMs) with different context sizes across multiple inference engines including Ollama, MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), Exo, and any OpenAI-compatible endpoint.
 
 ## Features
 
-- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), and Exo (OpenAI-compatible)
+- 📊 **Multiple Benchmark Engines**: Test models using Ollama (API & CLI), MLX, MLX Distributed (beta), llama.cpp, LM Studio (beta), Exo, and any OpenAI-compatible endpoint
 - 🔧 **Automatic Hardware Detection**: Captures system specs including:
   - CPU cores (with performance/efficiency breakdown on Apple Silicon)
   - GPU cores (Apple Silicon)
@@ -56,6 +56,10 @@ uv sync
 - Install LM Studio from https://lmstudio.ai
 - Start the local server from LM Studio UI
 - Load your desired model in LM Studio
+
+### For any OpenAI-compatible endpoint:
+- Start a server that exposes the OpenAI Chat Completions API (vLLM, llama.cpp, Ollama, text-generation-webui, etc.)
+- No additional dependencies required — uses the `openai` Python SDK already included
 
 3. (Optional) Set up pre-commit hooks for code quality:
 
@@ -147,6 +151,15 @@ uv run benchmark -- lmstudio local-model
 # Run Exo benchmark (OpenAI-compatible endpoint on http://0.0.0.0:52415)
 uv run benchmark -- exo local-model
 
+# Run OpenAI-compatible endpoint benchmark (default: http://localhost:8080/v1)
+uv run openai-benchmark --model llama3.2
+
+# Run against a custom server URL
+uv run openai-benchmark --model mistral --base-url http://localhost:11434/v1
+
+# Run against a remote API
+uv run openai-benchmark --model gpt-4o --base-url https://api.openai.com/v1 --api-key sk-...
+
 # Custom options
 uv run benchmark -- ollama-api gpt-oss:20b --contexts 0.5,1,2,4,8,16,32 --max-tokens 500 --save-responses
 
@@ -174,7 +187,8 @@ Engine-specific options:
 - `--sharded-script`: Path to `mlx_lm/examples/sharded_generate.py` for `mlx-distributed`
 - `--pipeline`: Enable pipeline parallelism for `mlx-distributed`
 - `--max-kv-size`: KV cache size in tokens for `mlx`
-- `--base-url`: Override OpenAI-compatible endpoint (`exo` only)
+- `--base-url`: Override OpenAI-compatible endpoint base URL (`exo` and `openai-benchmark`)
+- `--api-key`: API key for the endpoint (defaults to `OPENAI_API_KEY` env var or `"no-key"` for local servers)
 
 ### Compare Results (Optional)
 
@@ -306,6 +320,7 @@ llm_context_benchmarks/
 ├── mlx_distributed_benchmark.py # MLX distributed benchmarking via mlx.launch (Beta)
 ├── llamacpp_benchmark.py        # llama.cpp server benchmarking
 ├── lmstudio_benchmark.py        # LM Studio benchmarking (Beta)
+├── openai_benchmark.py          # Generic OpenAI-compatible endpoint benchmarking
 ├── compare_benchmarks.py        # Multi-benchmark comparison tool
 ├── generate_context_files.py    # Context file generation
 ├── ollama_benchmark_notebook.ipynb  # Interactive notebook
@@ -353,6 +368,7 @@ This helps the community understand performance across different systems!
 - **MLX Distributed** (Beta): `mlx.launch` available and a valid hostfile JSON (for example with `--backend jaccl`)
 - **llama.cpp**: llama.cpp server running
 - **LM Studio** (Beta): LM Studio installed with server running
+- **OpenAI-compatible endpoint**: Any server exposing the OpenAI Chat Completions API (`/v1/chat/completions`)
 
 ## Notes
 
