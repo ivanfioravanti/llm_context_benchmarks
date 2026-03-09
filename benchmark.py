@@ -57,6 +57,11 @@ def get_available_engines():
             "description": "Exo OpenAI-compatible endpoint",
             "example": "local-model",
         },
+        "paroquant": {
+            "script": "paroquant_benchmark.py",
+            "description": "Paroquant quantized inference (MLX, Apple Silicon)",
+            "example": "my-org/My-Model-PQ",
+        },
     }
     return engines
 

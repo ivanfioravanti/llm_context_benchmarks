@@ -1,25 +1,94 @@
 #!/usr/bin/env python3
 """
-Benchmark script for MLX framework on Apple Silicon.
+Benchmark script for Paroquant inference framework (MLX backend).
 
-This script runs benchmarks using MLX-LM for efficient inference on Apple Silicon Macs.
-The model is loaded once and reused across all benchmark runs.
+This script runs benchmarks using Paroquant's MLX backend, including
+context-scaling benchmarks, perplexity computation, and batch inference
+performance — matching the feature set of mlx_benchmark.py.
+
+The model is loaded once via Paroquant's loader (which applies pairwise
+Givens rotations and quantised layers) and then reused across all runs.
 
 Usage:
-    python mlx_benchmark.py mlx-community/Qwen3-0.6B-4bit
-    python mlx_benchmark.py mlx-community/Qwen3-0.6B-4bit --kv-bit 4 --max-tokens 500
+    python paroquant_benchmark.py mlx-community/Qwen3-0.6B-4bit
+    python paroquant_benchmark.py my-org/My-Model-PQ --max-tokens 500
+    python paroquant_benchmark.py my-org/My-Model-PQ --no-batch --no-perplexity
 """
 
 import argparse
-import json
 import statistics
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import benchmark_common as common
+
+
+# ---------------------------------------------------------------------------
+# Install check
+# ---------------------------------------------------------------------------
+
+def check_paroquant_installed() -> bool:
+    """Check if Paroquant (with MLX extras) is installed."""
+    try:
+        import paroquant.inference.backends.mlx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
+
+def load_model(model_path: str) -> Tuple:
+    """Load a Paroquant MLX model and processor.
+
+    Forces text-only loading (``force_text=True``) so that the returned model
+    exposes ``make_cache`` and is fully compatible with ``mlx_lm`` generation,
+    batch inference, and perplexity utilities.  Many Paroquant checkpoints
+    ship with a ``vision_config`` key in their config (inherited from the
+    base Qwen architecture) which would otherwise cause the loader to
+    instantiate an ``mlx_vlm`` VLM wrapper that lacks the cache helpers
+    ``mlx_lm.stream_generate`` relies on.
+
+    Returns:
+        (model, tokenizer, processor, is_vlm)
+    """
+    from paroquant.inference.backends.mlx.load import load
+
+    model, processor, is_vlm = load(model_path, force_text=True)
+    tokenizer = getattr(processor, "tokenizer", processor)
+    return model, tokenizer, processor, is_vlm
+
+
+# ---------------------------------------------------------------------------
+# Prompt helpers
+# ---------------------------------------------------------------------------
+
+def prepare_prompt(
+    prompt_text: str,
+    tokenizer,
+    ignore_chat_template: bool = False,
+) -> List[int]:
+    """Wrap raw text through the chat template and return token IDs."""
+    has_chat_template = bool(
+        getattr(tokenizer, "has_chat_template", False)
+        or getattr(tokenizer, "chat_template", None) is not None
+    )
+    if ignore_chat_template or not has_chat_template:
+        return tokenizer.encode(prompt_text, add_special_tokens=False)
+
+    messages = [{"role": "user", "content": prompt_text}]
+    templated = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        continue_final_message=False,
+        add_generation_prompt=True,
+    )
+    return tokenizer.encode(templated, add_special_tokens=False)
 
 
 def safe_duration(tokens: int, tokens_per_sec: float) -> float:
@@ -45,91 +114,19 @@ def _show_prefill_progress(num_tokens: int, stop_event: threading.Event) -> None
         sys.stdout.flush()
 
 
-def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
-    """Load an MLX model and tokenizer.
-
-    Args:
-        model_url: MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)
-        trust_remote_code: Allow running custom model/tokenizer code
-
-    Returns:
-        Tuple of (model, tokenizer, config)
-    """
-    import mlx_lm
-
-    model_config = {}
-    tokenizer_config = {}
-    if trust_remote_code:
-        model_config["trust_remote_code"] = True
-        tokenizer_config["trust_remote_code"] = True
-
-    model, tokenizer, config = mlx_lm.load(
-        model_url,
-        model_config=model_config,
-        tokenizer_config=tokenizer_config,
-        return_config=True,
-    )
-    return model, tokenizer, config
-
-
-def prepare_prompt(
-    prompt_text: str,
-    tokenizer,
-    ignore_chat_template: bool = False,
-    chat_template_config: Optional[str] = None,
-) -> Union[str, List[int]]:
-    """Prepare prompt input for mlx_lm.stream_generate.
-
-    Mirrors mlx_lm.generate CLI behavior: when a tokenizer has a chat template,
-    wrap the raw text as a user message and add the generation prompt.
-    """
-    has_chat_template = bool(
-        getattr(tokenizer, "has_chat_template", False)
-        or getattr(tokenizer, "chat_template", None) is not None
-    )
-    if ignore_chat_template or not has_chat_template:
-        return prompt_text
-
-    template_kwargs = {}
-    if chat_template_config:
-        template_kwargs = json.loads(chat_template_config)
-
-    messages = [{"role": "user", "content": prompt_text}]
-    templated_prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        continue_final_message=False,
-        add_generation_prompt=True,
-        **template_kwargs,
-    )
-    return tokenizer.encode(templated_prompt, add_special_tokens=False)
-
+# ---------------------------------------------------------------------------
+# Context-scaling benchmark
+# ---------------------------------------------------------------------------
 
 def run_benchmark(
     model,
     tokenizer,
     context_file: Path,
-    kv_bit: Optional[int] = None,
     max_tokens: int = 200,
-    max_kv_size: Optional[int] = None,
     ignore_chat_template: bool = False,
-    chat_template_config: Optional[str] = None,
 ) -> Optional[Dict]:
-    """Run MLX benchmark for a given context file.
-
-    Args:
-        model: Loaded MLX model
-        tokenizer: Loaded tokenizer
-        context_file: Path to the context file
-        kv_bit: KV cache bit size (optional)
-        max_tokens: Maximum tokens to generate
-        max_kv_size: Maximum KV cache size in tokens (optional)
-        ignore_chat_template: If true, skip tokenizer chat template wrapping
-        chat_template_config: JSON config passed to apply_chat_template
-
-    Returns:
-        Dictionary with benchmark results or None if failed
-    """
+    """Run benchmark for a single context file using mlx_lm.stream_generate."""
+    import mlx.core as mx
     import mlx_lm
 
     print(f"Running benchmark for {context_file}...")
@@ -138,21 +135,9 @@ def run_benchmark(
         with open(context_file, "r") as f:
             prompt = f.read()
 
-        prepared_prompt = prepare_prompt(
-            prompt,
-            tokenizer,
-            ignore_chat_template=ignore_chat_template,
-            chat_template_config=chat_template_config,
-        )
+        prepared_prompt = prepare_prompt(prompt, tokenizer, ignore_chat_template)
 
-        kwargs = {}
-        if kv_bit is not None:
-            kwargs["kv_bits"] = kv_bit
-        if max_kv_size is not None:
-            kwargs["max_kv_size"] = max_kv_size
-
-        # Reset peak memory before each run to get per-context-size measurement
-        import mlx.core as mx
+        # Reset peak memory before each run
         mx.reset_peak_memory()
 
         # Count prompt tokens for the progress indicator
@@ -174,7 +159,7 @@ def run_benchmark(
         last_response = None
         generated_text = ""
         for response in mlx_lm.stream_generate(
-            model, tokenizer, prompt=prepared_prompt, max_tokens=max_tokens, **kwargs
+            model, tokenizer, prompt=prepared_prompt, max_tokens=max_tokens,
         ):
             if not first_token_received:
                 first_token_received = True
@@ -222,9 +207,7 @@ def run_benchmark(
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
 
         print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
-        print(
-            f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec"
-        )
+        print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
         print(f"  Peak memory: {peak_memory_gb:.3f} GB")
         if prompt_eval_duration > 0:
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
@@ -248,6 +231,10 @@ def run_benchmark(
         return None
 
 
+# ---------------------------------------------------------------------------
+# Batch inference benchmark
+# ---------------------------------------------------------------------------
+
 def run_batch_benchmark(
     model,
     tokenizer,
@@ -257,57 +244,54 @@ def run_batch_benchmark(
     num_trials: int = 3,
     vocab_size: Optional[int] = None,
 ) -> List[Dict]:
-    """Run batch benchmark measuring throughput at different batch sizes.
+    """Measure throughput at different batch sizes.
 
-    Args:
-        model: Loaded MLX model
-        tokenizer: Loaded tokenizer
-        batch_sizes: List of batch sizes to test
-        prompt_tokens: Number of prompt tokens per sequence
-        gen_tokens: Number of tokens to generate
-        num_trials: Number of trials per batch size (takes median)
-        vocab_size: Vocabulary size to sample synthetic prompts from
-
-    Returns:
-        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
+    Uses mlx_lm.stream_generate (bs=1) and mlx_lm.batch_generate (bs>1).
+    Returns list of result dicts with batch_size, prompt_tps, generation_tps,
+    peak_memory_gb.
     """
     import mlx.core as mx
     from mlx_lm import batch_generate, stream_generate
 
     if vocab_size is None:
         vocab_size = tokenizer.vocab_size
-    batch_results = []
+    batch_results: List[Dict] = []
 
-    # Match mlx_lm.benchmark: disable EOS to avoid early stopping on random prompts.
+    # Disable EOS to avoid early stopping on random prompts
     original_eos = set(getattr(tokenizer, "eos_token_ids", set()))
     restored_via_private_attr = hasattr(tokenizer, "_eos_token_ids")
     if restored_via_private_attr:
         tokenizer._eos_token_ids = set()
     else:
         tokenizer.eos_token_ids = set()
+
     try:
         for bs in batch_sizes:
-            print(f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
+            print(
+                f"\n  Batch size {bs} ({num_trials} trials, "
+                f"{prompt_tokens} prompt tokens, {gen_tokens} gen tokens)..."
+            )
             mx.reset_peak_memory()
 
-            # Generate prompts once (same for all trials) - like mlx_lm.benchmark
+            # Same random prompts for all trials
             prompts = mx.random.randint(0, vocab_size, (bs, prompt_tokens)).tolist()
 
-            # Warmup run
+            # Warmup
             print("    Warmup...")
             if bs == 1:
-                for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
+                for _ in stream_generate(
+                    model, tokenizer, prompts[0], max_tokens=gen_tokens
+                ):
                     pass
             else:
                 batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
 
-            # Actual trials - reuse same prompts
-            trial_prompt_tps = []
-            trial_gen_tps = []
+            # Trials
+            trial_prompt_tps: List[float] = []
+            trial_gen_tps: List[float] = []
 
             for trial in range(num_trials):
                 if bs == 1:
-                    # Pass token IDs directly to stream_generate (like mlx_lm.benchmark)
                     last_response = None
                     for response in stream_generate(
                         model, tokenizer, prompts[0], max_tokens=gen_tokens
@@ -316,22 +300,30 @@ def run_batch_benchmark(
                     if last_response is not None:
                         trial_prompt_tps.append(last_response.prompt_tps)
                         trial_gen_tps.append(last_response.generation_tps)
-                        print(f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s")
+                        print(
+                            f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} "
+                            f"tg {last_response.generation_tps:.1f} t/s"
+                        )
                 else:
-                    # batch_generate expects List[List[int]] of token IDs
                     resp = batch_generate(
                         model, tokenizer, prompts=prompts, max_tokens=gen_tokens
                     )
                     trial_prompt_tps.append(resp.stats.prompt_tps)
                     trial_gen_tps.append(resp.stats.generation_tps)
-                    print(f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s")
+                    print(
+                        f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} "
+                        f"tg {resp.stats.generation_tps:.1f} t/s"
+                    )
 
             if trial_prompt_tps:
                 avg_prompt_tps = statistics.mean(trial_prompt_tps)
                 avg_gen_tps = statistics.mean(trial_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
 
-                print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, peak mem {peak_mem:.2f} GB")
+                print(
+                    f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
+                    f"peak mem {peak_mem:.2f} GB"
+                )
 
                 batch_results.append({
                     "batch_size": bs,
@@ -348,50 +340,26 @@ def run_batch_benchmark(
     return batch_results
 
 
-def check_mlx_installed() -> bool:
-    """Check if MLX-LM is installed."""
-    try:
-        import mlx_lm
-        return True
-    except ImportError:
-        return False
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> int:
-    """Main function to run MLX benchmarks."""
+    """Main function to run Paroquant MLX benchmarks."""
     parser = argparse.ArgumentParser(
-        description="Run MLX benchmarks on context files"
+        description="Run Paroquant (MLX) benchmarks on context files"
     )
     parser.add_argument(
-        "model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)"
-    )
-    parser.add_argument(
-        "--kv-bit",
-        type=int,
-        default=None,
-        help="KV cache bit size (optional, e.g., 4 or 8)",
-    )
-    parser.add_argument(
-        "--max-kv-size",
-        type=int,
-        default=None,
-        help="KV cache size in tokens (optional, e.g., 4096)",
-    )
-    parser.add_argument(
-        "--trust-remote-code",
-        action="store_true",
-        help="Allow running custom model/tokenizer code when loading (HF)",
+        "model",
+        help="Model path or HuggingFace repo (e.g., my-org/My-Model-PQ)",
     )
     parser.add_argument(
         "--ignore-chat-template",
         action="store_true",
         help="Use raw prompt text instead of tokenizer chat template",
     )
-    parser.add_argument(
-        "--chat-template-config",
-        default=None,
-        help="JSON config passed to tokenizer.apply_chat_template",
-    )
+
+    # Batch benchmark options
     parser.add_argument(
         "--batch-sizes",
         default="1,2,4,8,16,32",
@@ -413,7 +381,7 @@ def main() -> int:
         "--batch-trials",
         type=int,
         default=3,
-        help="Number of trials per batch size, takes median (default: 3)",
+        help="Number of trials per batch size, takes mean (default: 3)",
     )
     parser.add_argument(
         "--no-batch",
@@ -421,116 +389,103 @@ def main() -> int:
         dest="no_batch",
         help="Skip batch benchmark",
     )
-    # Backward-compatible alias for older invocations.
-    parser.add_argument(
-        "--no-batch-benchmark",
-        action="store_true",
-        dest="no_batch",
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument(
         "--no-perplexity",
         action="store_true",
         help="Skip perplexity computation",
     )
 
-    # Add common arguments
+    # Common arguments
     common.setup_common_args(parser)
 
     args = parser.parse_args()
 
-    # Check if MLX-LM is installed
-    if not check_mlx_installed():
-        print("MLX-LM is not installed. Please install it with: pip install mlx-lm")
+    # Check installation
+    if not check_paroquant_installed():
+        print(
+            "Paroquant (MLX) is not installed. "
+            "Install with: pip install 'paroquant[mlx]'"
+        )
         return 1
 
-    # Extract model name from URL
+    # Extract model name
     model_name = args.model.split("/")[-1]
 
-    # Create output directory using common function
-    output_dir = common.create_output_directory("mlx", model_name)
+    # Create output directory
+    output_dir = common.create_output_directory("paroquant", model_name)
 
-    # Find context files using common module
+    # Find context files
     context_files = common.find_context_files(args.contexts)
     if not context_files:
         return 1
 
-    # Load model once
-    print(f"\nLoading model: {args.model}...")
+    # Load model once via Paroquant's loader
+    print(f"\nLoading model: {args.model} (Paroquant MLX)...")
     load_start = time.time()
     try:
-        model, tokenizer, model_config = load_model(args.model, args.trust_remote_code)
+        model, tokenizer, processor, is_vlm = load_model(args.model)
     except Exception as e:
         print(f"Failed to load model: {e}")
         return 1
     load_time = time.time() - load_start
     print(f"Model loaded in {load_time:.1f}s")
 
-    # Get hardware information
+    # Hardware info
     print("\nCollecting hardware information...")
     hardware_info = common.get_hardware_info()
     hardware_str = common.format_hardware_string(hardware_info)
     print(f"Hardware: {hardware_str}")
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
-    if args.kv_bit:
-        print(f"KV cache bits: {args.kv_bit}")
-    if args.max_kv_size:
-        print(f"Max KV size: {args.max_kv_size}")
     if args.ignore_chat_template:
         print("Chat template: disabled (raw prompt)")
     else:
         print("Chat template: enabled when tokenizer provides one")
 
     # Warmup run using the smallest context file
-    warmup_file = context_files[0]
-    print(f"\nWarmup run ({warmup_file.name}, max_tokens=1)...")
     import mlx_lm
 
-    warmup_kwargs = {}
-    if args.kv_bit is not None:
-        warmup_kwargs["kv_bits"] = args.kv_bit
-    if args.max_kv_size is not None:
-        warmup_kwargs["max_kv_size"] = args.max_kv_size
-
+    warmup_file = context_files[0]
+    print(f"\nWarmup run ({warmup_file.name}, max_tokens=1)...")
     try:
         with open(warmup_file, "r") as f:
             warmup_prompt = f.read()
-        warmup_prepared_prompt = prepare_prompt(
-            warmup_prompt,
-            tokenizer,
-            ignore_chat_template=args.ignore_chat_template,
-            chat_template_config=args.chat_template_config,
+        warmup_prepared = prepare_prompt(
+            warmup_prompt, tokenizer, args.ignore_chat_template,
         )
         for _ in mlx_lm.stream_generate(
-            model, tokenizer, prompt=warmup_prepared_prompt, max_tokens=1, **warmup_kwargs
+            model, tokenizer, prompt=warmup_prepared, max_tokens=1,
         ):
             pass
         print("Warmup complete (result discarded)")
     except Exception as e:
         print(f"Warmup failed (continuing anyway): {e}")
 
+    # ------------------------------------------------------------------
+    # Perplexity
+    # ------------------------------------------------------------------
     perplexity = None
     perplexity_data = None
     if args.no_perplexity:
         print("\nSkipping perplexity (--no-perplexity)")
     else:
-        # Compute perplexity
         print("\nComputing perplexity...")
         try:
             from mlx_lm.perplexity import eval_ppl, load_data
 
             import mlx.core as mx
+            import numpy as np
 
-            np_seed = 123
-            import numpy as np_rng
-            np_rng.random.seed(np_seed)
-            mx.random.seed(np_seed)
+            np.random.seed(123)
+            mx.random.seed(123)
 
             ppl_num_samples = 256
             ppl_seq_length = 512
             ppl_dataset = "allenai/tulu-3-sft-mixture"
-            data = load_data(tokenizer, ppl_dataset, num_samples=ppl_num_samples, sequence_length=ppl_seq_length)
+            data = load_data(
+                tokenizer, ppl_dataset,
+                num_samples=ppl_num_samples, sequence_length=ppl_seq_length,
+            )
             ppl, ppl_se = eval_ppl(model, data, batch_size=8)
             perplexity = float(ppl)
             perplexity_data = {
@@ -544,20 +499,20 @@ def main() -> int:
         except Exception as e:
             print(f"Perplexity computation failed (continuing): {e}")
 
-    # Run batch benchmark
+    # ------------------------------------------------------------------
+    # Batch benchmark
+    # ------------------------------------------------------------------
     batch_results = None
     if not args.no_batch:
         batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
         print(f"\nRunning batch benchmark (sizes: {batch_sizes})...")
-        model_vocab_size = (
-            model_config.get("vocab_size")
-            or model_config.get("text_config", {}).get("vocab_size")
-            or tokenizer.vocab_size
-        )
 
-        # Set seed for reproducibility (like mlx_lm.benchmark)
         import mlx.core as mx
+
+        # Determine vocab size from model config or tokenizer
+        model_vocab_size = tokenizer.vocab_size
         mx.random.seed(0)
+
         try:
             batch_results = run_batch_benchmark(
                 model,
@@ -575,31 +530,27 @@ def main() -> int:
         except Exception as e:
             print(f"\nBatch benchmark failed (continuing): {e}")
 
-    # Run benchmarks
+    # ------------------------------------------------------------------
+    # Context-scaling benchmarks
+    # ------------------------------------------------------------------
     start_time = time.time()
-    results = []
+    results: List[Dict] = []
     for file in context_files:
         print(f"\n{'=' * 50}")
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
         result = run_benchmark(
-            model,
-            tokenizer,
-            file,
-            args.kv_bit,
-            args.max_tokens,
-            args.max_kv_size,
-            args.ignore_chat_template,
-            args.chat_template_config,
+            model, tokenizer, file, args.max_tokens, args.ignore_chat_template,
         )
         if result:
             results.append(result)
 
-            # Save the generated text if requested
             if args.save_responses:
                 output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(result, args.model, output_filename, "MLX")
+                common.save_generated_text(
+                    result, args.model, output_filename, "Paroquant"
+                )
 
     total_benchmark_time = time.time() - start_time
 
@@ -607,16 +558,16 @@ def main() -> int:
         print("\nNo successful benchmark results")
         return 1
 
-    # Save all outputs using common function
+    # Save all outputs
     common.save_all_outputs(
-        results, output_dir, model_name, "MLX", hardware_info, args,
+        results, output_dir, model_name, "Paroquant", hardware_info, args,
         include_memory=True, perplexity=perplexity, perplexity_data=perplexity_data,
         batch_results=batch_results,
     )
 
-    # Print summary using common function
+    # Print summary
     common.print_benchmark_summary(
-        results, model_name, "MLX", hardware_info, output_dir,
+        results, model_name, "Paroquant", hardware_info, output_dir,
         total_benchmark_time, perplexity=perplexity, batch_results=batch_results,
     )
 
