@@ -537,7 +537,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     return output_path
 
 
-def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None, batch_results=None):
+def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None, batch_results=None, framework="MLX"):
     """Create a chart for MLX benchmarks with memory information."""
     # Sort results by context size
     context_sizes = []
@@ -569,7 +569,7 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
-    fig.suptitle(f"{model_name} MLX Testing\n{hardware_str}", fontsize=16, fontweight="bold")
+    fig.suptitle(f"{model_name} {framework} Testing\n{hardware_str}", fontsize=16, fontweight="bold")
 
     x = np.arange(len(context_sizes))
 
@@ -908,8 +908,8 @@ def save_all_outputs(
 
     # Generate and save chart
     chart_path = output_dir / args.output_chart
-    if "MLX" in framework:
-        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity, batch_results=batch_results)
+    if include_memory:
+        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity, batch_results=batch_results, framework=framework)
     else:
         create_chart_ollama(results, model_name, hardware_info, chart_path, framework)
     print(f"Chart saved to {chart_path}")
