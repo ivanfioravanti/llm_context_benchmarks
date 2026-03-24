@@ -21,6 +21,7 @@ import csv
 import json
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -32,6 +33,35 @@ import pandas as pd
 def _clean_display_name(name: str) -> str:
     """Strip trailing timestamp suffixes like _20260215 from display names."""
     return re.sub(r"_\d{8,}$", "", name)
+
+
+def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
+    """Strip quantization, hardware, and date tokens from model name to get the base model name."""
+    base = model
+    # Strip date/time fragments like _20260324 or _20260324_092407
+    base = re.sub(r"[-_]\d{8,}(?:[-_]\d+)*", "", base)
+    # Strip hardware chip compact form (e.g. "M5 Max" → "M5Max")
+    chip = hardware_info.get("chip", "").replace("Apple ", "")
+    chip_compact = re.sub(r"\s+", "", chip)
+    if chip_compact:
+        base = re.sub(r"[-_]?" + re.escape(chip_compact) + r"[-_]?", "", base, flags=re.IGNORECASE)
+    # Strip quantization token
+    if quant and quant != "unknown":
+        base = re.sub(r"[-_]?" + re.escape(quant) + r"[-_]?", "", base, flags=re.IGNORECASE)
+    return base.strip("-_") or model
+
+
+def _extract_quantization(model_name: str) -> str:
+    """Extract quantization info from model name (e.g. 8bit, 4-bit, Q4_K_M, fp16, int8)."""
+    for pattern in [
+        r"(?<![a-zA-Z])(\d+[-]?bit)(?![a-zA-Z])",   # 2bit 4bit 6bit 8bit 4-bit …
+        r"(?<![a-zA-Z])(Q\d+(?:[_-][\w]+)*)(?![\w])",  # Q4_0 Q4_K_M Q8_0 …
+        r"(?<![a-zA-Z])(fp16|bf16|fp32|f16|f32|int4|int8)(?![\w])",  # float/int types
+    ]:
+        match = re.search(pattern, model_name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return "unknown"
 
 
 def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
@@ -488,6 +518,151 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     return csv_path, table_path
 
 
+def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
+    """Create a performance heatmap with a separate section per quantization level.
+
+    Each section normalises independently: 100% = best within that quantization group.
+    Columns = Avg Prompt TPS, Avg Gen TPS, Peak Batch Prompt TPS, Peak Batch Gen TPS.
+    Title uses the model name when all runs share the same base model; otherwise the model
+    name is included in each row label.
+    """
+    metric_keys = ["avg_prompt_tps", "avg_gen_tps", "peak_batch_prompt_tps", "peak_batch_gen_tps"]
+    col_labels = ["Avg Prompt TPS", "Avg Gen TPS", "Peak Batch\nPrompt TPS", "Peak Batch\nGen TPS"]
+    n_cols = len(metric_keys)
+
+    rows = []
+    for data in benchmark_data:
+        results = data["results"]
+        if not results:
+            continue
+
+        hardware_info = data["hardware_info"]
+        chip_short = hardware_info.get("chip", "Unknown").replace("Apple ", "")
+        quant = _extract_quantization(data["model"])
+        base_model = _extract_base_model(data["model"], hardware_info, quant)
+
+        avg_prompt_tps = float(np.mean([r.get("prompt_tps", 0) for r in results]))
+        avg_gen_tps = float(np.mean([r.get("generation_tps", 0) for r in results]))
+
+        batch = data.get("batch_data")
+        peak_batch_prompt = float(max(r["prompt_tps"] for r in batch)) if batch else float("nan")
+        peak_batch_gen = float(max(r["generation_tps"] for r in batch)) if batch else float("nan")
+
+        rows.append({
+            "quant": quant,
+            "chip_short": chip_short,
+            "base_model": base_model,
+            "avg_prompt_tps": avg_prompt_tps,
+            "avg_gen_tps": avg_gen_tps,
+            "peak_batch_prompt_tps": peak_batch_prompt,
+            "peak_batch_gen_tps": peak_batch_gen,
+        })
+
+    if not rows:
+        print("No data available for heatmap.")
+        return None
+
+    # Group by quantization level
+    quant_groups: dict = defaultdict(list)
+    for row in rows:
+        quant_groups[row["quant"]].append(row)
+    ordered_quants = sorted(quant_groups.keys())
+    n_groups = len(ordered_quants)
+
+    # Determine title: single model name or generic
+    base_models = {r["base_model"] for r in rows}
+    single_model = len(base_models) == 1
+    model_title = next(iter(base_models)) if single_model else None
+
+    cmap = plt.cm.RdYlGn.copy()
+    cmap.set_bad(color="#cccccc")
+
+    total_data_rows = sum(len(quant_groups[q]) for q in ordered_quants)
+    height_ratios = [max(1, len(quant_groups[q])) for q in ordered_quants]
+    fig_w = max(10, n_cols * 3)
+    fig_h = max(5, total_data_rows * 1.4 + n_groups * 1.2)
+
+    fig, axes = plt.subplots(
+        n_groups, 1, figsize=(fig_w, fig_h),
+        gridspec_kw={"height_ratios": height_ratios, "hspace": 0.55},
+    )
+    if n_groups == 1:
+        axes = [axes]
+
+    for ax_idx, (ax, quant) in enumerate(zip(axes, ordered_quants)):
+        group_rows = quant_groups[quant]
+        n_group_rows = len(group_rows)
+
+        raw_matrix = np.array([[r[k] for k in metric_keys] for r in group_rows], dtype=float)
+
+        # Normalise per column within this group only
+        normalised = np.full_like(raw_matrix, np.nan)
+        for col_idx in range(n_cols):
+            col = raw_matrix[:, col_idx]
+            col_max = np.nanmax(col) if not np.all(np.isnan(col)) else 0
+            if col_max > 0:
+                normalised[:, col_idx] = col / col_max * 100
+
+        masked = np.ma.array(normalised, mask=np.isnan(normalised))
+        im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
+
+        # Column labels only on the first subplot (at the top)
+        ax.set_xticks(range(n_cols))
+        if ax_idx == 0:
+            ax.set_xticklabels(col_labels, fontsize=11, fontweight="bold")
+            ax.xaxis.tick_top()
+            ax.xaxis.set_label_position("top")
+        else:
+            ax.set_xticklabels([""] * n_cols)
+            ax.tick_params(axis="x", length=0)
+
+        # Row labels: include model name only when multiple base models exist
+        if single_model:
+            row_labels = [r["chip_short"] for r in group_rows]
+        else:
+            row_labels = [f"{r['base_model']} / {r['chip_short']}" for r in group_rows]
+        ax.set_yticks(range(n_group_rows))
+        ax.set_yticklabels(row_labels, fontsize=10)
+
+        # Quantization level as the subplot title (left-aligned)
+        ax.set_title(f"◆ {quant}", loc="left", fontsize=12, fontweight="bold", pad=6, color="#333333")
+
+        # Cell annotations
+        for i in range(n_group_rows):
+            for j in range(n_cols):
+                raw_val = raw_matrix[i, j]
+                pct = normalised[i, j]
+                if np.isnan(pct):
+                    cell_text = "N/A"
+                    text_color = "#555555"
+                else:
+                    cell_text = f"{pct:.0f}%\n({raw_val:.1f})"
+                    text_color = "white" if pct < 25 else "black"
+                ax.text(j, i, cell_text, ha="center", va="center",
+                        fontsize=9, color=text_color, fontweight="bold")
+
+        cbar = plt.colorbar(im, ax=ax, label="% of Best", shrink=0.8, pad=0.02)
+        cbar.ax.tick_params(labelsize=9)
+
+    if model_title:
+        fig.suptitle(
+            f"Performance Heatmap — {model_title}\n(% of best per quantization group)",
+            fontweight="bold", fontsize=14, y=1.01,
+        )
+    else:
+        fig.suptitle(
+            "Performance Heatmap (% of best per quantization group)",
+            fontweight="bold", fontsize=14, y=1.01,
+        )
+
+    plt.tight_layout()
+    heatmap_path = output_dir / "comparison_heatmap.png"
+    plt.savefig(heatmap_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Heatmap saved to: {heatmap_path}")
+    return heatmap_path
+
+
 def find_benchmark_folders(search_paths: List[str] = None) -> List[Path]:
     """Find all benchmark folders to compare."""
 
@@ -581,6 +756,7 @@ Examples:
     # Create comparison charts and tables
     create_comparison_charts(benchmark_data, output_dir, charts=args.charts)
     create_comparison_table(benchmark_data, output_dir)
+    create_heatmap(benchmark_data, output_dir)
 
     print(f"\n✅ Comparison complete! Results saved to: {output_dir}/")
 
