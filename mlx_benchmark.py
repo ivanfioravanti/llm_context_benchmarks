@@ -31,9 +31,47 @@ def safe_duration(tokens: int, tokens_per_sec: float) -> float:
 
 def _count_prompt_tokens(prepared_prompt, tokenizer) -> int:
     """Count the number of tokens in a prepared prompt."""
+    return len(_ensure_token_ids(prepared_prompt, tokenizer))
+
+
+def _ensure_token_ids(prepared_prompt, tokenizer) -> List[int]:
+    """Ensure the prepared prompt is returned as a list of token IDs."""
     if isinstance(prepared_prompt, list):
-        return len(prepared_prompt)
-    return len(tokenizer.encode(prepared_prompt, add_special_tokens=False))
+        return prepared_prompt
+    return tokenizer.encode(prepared_prompt, add_special_tokens=False)
+
+
+def _verify_prefix_match(prev_tokens: List[int], curr_tokens: List[int]) -> bool:
+    """Verify that prev_tokens is a strict prefix of curr_tokens."""
+    if len(prev_tokens) > len(curr_tokens):
+        return False
+    return curr_tokens[: len(prev_tokens)] == prev_tokens
+
+
+def _find_common_prefix_length(prev_tokens: List[int], curr_tokens: List[int]) -> int:
+    """Find the length of the longest common prefix between two token sequences.
+
+    BPE tokenizers may produce different token boundaries at the text boundary
+    between context files, so a strict text prefix doesn't guarantee a strict
+    token prefix. This function finds how many tokens actually match.
+    """
+    min_len = min(len(prev_tokens), len(curr_tokens))
+    for i in range(min_len):
+        if prev_tokens[i] != curr_tokens[i]:
+            return i
+    return min_len
+
+
+def _trim_cache_to_prompt_length(cache, prompt_length: int) -> None:
+    """Reset cache offset to prompt_length, discarding generated tokens.
+
+    After generation the cache has prompt_length + generated_length entries.
+    Resetting offset means the next incremental prefill will overwrite the
+    stale generated-token positions.
+    """
+    for c in cache:
+        if hasattr(c, "offset"):
+            c.offset = prompt_length
 
 
 def _show_prefill_progress(num_tokens: int, stop_event: threading.Event) -> None:
@@ -84,8 +122,7 @@ def prepare_prompt(
     wrap the raw text as a user message and add the generation prompt.
     """
     has_chat_template = bool(
-        getattr(tokenizer, "has_chat_template", False)
-        or getattr(tokenizer, "chat_template", None) is not None
+        getattr(tokenizer, "has_chat_template", False) or getattr(tokenizer, "chat_template", None) is not None
     )
     if ignore_chat_template or not has_chat_template:
         return prompt_text
@@ -153,6 +190,7 @@ def run_benchmark(
 
         # Reset peak memory before each run to get per-context-size measurement
         import mlx.core as mx
+
         mx.reset_peak_memory()
 
         # Count prompt tokens for the progress indicator
@@ -183,8 +221,7 @@ def run_benchmark(
                 prefill_time = time.time() - start_time
                 pp_tps = num_prompt_tokens / prefill_time if prefill_time > 0 else 0
                 sys.stdout.write(
-                    f"\r  Prefill: {num_prompt_tokens} tokens in "
-                    f"{prefill_time:.2f}s ({pp_tps:.0f} t/s)\n"
+                    f"\r  Prefill: {num_prompt_tokens} tokens in " f"{prefill_time:.2f}s ({pp_tps:.0f} t/s)\n"
                 )
                 sys.stdout.flush()
 
@@ -192,9 +229,7 @@ def run_benchmark(
             generated_text += response.text
             token_count += 1
             pct = min(token_count * 100 // max_tokens, 100)
-            sys.stdout.write(
-                f"\r  Generating: {token_count}/{max_tokens} ({pct}%)"
-            )
+            sys.stdout.write(f"\r  Generating: {token_count}/{max_tokens} ({pct}%)")
             sys.stdout.flush()
 
         # End generation progress line
@@ -222,9 +257,7 @@ def run_benchmark(
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
 
         print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
-        print(
-            f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec"
-        )
+        print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
         print(f"  Peak memory: {peak_memory_gb:.3f} GB")
         if prompt_eval_duration > 0:
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
@@ -246,6 +279,204 @@ def run_benchmark(
     except Exception as e:
         print(f"Error running benchmark: {e}")
         return None
+
+
+def run_cached_benchmark(
+    model,
+    tokenizer,
+    context_files: List[Path],
+    kv_bit: Optional[int] = None,
+    max_tokens: int = 200,
+    max_kv_size: Optional[int] = None,
+    ignore_chat_template: bool = False,
+    chat_template_config: Optional[str] = None,
+) -> Optional[List[Dict]]:
+    """Run cached KV cache benchmark with incremental prefill.
+
+    Processes context files smallest-to-largest, reusing a single KV cache.
+    Only delta (new) tokens beyond the previous context are sent to the model.
+    """
+    import mlx.core as mx
+    import mlx_lm
+    from mlx_lm.models.cache import RotatingKVCache, make_prompt_cache
+
+    if max_kv_size is not None:
+        print(
+            "  WARNING: --max-kv-size uses RotatingKVCache which is incompatible "
+            "with cached KV cache benchmarking. Skipping cached phase."
+        )
+        return None
+
+    prompt_cache = make_prompt_cache(model)
+    results = []
+    prev_tokens: List[int] = []
+
+    for i, context_file in enumerate(context_files):
+        print(f"\n{'=' * 50}")
+        print(f"Cached benchmark: {context_file.name} ({i + 1}/{len(context_files)})...")
+        print(f"{'=' * 50}")
+
+        try:
+            with open(context_file, "r") as f:
+                raw_prompt = f.read()
+
+            prepared_prompt = prepare_prompt(
+                raw_prompt,
+                tokenizer,
+                ignore_chat_template=ignore_chat_template,
+                chat_template_config=chat_template_config,
+            )
+
+            curr_tokens = _ensure_token_ids(prepared_prompt, tokenizer)
+
+            if prev_tokens:
+                common_len = _find_common_prefix_length(prev_tokens, curr_tokens)
+                if common_len == 0:
+                    # No common prefix — fall back to full cold prefill
+                    print(f"  WARNING: No token prefix match for {context_file.name}. " f"Falling back to full prompt.")
+                    delta_tokens = curr_tokens
+                    prompt_cache = make_prompt_cache(model)
+                elif common_len < len(prev_tokens):
+                    # Partial prefix match — trim cache to common length, re-prefill the rest
+                    lost = len(prev_tokens) - common_len
+                    print(
+                        f"  NOTE: BPE boundary shift — {lost} tokens differ at boundary. "
+                        f"Trimming cache to {common_len} tokens."
+                    )
+                    _trim_cache_to_prompt_length(prompt_cache, common_len)
+                    delta_tokens = curr_tokens[common_len:]
+                else:
+                    # Full prefix match (ideal case)
+                    delta_tokens = curr_tokens[len(prev_tokens) :]
+            else:
+                delta_tokens = curr_tokens
+
+            num_delta = len(delta_tokens)
+            total_prompt_tokens = len(curr_tokens)
+            cached_token_count = total_prompt_tokens - num_delta
+
+            print(
+                f"  Total prompt tokens: {total_prompt_tokens}, "
+                f"Delta tokens: {num_delta}, "
+                f"Cached tokens: {cached_token_count}"
+            )
+
+            kwargs = {}
+            if kv_bit is not None:
+                kwargs["kv_bits"] = kv_bit
+
+            mx.reset_peak_memory()
+
+            if num_delta == 0:
+                print("  No delta tokens (same as previous). Skipping.")
+                continue
+
+            # Progress indicator
+            prefill_done = threading.Event()
+            progress_thread = threading.Thread(
+                target=_show_prefill_progress,
+                args=(num_delta, prefill_done),
+                daemon=True,
+            )
+            progress_thread.start()
+
+            start_time = time.time()
+            first_token_received = False
+            token_count = 0
+            ttft = 0.0
+
+            last_response = None
+            generated_text = ""
+            for response in mlx_lm.stream_generate(
+                model,
+                tokenizer,
+                prompt=delta_tokens,
+                max_tokens=max_tokens,
+                prompt_cache=prompt_cache,
+                **kwargs,
+            ):
+                if not first_token_received:
+                    first_token_received = True
+                    ttft = time.time() - start_time
+                    prefill_done.set()
+                    progress_thread.join()
+                    pp_tps = num_delta / ttft if ttft > 0 else 0
+                    sys.stdout.write(
+                        f"\r  Incremental prefill: {num_delta} tokens in " f"{ttft:.2f}s ({pp_tps:.0f} t/s)\n"
+                    )
+                    sys.stdout.flush()
+
+                last_response = response
+                generated_text += response.text
+                token_count += 1
+                pct = min(token_count * 100 // max_tokens, 100)
+                sys.stdout.write(f"\r  Generating: {token_count}/{max_tokens} ({pct}%)")
+                sys.stdout.flush()
+
+            if first_token_received:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            else:
+                prefill_done.set()
+                progress_thread.join()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+            total_wall_time = time.time() - start_time
+
+            if last_response is None:
+                print(f"  No response generated for {context_file}")
+                continue
+
+            generation_tokens = last_response.generation_tokens
+            generation_tps = last_response.generation_tps
+            peak_memory_gb = last_response.peak_memory
+
+            prompt_eval_duration = ttft if ttft > 0 else safe_duration(num_delta, last_response.prompt_tps)
+            incremental_prompt_tps = num_delta / prompt_eval_duration if prompt_eval_duration > 0 else 0
+
+            print(f"  Prompt: {total_prompt_tokens} total, {num_delta} delta tokens")
+            print(f"  Incremental prompt TPS: {incremental_prompt_tps:.3f} tokens-per-sec")
+            print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
+            print(f"  Peak memory: {peak_memory_gb:.3f} GB")
+            if prompt_eval_duration > 0:
+                print(f"  Time to first token: {prompt_eval_duration:.2f}s")
+            print(f"  Total wall time: {total_wall_time:.2f}s")
+
+            # Trim cache to remove generated tokens, keeping only prompt entries
+            _trim_cache_to_prompt_length(prompt_cache, total_prompt_tokens)
+
+            results.append(
+                {
+                    "context_size": Path(context_file).stem,
+                    "prompt_tokens": total_prompt_tokens,
+                    "delta_tokens": num_delta,
+                    "cached_tokens": total_prompt_tokens - num_delta,
+                    "prompt_tps": last_response.prompt_tps,
+                    "incremental_prompt_tps": incremental_prompt_tps,
+                    "generation_tokens": generation_tokens,
+                    "generation_tps": generation_tps,
+                    "peak_memory_gb": peak_memory_gb,
+                    "total_time": total_wall_time,
+                    "generated_text": generated_text,
+                    "prompt_eval_duration": prompt_eval_duration,
+                    "time_to_first_token": prompt_eval_duration,
+                    "cached": True,
+                }
+            )
+
+            prev_tokens = curr_tokens
+
+        except Exception as e:
+            print(f"  Error in cached benchmark for {context_file}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            prompt_cache = make_prompt_cache(model)
+            prev_tokens = []
+            continue
+
+    return results if results else None
 
 
 def run_batch_benchmark(
@@ -287,7 +518,9 @@ def run_batch_benchmark(
         tokenizer.eos_token_ids = set()
     try:
         for bs in batch_sizes:
-            print(f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
+            print(
+                f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, {gen_tokens} gen tokens)..."
+            )
             mx.reset_peak_memory()
 
             # Generate prompts once (same for all trials) - like mlx_lm.benchmark
@@ -309,22 +542,22 @@ def run_batch_benchmark(
                 if bs == 1:
                     # Pass token IDs directly to stream_generate (like mlx_lm.benchmark)
                     last_response = None
-                    for response in stream_generate(
-                        model, tokenizer, prompts[0], max_tokens=gen_tokens
-                    ):
+                    for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
                         last_response = response
                     if last_response is not None:
                         trial_prompt_tps.append(last_response.prompt_tps)
                         trial_gen_tps.append(last_response.generation_tps)
-                        print(f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s")
+                        print(
+                            f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s"
+                        )
                 else:
                     # batch_generate expects List[List[int]] of token IDs
-                    resp = batch_generate(
-                        model, tokenizer, prompts=prompts, max_tokens=gen_tokens
-                    )
+                    resp = batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
                     trial_prompt_tps.append(resp.stats.prompt_tps)
                     trial_gen_tps.append(resp.stats.generation_tps)
-                    print(f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s")
+                    print(
+                        f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s"
+                    )
 
             if trial_prompt_tps:
                 avg_prompt_tps = statistics.mean(trial_prompt_tps)
@@ -333,12 +566,14 @@ def run_batch_benchmark(
 
                 print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, peak mem {peak_mem:.2f} GB")
 
-                batch_results.append({
-                    "batch_size": bs,
-                    "prompt_tps": round(avg_prompt_tps, 2),
-                    "generation_tps": round(avg_gen_tps, 2),
-                    "peak_memory_gb": round(peak_mem, 3),
-                })
+                batch_results.append(
+                    {
+                        "batch_size": bs,
+                        "prompt_tps": round(avg_prompt_tps, 2),
+                        "generation_tps": round(avg_gen_tps, 2),
+                        "peak_memory_gb": round(peak_mem, 3),
+                    }
+                )
     finally:
         if restored_via_private_attr:
             tokenizer._eos_token_ids = original_eos
@@ -352,6 +587,7 @@ def check_mlx_installed() -> bool:
     """Check if MLX-LM is installed."""
     try:
         import mlx_lm
+
         return True
     except ImportError:
         return False
@@ -359,12 +595,8 @@ def check_mlx_installed() -> bool:
 
 def main() -> int:
     """Main function to run MLX benchmarks."""
-    parser = argparse.ArgumentParser(
-        description="Run MLX benchmarks on context files"
-    )
-    parser.add_argument(
-        "model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)"
-    )
+    parser = argparse.ArgumentParser(description="Run MLX benchmarks on context files")
+    parser.add_argument("model", help="MLX model URL (e.g., mlx-community/Qwen3-0.6B-4bit)")
     parser.add_argument(
         "--kv-bit",
         type=int,
@@ -432,6 +664,11 @@ def main() -> int:
         "--no-perplexity",
         action="store_true",
         help="Skip perplexity computation",
+    )
+    parser.add_argument(
+        "--cached",
+        action="store_true",
+        help="Run cached KV cache benchmark (incremental prefill) after cold benchmarks",
     )
 
     # Add common arguments
@@ -502,9 +739,7 @@ def main() -> int:
             ignore_chat_template=args.ignore_chat_template,
             chat_template_config=args.chat_template_config,
         )
-        for _ in mlx_lm.stream_generate(
-            model, tokenizer, prompt=warmup_prepared_prompt, max_tokens=1, **warmup_kwargs
-        ):
+        for _ in mlx_lm.stream_generate(model, tokenizer, prompt=warmup_prepared_prompt, max_tokens=1, **warmup_kwargs):
             pass
         print("Warmup complete (result discarded)")
     except Exception as e:
@@ -518,12 +753,12 @@ def main() -> int:
         # Compute perplexity
         print("\nComputing perplexity...")
         try:
-            from mlx_lm.perplexity import eval_ppl, load_data
-
             import mlx.core as mx
+            from mlx_lm.perplexity import eval_ppl, load_data
 
             np_seed = 123
             import numpy as np_rng
+
             np_rng.random.seed(np_seed)
             mx.random.seed(np_seed)
 
@@ -557,6 +792,7 @@ def main() -> int:
 
         # Set seed for reproducibility (like mlx_lm.benchmark)
         import mlx.core as mx
+
         mx.random.seed(0)
         try:
             batch_results = run_batch_benchmark(
@@ -607,17 +843,63 @@ def main() -> int:
         print("\nNo successful benchmark results")
         return 1
 
+    # Run cached KV cache benchmark if requested
+    cached_results = None
+    if args.cached:
+        print(f"\n{'#' * 60}")
+        print("# CACHED KV CACHE BENCHMARK")
+        print(f"{'#' * 60}")
+        print("Processing context files smallest-to-largest with KV cache reuse...")
+
+        cached_start = time.time()
+        cached_results = run_cached_benchmark(
+            model,
+            tokenizer,
+            context_files,
+            args.kv_bit,
+            args.max_tokens,
+            args.max_kv_size,
+            args.ignore_chat_template,
+            args.chat_template_config,
+        )
+        cached_benchmark_time = time.time() - cached_start
+
+        if cached_results:
+            print(f"\nCached benchmark complete: {len(cached_results)} files tested in {cached_benchmark_time:.1f}s")
+
+            if args.save_responses:
+                for result in cached_results:
+                    output_filename = output_dir / f"response_{result['context_size']}_cached.txt"
+                    common.save_generated_text(result, args.model, output_filename, "MLX (cached)")
+        else:
+            print("\nCached benchmark produced no results")
+
     # Save all outputs using common function
     common.save_all_outputs(
-        results, output_dir, model_name, "MLX", hardware_info, args,
-        include_memory=True, perplexity=perplexity, perplexity_data=perplexity_data,
+        results,
+        output_dir,
+        model_name,
+        "MLX",
+        hardware_info,
+        args,
+        include_memory=True,
+        perplexity=perplexity,
+        perplexity_data=perplexity_data,
         batch_results=batch_results,
+        cached_results=cached_results,
     )
 
     # Print summary using common function
     common.print_benchmark_summary(
-        results, model_name, "MLX", hardware_info, output_dir,
-        total_benchmark_time, perplexity=perplexity, batch_results=batch_results,
+        results,
+        model_name,
+        "MLX",
+        hardware_info,
+        output_dir,
+        total_benchmark_time,
+        perplexity=perplexity,
+        batch_results=batch_results,
+        cached_results=cached_results,
     )
 
     return 0

@@ -149,7 +149,7 @@ def find_context_files(contexts_arg=None):
             # Filter files that have a numeric prefix followed by 'k' (e.g., 0.5k.txt, 2k.txt)
             def is_valid_context_file(f):
                 stem = f.stem
-                if len(stem) > 1 and stem.endswith('k'):
+                if len(stem) > 1 and stem.endswith("k"):
                     try:
                         float(stem[:-1])
                         return True
@@ -272,7 +272,7 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
         # Add memory information if available
         if "peak_memory_gb" in r:
             line += f" {r['peak_memory_gb']:.1f}GB"
-        
+
         xpost += line + "\n"
         total_tokens += r.get("generation_tokens", 0)
 
@@ -292,7 +292,9 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
 generate_tweet_text = generate_xpost_text
 
 
-def generate_table(results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None):
+def generate_table(
+    results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None
+):
     """Generate a formatted table for posting to X/Twitter.
 
     Args:
@@ -537,7 +539,16 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     return output_path
 
 
-def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_chart.png", perplexity=None, batch_results=None, framework="MLX"):
+def create_chart_mlx(
+    results,
+    model_name,
+    hardware_info,
+    output_path="benchmark_chart.png",
+    perplexity=None,
+    batch_results=None,
+    framework="MLX",
+    cached_results=None,
+):
     """Create a chart for MLX benchmarks with memory information."""
     # Sort results by context size
     context_sizes = []
@@ -591,6 +602,28 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim(0, max(prompt_tps) * 1.15 if prompt_tps and max(prompt_tps) > 0 else 1)
 
+    # Overlay cached incremental prompt TPS if available
+    if cached_results:
+        cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
+        # Skip baseline point (cached_tokens=0 means cold prefill, identical to cold results)
+        cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        cached_sizes = [r["context_size"] for r in cached_data]
+        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+            cached_x = [context_sizes.index(s) for s in cached_sizes]
+            cached_inc_tps = [r.get("incremental_prompt_tps", 0) for r in cached_data]
+            ax1.plot(
+                cached_x,
+                cached_inc_tps,
+                "s--",
+                color="#2196F3",
+                linewidth=2,
+                markersize=8,
+                label="Cached (incremental)",
+            )
+            for i, p in zip(cached_x, cached_inc_tps):
+                ax1.text(i + 0.15, p, f"{p:.0f}", ha="left", va="bottom", fontsize=8, color="#2196F3")
+            ax1.legend()
+
     # Second subplot - Generation TPS
     ax2.set_title("Generation Tokens per Second", fontsize=14, pad=10)
     color2 = "#ff5722"
@@ -608,6 +641,25 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     ax2.set_xticklabels(context_sizes)
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, max(gen_tps) * 1.15 if gen_tps and max(gen_tps) > 0 else 1)
+
+    # Overlay cached generation TPS if available
+    if cached_results:
+        cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
+        cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        cached_sizes = [r["context_size"] for r in cached_data]
+        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+            cached_x = [context_sizes.index(s) for s in cached_sizes]
+            cached_gen_tps = [r.get("generation_tps", 0) for r in cached_data]
+            ax2.plot(
+                cached_x,
+                cached_gen_tps,
+                "s--",
+                color="#2196F3",
+                linewidth=2,
+                markersize=8,
+                label="Cached (incremental)",
+            )
+            ax2.legend()
 
     # Third subplot - Total Time vs Tokens Generated
     ax3.set_title("Total Processing Time & Tokens Generated", fontsize=14, pad=10)
@@ -690,6 +742,19 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     ax4.grid(True, alpha=0.3)
     ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
 
+    # Overlay cached TTFT if available
+    if cached_results:
+        cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
+        cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        cached_sizes = [r["context_size"] for r in cached_data]
+        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+            cached_x = [context_sizes.index(s) for s in cached_sizes]
+            cached_ttft = [r.get("time_to_first_token", 0) for r in cached_data]
+            ax4.plot(
+                cached_x, cached_ttft, "s--", color="#2196F3", linewidth=2, markersize=8, label="Cached (incremental)"
+            )
+            ax4.legend()
+
     # Fifth subplot - Peak Memory Usage
     ax5.set_title("Peak Memory Usage", fontsize=14, pad=10)
 
@@ -726,7 +791,8 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
         ax6.set_visible(True)
         ax6.axis("off")
         ax6.text(
-            0.5, 0.5,
+            0.5,
+            0.5,
             f"Perplexity: {perplexity:.2f}",
             transform=ax6.transAxes,
             fontsize=24,
@@ -737,7 +803,8 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
             bbox=dict(boxstyle="round,pad=0.5", facecolor="#fff3f3", edgecolor="#d62728", alpha=0.8),
         )
         ax6.text(
-            0.5, 0.2,
+            0.5,
+            0.2,
             "Dataset: allenai/tulu-3-sft-mixture\n256 samples, seq_len 512",
             transform=ax6.transAxes,
             fontsize=10,
@@ -796,32 +863,59 @@ def create_chart_mlx(results, model_name, hardware_info, output_path="benchmark_
     return output_path
 
 
+def _get_machine_name() -> str:
+    """Extract a short machine identifier for output directory naming."""
+    if platform.system() == "Darwin":
+        try:
+            result = subprocess.run(
+                ["system_profiler", "SPHardwareDataType"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                chip_match = re.search(r"Chip:\s+(.+)", result.stdout)
+                model_match = re.search(r"Model Name:\s+(.+)", result.stdout)
+                if chip_match and model_match:
+                    # "Apple M3 Ultra" → "M3Ultra", "MacBook Pro" is dropped
+                    chip = chip_match.group(1).strip()
+                    # Remove "Apple " prefix and spaces
+                    short = chip.replace("Apple ", "").replace(" ", "")
+                    return short
+                if chip_match:
+                    return chip_match.group(1).strip().replace("Apple ", "").replace(" ", "")
+        except Exception:
+            pass
+    return platform.node().split(".")[0]
+
+
 def create_output_directory(framework_name: str, model_name: str, base_dir: str = "output") -> Path:
     """Create timestamped output directory for benchmark results.
-    
+
     Args:
         framework_name: Name of the framework (e.g., "ollama", "mlx", "llamacpp")
         model_name: Name of the model being benchmarked
         base_dir: Base directory for output (default: "output")
-    
+
     Returns:
         Path object for the created directory
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_output_dir = Path(base_dir)
     base_output_dir.mkdir(exist_ok=True)
-    
+
     # Sanitize model name for filesystem
     model_safe = model_name.replace("/", "_").replace(":", "_")
-    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}_{timestamp}"
+
+    # Extract short machine name for the directory
+    machine_name = _get_machine_name()
+
+    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}_{machine_name}_{timestamp}"
     output_dir.mkdir(exist_ok=True)
-    
+
     return output_dir
 
 
 def setup_common_args(parser: argparse.ArgumentParser) -> None:
     """Add common command-line arguments to parser.
-    
+
     Args:
         parser: ArgumentParser instance to add arguments to
     """
@@ -870,6 +964,7 @@ def save_all_outputs(
     perplexity: Optional[float] = None,
     perplexity_data: Optional[Dict] = None,
     batch_results: Optional[List[Dict]] = None,
+    cached_results: Optional[List[Dict]] = None,
 ) -> None:
     """Save all benchmark outputs to files.
 
@@ -883,6 +978,8 @@ def save_all_outputs(
         include_memory: Whether to include memory in table (for MLX)
         perplexity: Perplexity score (optional, MLX only)
         perplexity_data: Full perplexity data dict to save as JSON (optional)
+        batch_results: Batch benchmark results (optional)
+        cached_results: Cached KV cache benchmark results (optional)
     """
     # Save hardware info
     hardware_path = output_dir / "hardware_info.json"
@@ -906,23 +1003,57 @@ def save_all_outputs(
             json.dump(batch_results, f, indent=2)
         print(f"Batch benchmark saved to {batch_path}")
 
+    # Save cached benchmark results if available
+    if cached_results:
+        cached_csv_path = output_dir / "benchmark_results_cached.csv"
+        save_results_csv(cached_results, cached_csv_path)
+        cached_json = {
+            "model": model_name,
+            "framework": framework,
+            "cached": True,
+            "results": cached_results,
+        }
+        cached_json_path = output_dir / "all_results_cached.json"
+        with open(cached_json_path, "w") as f:
+            json.dump(cached_json, f, indent=2)
+        print(f"Cached results saved to {cached_json_path}")
+
     # Generate and save chart
     chart_path = output_dir / args.output_chart
     if include_memory:
-        create_chart_mlx(results, model_name, hardware_info, chart_path, perplexity=perplexity, batch_results=batch_results, framework=framework)
+        create_chart_mlx(
+            results,
+            model_name,
+            hardware_info,
+            chart_path,
+            perplexity=perplexity,
+            batch_results=batch_results,
+            framework=framework,
+            cached_results=cached_results,
+        )
     else:
         create_chart_ollama(results, model_name, hardware_info, chart_path, framework)
     print(f"Chart saved to {chart_path}")
 
     # Generate and save table
-    table = generate_table(results, model_name, framework, hardware_info, include_memory, perplexity=perplexity, batch_results=batch_results)
+    table = generate_table(
+        results,
+        model_name,
+        framework,
+        hardware_info,
+        include_memory,
+        perplexity=perplexity,
+        batch_results=batch_results,
+    )
     table_path = output_dir / "table.txt"
     with open(table_path, "w") as f:
         f.write(table)
     print(f"Table saved to {table_path}")
 
     # Generate and save X post
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
+    xpost = generate_xpost_text(
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+    )
     xpost_path = output_dir / "xpost.txt"
     with open(xpost_path, "w") as f:
         f.write(xpost)
@@ -938,6 +1069,7 @@ def print_benchmark_summary(
     total_benchmark_time: float = None,
     perplexity: Optional[float] = None,
     batch_results: Optional[List[Dict]] = None,
+    cached_results: Optional[List[Dict]] = None,
 ) -> None:
     """Print benchmark summary to console.
 
@@ -949,6 +1081,8 @@ def print_benchmark_summary(
         output_dir: Directory where outputs were saved
         total_benchmark_time: Total time to run all benchmarks in seconds
         perplexity: Perplexity score (optional)
+        batch_results: Batch benchmark results (optional)
+        cached_results: Cached KV cache benchmark results (optional)
     """
     # Calculate total generated tokens
     total_generated_tokens = sum(r.get("generation_tokens", 0) for r in results)
@@ -968,20 +1102,46 @@ def print_benchmark_summary(
         print("BATCH BENCHMARK RESULTS")
         print("=" * 50)
         for r in batch_results:
-            print(f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s, {r['peak_memory_gb']:.2f} GB")
+            print(
+                f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s, {r['peak_memory_gb']:.2f} GB"
+            )
+
+    # Print cached benchmark results if available
+    if cached_results:
+        print("\n" + "=" * 50)
+        print("CACHED KV CACHE BENCHMARK RESULTS")
+        print("=" * 50)
+        print(
+            f"{'Context':>8} | {'Total':>6} | {'Delta':>6} | {'Cached':>6} | "
+            f"{'Inc Prefill TPS':>14} | {'Gen TPS':>10}"
+        )
+        print(f"{'':>8} | {'Tok':>6} | {'Tok':>6} | {'Tok':>6} | {'':>14} | {'':>10}")
+        print("-" * 72)
+        for r in sorted(cached_results, key=lambda x: float(x["context_size"].replace("k", ""))):
+            print(
+                f"{r['context_size']:>8} | {r['prompt_tokens']:>6} | "
+                f"{r.get('delta_tokens', 0):>6} | "
+                f"{r.get('cached_tokens', 0):>6} | "
+                f"{r.get('incremental_prompt_tps', 0):>14.1f} | "
+                f"{r['generation_tps']:>10.1f}"
+            )
 
     # Print summary table
     print("\n" + "=" * 50)
     print("SUMMARY TABLE")
     print("=" * 50)
-    table = generate_table(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
+    table = generate_table(
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+    )
     print(table)
 
     # Print X post text
     print("\n" + "=" * 50)
     print("X POST TEXT")
     print("=" * 50)
-    xpost = generate_xpost_text(results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results)
+    xpost = generate_xpost_text(
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+    )
     print(xpost)
 
     print(f"\n✅ All outputs saved to: {output_dir}/")
@@ -989,12 +1149,12 @@ def print_benchmark_summary(
 
 def validate_model_connection(test_func, *args, **kwargs) -> bool:
     """Generic function to validate model/server connection.
-    
+
     Args:
         test_func: Function to test connection
         *args: Arguments to pass to test function
         **kwargs: Keyword arguments to pass to test function
-        
+
     Returns:
         True if connection successful, False otherwise
     """
