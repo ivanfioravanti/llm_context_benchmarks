@@ -448,24 +448,28 @@ def run_cached_benchmark(
             # Trim cache to remove generated tokens, keeping only prompt entries
             _trim_cache_to_prompt_length(prompt_cache, total_prompt_tokens)
 
-            results.append(
-                {
-                    "context_size": Path(context_file).stem,
-                    "prompt_tokens": total_prompt_tokens,
-                    "delta_tokens": num_delta,
-                    "cached_tokens": total_prompt_tokens - num_delta,
-                    "prompt_tps": last_response.prompt_tps,
-                    "incremental_prompt_tps": incremental_prompt_tps,
-                    "generation_tokens": generation_tokens,
-                    "generation_tps": generation_tps,
-                    "peak_memory_gb": peak_memory_gb,
-                    "total_time": total_wall_time,
-                    "generated_text": generated_text,
-                    "prompt_eval_duration": prompt_eval_duration,
-                    "time_to_first_token": prompt_eval_duration,
-                    "cached": True,
-                }
-            )
+            # Skip the first context (no prior cache prefix — identical to a cold prefill)
+            if cached_token_count > 0:
+                generation_duration = max(total_wall_time - prompt_eval_duration, 0.0)
+                results.append(
+                    {
+                        "context_size": Path(context_file).stem,
+                        "prompt_tokens": total_prompt_tokens,
+                        "delta_tokens": num_delta,
+                        "cached_tokens": cached_token_count,
+                        "prompt_tps": last_response.prompt_tps,
+                        "incremental_prompt_tps": incremental_prompt_tps,
+                        "generation_tokens": generation_tokens,
+                        "generation_tps": generation_tps,
+                        "peak_memory_gb": peak_memory_gb,
+                        "total_time": total_wall_time,
+                        "eval_duration": generation_duration,
+                        "generated_text": generated_text,
+                        "prompt_eval_duration": prompt_eval_duration,
+                        "time_to_first_token": prompt_eval_duration,
+                        "cached": True,
+                    }
+                )
 
             prev_count = target_count
 

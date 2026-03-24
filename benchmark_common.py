@@ -241,7 +241,7 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None, batch_results=None):
+def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None, batch_results=None, cached_results=None):
     """Generate X post text with results.
 
     Args:
@@ -285,6 +285,20 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
         parts = [f"b{r['batch_size']} {r['generation_tps']:.0f}" for r in batch_results]
         xpost += f"\nBatch TPS: {' '.join(parts)}"
 
+    if cached_results:
+        xpost += "\n\nCached KV Cache (incremental prefill)\n"
+        for r in sorted(cached_results, key=lambda x: float(x["context_size"][:-1])):
+            if r.get("cached_tokens", 0) == 0:
+                continue
+            line = (
+                f"{r['context_size']} cached {r.get('cached_tokens', 0)} "
+                f"inc_pp {r.get('incremental_prompt_tps', 0):.0f} "
+                f"tg {r['generation_tps']:.0f} t/s"
+            )
+            if "peak_memory_gb" in r:
+                line += f" {r['peak_memory_gb']:.1f}GB"
+            xpost += line + "\n"
+
     return xpost.strip()
 
 
@@ -293,7 +307,7 @@ generate_tweet_text = generate_xpost_text
 
 
 def generate_table(
-    results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None
+    results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None, cached_results=None
 ):
     """Generate a formatted table for posting to X/Twitter.
 
@@ -359,6 +373,19 @@ def generate_table(
         table += "------|------------|---------|--------\n"
         for r in batch_results:
             table += f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB\n"
+
+    if cached_results:
+        table += "\n\nCached KV Cache (incremental prefill)\n"
+        table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS\n"
+        table += "--------|-----------|-----------|------------|-----------------|--------\n"
+        for r in sorted(cached_results, key=lambda x: float(x["context_size"][:-1])):
+            if r.get("cached_tokens", 0) == 0:
+                continue
+            table += (
+                f"{r['context_size']:>7} | {r['prompt_tokens']:>9} | "
+                f"{r.get('delta_tokens', 0):>9} | {r.get('cached_tokens', 0):>10} | "
+                f"{r.get('incremental_prompt_tps', 0):>15.1f} | {r['generation_tps']:>7.1f}\n"
+            )
 
     return table
 
@@ -607,8 +634,10 @@ def create_chart_mlx(
         cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
         # Skip baseline point (cached_tokens=0 means cold prefill, identical to cold results)
         cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        # Only plot points whose context size exists in cold results
+        cached_data = [r for r in cached_data if r["context_size"] in context_sizes]
         cached_sizes = [r["context_size"] for r in cached_data]
-        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+        if cached_sizes:
             cached_x = [context_sizes.index(s) for s in cached_sizes]
             cached_inc_tps = [r.get("incremental_prompt_tps", 0) for r in cached_data]
             ax1.plot(
@@ -646,8 +675,9 @@ def create_chart_mlx(
     if cached_results:
         cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
         cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        cached_data = [r for r in cached_data if r["context_size"] in context_sizes]
         cached_sizes = [r["context_size"] for r in cached_data]
-        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+        if cached_sizes:
             cached_x = [context_sizes.index(s) for s in cached_sizes]
             cached_gen_tps = [r.get("generation_tps", 0) for r in cached_data]
             ax2.plot(
@@ -746,13 +776,16 @@ def create_chart_mlx(
     if cached_results:
         cached_data = sorted(cached_results, key=lambda r: float(r["context_size"].replace("k", "")))
         cached_data = [r for r in cached_data if r.get("cached_tokens", 0) > 0]
+        cached_data = [r for r in cached_data if r["context_size"] in context_sizes]
         cached_sizes = [r["context_size"] for r in cached_data]
-        if cached_sizes and all(s in context_sizes for s in cached_sizes):
+        if cached_sizes:
             cached_x = [context_sizes.index(s) for s in cached_sizes]
             cached_ttft = [r.get("time_to_first_token", 0) for r in cached_data]
             ax4.plot(
                 cached_x, cached_ttft, "s--", color="#2196F3", linewidth=2, markersize=8, label="Cached (incremental)"
             )
+            for i, t in zip(cached_x, cached_ttft):
+                ax4.text(i + 0.15, t, f"{t:.2f}s", ha="left", va="bottom", fontsize=8, color="#2196F3")
             ax4.legend()
 
     # Fifth subplot - Peak Memory Usage
@@ -1044,6 +1077,7 @@ def save_all_outputs(
         include_memory,
         perplexity=perplexity,
         batch_results=batch_results,
+        cached_results=cached_results,
     )
     table_path = output_dir / "table.txt"
     with open(table_path, "w") as f:
@@ -1052,7 +1086,7 @@ def save_all_outputs(
 
     # Generate and save X post
     xpost = generate_xpost_text(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
     )
     xpost_path = output_dir / "xpost.txt"
     with open(xpost_path, "w") as f:
@@ -1131,7 +1165,7 @@ def print_benchmark_summary(
     print("SUMMARY TABLE")
     print("=" * 50)
     table = generate_table(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
     )
     print(table)
 
@@ -1140,7 +1174,7 @@ def print_benchmark_summary(
     print("X POST TEXT")
     print("=" * 50)
     xpost = generate_xpost_text(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results
+        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
     )
     print(xpost)
 
