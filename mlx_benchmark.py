@@ -293,8 +293,11 @@ def run_cached_benchmark(
 ) -> Optional[List[Dict]]:
     """Run cached KV cache benchmark with incremental prefill.
 
-    Processes context files smallest-to-largest, reusing a single KV cache.
-    Only delta (new) tokens beyond the previous context are sent to the model.
+    Encodes the largest context file once and slices the token array to create
+    prompts for each context size. This guarantees perfect token-level prefix
+    alignment, which is not possible with BPE tokenizers when encoding
+    text-prefix files independently (BPE merges characters differently depending
+    on surrounding context).
     """
     import mlx.core as mx
     import mlx_lm
@@ -307,50 +310,47 @@ def run_cached_benchmark(
         )
         return None
 
+    # Read and encode the largest context file once
+    with open(context_files[-1], "r") as f:
+        largest_raw_text = f.read()
+    largest_prepared = prepare_prompt(
+        largest_raw_text,
+        tokenizer,
+        ignore_chat_template=ignore_chat_template,
+        chat_template_config=chat_template_config,
+    )
+    full_tokens = _ensure_token_ids(largest_prepared, tokenizer)
+    total_text_len = len(largest_raw_text)
+
+    print(f"  Encoded largest file ({context_files[-1].name}): {len(full_tokens)} tokens")
+
+    # Compute token-level slice points proportional to each file's text length
+    token_targets = []
+    for context_file in context_files:
+        with open(context_file, "r") as f:
+            raw_text = f.read()
+        if total_text_len > 0:
+            target = round(len(full_tokens) * len(raw_text) / total_text_len)
+        else:
+            target = len(full_tokens)
+        # Ensure monotonic increase and don't exceed full tokens
+        target = max(target, token_targets[-1] if token_targets else 0)
+        target = min(target, len(full_tokens))
+        token_targets.append(target)
+
     prompt_cache = make_prompt_cache(model)
     results = []
-    prev_tokens: List[int] = []
+    prev_count = 0
 
     for i, context_file in enumerate(context_files):
+        target_count = token_targets[i]
         print(f"\n{'=' * 50}")
         print(f"Cached benchmark: {context_file.name} ({i + 1}/{len(context_files)})...")
         print(f"{'=' * 50}")
 
         try:
-            with open(context_file, "r") as f:
-                raw_prompt = f.read()
-
-            prepared_prompt = prepare_prompt(
-                raw_prompt,
-                tokenizer,
-                ignore_chat_template=ignore_chat_template,
-                chat_template_config=chat_template_config,
-            )
-
-            curr_tokens = _ensure_token_ids(prepared_prompt, tokenizer)
-
-            if prev_tokens:
-                common_len = _find_common_prefix_length(prev_tokens, curr_tokens)
-                if common_len == 0:
-                    # No common prefix — fall back to full cold prefill
-                    print(f"  WARNING: No token prefix match for {context_file.name}. " f"Falling back to full prompt.")
-                    delta_tokens = curr_tokens
-                    prompt_cache = make_prompt_cache(model)
-                elif common_len < len(prev_tokens):
-                    # Partial prefix match — trim cache to common length, re-prefill the rest
-                    lost = len(prev_tokens) - common_len
-                    print(
-                        f"  NOTE: BPE boundary shift — {lost} tokens differ at boundary. "
-                        f"Trimming cache to {common_len} tokens."
-                    )
-                    _trim_cache_to_prompt_length(prompt_cache, common_len)
-                    delta_tokens = curr_tokens[common_len:]
-                else:
-                    # Full prefix match (ideal case)
-                    delta_tokens = curr_tokens[len(prev_tokens) :]
-            else:
-                delta_tokens = curr_tokens
-
+            curr_tokens = full_tokens[:target_count]
+            delta_tokens = curr_tokens[prev_count:]
             num_delta = len(delta_tokens)
             total_prompt_tokens = len(curr_tokens)
             cached_token_count = total_prompt_tokens - num_delta
@@ -369,6 +369,7 @@ def run_cached_benchmark(
 
             if num_delta == 0:
                 print("  No delta tokens (same as previous). Skipping.")
+                prev_count = target_count
                 continue
 
             # Progress indicator
@@ -426,6 +427,7 @@ def run_cached_benchmark(
 
             if last_response is None:
                 print(f"  No response generated for {context_file}")
+                prev_count = target_count
                 continue
 
             generation_tokens = last_response.generation_tokens
@@ -465,7 +467,7 @@ def run_cached_benchmark(
                 }
             )
 
-            prev_tokens = curr_tokens
+            prev_count = target_count
 
         except Exception as e:
             print(f"  Error in cached benchmark for {context_file}: {e}")
@@ -473,7 +475,7 @@ def run_cached_benchmark(
 
             traceback.print_exc()
             prompt_cache = make_prompt_cache(model)
-            prev_tokens = []
+            prev_count = token_targets[i]  # Use target, not actual
             continue
 
     return results if results else None
