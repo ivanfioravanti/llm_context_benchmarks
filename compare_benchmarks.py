@@ -126,6 +126,14 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         with open(batch_file) as f:
             batch_data = json.load(f)
 
+    # Read cached benchmark results if available
+    cached_results = []
+    cached_json_file = folder_path / "all_results_cached.json"
+    if cached_json_file.exists():
+        with open(cached_json_file) as f:
+            cached_data = json.load(f)
+        cached_results = [r for r in cached_data.get("results", []) if r.get("cached_tokens", 0) > 0]
+
     # Create display name
     display_name = f"{engine}: {model}"
 
@@ -138,6 +146,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         "display_name": display_name,
         "perplexity_data": perplexity_data,
         "batch_data": batch_data,
+        "cached_results": cached_results,
     }, display_name
 
 
@@ -162,6 +171,12 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         for data in benchmark_data
     )
 
+    # Check if any benchmark has cached KV results
+    has_cached_data = any(
+        bool(data.get("cached_results"))
+        for data in benchmark_data
+    )
+
     # Set up the plot style
     plt.style.use("default")
 
@@ -173,6 +188,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     ]
     if has_memory_data:
         subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
+    if has_cached_data:
+        subplot_specs.append(("inc_prompt_tps", "Incremental Prompt TPS (Cached KV)", "Tokens/sec"))
     if has_perplexity_data:
         subplot_specs.append(("perplexity", "Perplexity (lower is better)", "Perplexity"))
     if has_batch_data:
@@ -291,6 +308,26 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 for bar, val in zip(bars, ppl_values):
                     ax.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(),
                             f"{val:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+            continue
+
+        if key == "inc_prompt_tps":
+            # Incremental prompt TPS from cached KV benchmark
+            for i, data in enumerate(benchmark_data):
+                cached = data.get("cached_results", [])
+                if not cached:
+                    continue
+                sorted_cached = sorted(cached, key=lambda r: float(r["context_size"].replace("k", "")))
+                x_vals = [r["context_size"] for r in sorted_cached]
+                y_vals = [r.get("incremental_prompt_tps", 0) for r in sorted_cached]
+                marker = markers[i % len(markers)]
+                ax.plot(x_vals, y_vals, "--", marker=marker, linewidth=2,
+                        label=clean_names[i], color=colors[i], markersize=6)
+                for x, y in zip(x_vals, y_vals):
+                    ax.annotate(f"{y:.1f}", (x, y), textcoords="offset points",
+                                xytext=(0, 8), ha="center", fontsize=7, color=colors[i])
+            ax.set_xlabel("Context Size")
+            ax.tick_params(axis="x", rotation=45)
+            ax.legend(fontsize=9)
             continue
 
         if key in ("batch_prompt", "batch_gen"):
@@ -418,12 +455,21 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
             peak_batch_str = "N/A"
             peak_batch_prompt_str = "N/A"
 
+        # Avg incremental prompt TPS from cached KV benchmark
+        cached = data.get("cached_results", [])
+        if cached:
+            avg_inc_prompt_tps = np.mean([r.get("incremental_prompt_tps", 0) for r in cached])
+            avg_inc_prompt_tps_str = f"{avg_inc_prompt_tps:.1f}"
+        else:
+            avg_inc_prompt_tps_str = "N/A"
+
         table_data.append(
             {
                 "Engine/Model": display_name,
                 "Hardware": f"{chip}, {memory}GB RAM, {cores} cores",
                 "Avg Prompt TPS": f"{avg_prompt_tps:.1f}",
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
+                "Avg Inc Prompt TPS": avg_inc_prompt_tps_str,
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Perplexity": ppl_str,
                 "Peak Batch Prompt TPS": peak_batch_prompt_str,
@@ -471,6 +517,17 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                     "TTFT": "",
                     "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
                 })
+        # Add cached KV data if present
+        for r in data.get("cached_results", []):
+            detailed_data.append({
+                "Model": display_name,
+                "Context": f"{r['context_size']}_cached",
+                "Prompt TPS": round(r.get("incremental_prompt_tps", 0), 2),
+                "Generation TPS": round(r.get("generation_tps", 0), 2),
+                "Total Time": round(r.get("total_time", 0), 2),
+                "TTFT": round(r.get("time_to_first_token", 0), 2),
+                "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
+            })
 
     if detailed_data:
         detailed_df = pd.DataFrame(detailed_data)
@@ -498,6 +555,8 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
             xpost_text += f"\n  Peak Memory: {entry['Peak Memory']}"
         if entry.get("Perplexity", "N/A") != "N/A":
             xpost_text += f"\n  Perplexity: {entry['Perplexity']}"
+        if entry.get("Avg Inc Prompt TPS", "N/A") != "N/A":
+            xpost_text += f"\n  Cached inc pp: {entry['Avg Inc Prompt TPS']}"
         if entry.get("Peak Batch Prompt TPS", "N/A") != "N/A":
             xpost_text += f"\n  Peak Batch pp: {entry['Peak Batch Prompt TPS']}"
         if entry.get("Peak Batch Gen TPS", "N/A") != "N/A":
@@ -526,8 +585,15 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     Title uses the model name when all runs share the same base model; otherwise the model
     name is included in each row label.
     """
-    metric_keys = ["avg_prompt_tps", "avg_gen_tps", "peak_batch_prompt_tps", "peak_batch_gen_tps"]
-    col_labels = ["Avg Prompt TPS", "Avg Gen TPS", "Peak Batch\nPrompt TPS", "Peak Batch\nGen TPS"]
+    has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
+
+    metric_keys = ["avg_prompt_tps", "avg_gen_tps"]
+    col_labels = ["Avg Prompt TPS", "Avg Gen TPS"]
+    if has_cached_data:
+        metric_keys.append("avg_inc_prompt_tps")
+        col_labels.append("Avg Inc\nPrompt TPS")
+    metric_keys += ["peak_batch_prompt_tps", "peak_batch_gen_tps"]
+    col_labels += ["Peak Batch\nPrompt TPS", "Peak Batch\nGen TPS"]
     n_cols = len(metric_keys)
 
     rows = []
@@ -544,6 +610,9 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         avg_prompt_tps = float(np.mean([r.get("prompt_tps", 0) for r in results]))
         avg_gen_tps = float(np.mean([r.get("generation_tps", 0) for r in results]))
 
+        cached = data.get("cached_results", [])
+        avg_inc_prompt_tps = float(np.mean([r.get("incremental_prompt_tps", 0) for r in cached])) if cached else float("nan")
+
         batch = data.get("batch_data")
         peak_batch_prompt = float(max(r["prompt_tps"] for r in batch)) if batch else float("nan")
         peak_batch_gen = float(max(r["generation_tps"] for r in batch)) if batch else float("nan")
@@ -554,6 +623,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             "base_model": base_model,
             "avg_prompt_tps": avg_prompt_tps,
             "avg_gen_tps": avg_gen_tps,
+            "avg_inc_prompt_tps": avg_inc_prompt_tps,
             "peak_batch_prompt_tps": peak_batch_prompt,
             "peak_batch_gen_tps": peak_batch_gen,
         })
@@ -716,7 +786,7 @@ Examples:
     parser.add_argument(
         "--charts",
         nargs="+",
-        choices=["prompt_tps", "generation_tps", "ttft", "memory", "perplexity", "batch_prompt", "batch_gen"],
+        choices=["prompt_tps", "generation_tps", "ttft", "memory", "inc_prompt_tps", "perplexity", "batch_prompt", "batch_gen"],
         help="Specific charts to generate (default: all available)",
     )
 
