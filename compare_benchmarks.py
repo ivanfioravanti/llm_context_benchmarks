@@ -639,6 +639,25 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     ordered_quants = sorted(quant_groups.keys())
     n_groups = len(ordered_quants)
 
+    # Filter out columns where ALL values are NaN across ALL groups
+    active_col_indices = []
+    for col_idx, key in enumerate(metric_keys):
+        has_data = any(
+            not np.isnan(row[key])
+            for group_rows in quant_groups.values()
+            for row in group_rows
+        )
+        if has_data:
+            active_col_indices.append(col_idx)
+
+    metric_keys = [metric_keys[i] for i in active_col_indices]
+    col_labels = [col_labels[i] for i in active_col_indices]
+    n_cols = len(metric_keys)
+
+    if n_cols == 0:
+        print("No data available for heatmap.")
+        return None
+
     # Determine title: single model name or generic
     base_models = {r["base_model"] for r in rows}
     single_model = len(base_models) == 1
@@ -649,12 +668,12 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
     total_data_rows = sum(len(quant_groups[q]) for q in ordered_quants)
     height_ratios = [max(1, len(quant_groups[q])) for q in ordered_quants]
-    fig_w = max(10, n_cols * 3)
-    fig_h = max(5, total_data_rows * 1.4 + n_groups * 1.2)
+    fig_w = max(10, n_cols * 3.5)
+    fig_h = max(5, total_data_rows * 2.0 + n_groups * 1.5)
 
     fig, axes = plt.subplots(
         n_groups, 1, figsize=(fig_w, fig_h),
-        gridspec_kw={"height_ratios": height_ratios, "hspace": 0.55},
+        gridspec_kw={"height_ratios": height_ratios, "hspace": 0.65},
     )
     if n_groups == 1:
         axes = [axes]
