@@ -106,6 +106,7 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         model_config=model_config,
         tokenizer_config=tokenizer_config,
         return_config=True,
+        strict=False,
     )
     return model, tokenizer, config
 
