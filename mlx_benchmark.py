@@ -94,6 +94,7 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         Tuple of (model, tokenizer, config)
     """
     import mlx_lm
+    from mlx_lm.utils import load_model as _load_model, load_tokenizer
 
     model_config = {}
     tokenizer_config = {}
@@ -101,13 +102,12 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         model_config["trust_remote_code"] = True
         tokenizer_config["trust_remote_code"] = True
 
-    model, tokenizer, config = mlx_lm.load(
-        model_url,
-        model_config=model_config,
-        tokenizer_config=tokenizer_config,
-        return_config=True,
-        strict=False,
-    )
+    # Use load_model directly so we can pass strict=False to skip
+    # mismatched weights (e.g. vision_tower params in VLM checkpoints)
+    model_path = mlx_lm.utils._download(model_url)
+    model, config = _load_model(model_path, lazy=False, strict=False, model_config=model_config)
+    tokenizer = load_tokenizer(model_path, tokenizer_config, eos_token_ids=config.get("eos_token_id", None))
+
     return model, tokenizer, config
 
 
