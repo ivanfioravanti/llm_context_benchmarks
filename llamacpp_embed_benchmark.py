@@ -60,7 +60,7 @@ def extract_timings_from_response(response: Dict) -> Tuple[float, float]:
 def run_benchmark(
     llm,
     context_file: Path,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     timeout: int = 3600,
     seed: int = 0,
 ) -> Optional[Dict]:

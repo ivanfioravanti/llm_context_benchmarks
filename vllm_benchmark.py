@@ -591,7 +591,7 @@ def run_benchmark(
     context_file: Path,
     base_url: str,
     api_key: Optional[str] = None,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     temperature: float = 0.7,
     top_p: float = 0.95,
     timeout: int = 300,

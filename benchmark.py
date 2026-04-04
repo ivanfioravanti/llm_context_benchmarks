@@ -57,6 +57,11 @@ def get_available_engines():
             "description": "Exo OpenAI-compatible endpoint",
             "example": "local-model",
         },
+        "mlx-vlm": {
+            "script": "mlx_vlm_benchmark.py",
+            "description": "MLX-VLM vision-language models (Apple Silicon)",
+            "example": "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+        },
         "paroquant": {
             "script": "paroquant_benchmark.py",
             "description": "Paroquant quantized inference (MLX, Apple Silicon)",
@@ -179,8 +184,8 @@ Examples:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=200,
-        help="Maximum tokens to generate (default: 200)",
+        default=128,
+        help="Maximum tokens to generate (default: 128)",
     )
 
     parser.add_argument(
@@ -211,8 +216,13 @@ Examples:
     # Engine-specific options
     parser.add_argument(
         "--kv-bit",
-        type=int,
-        help="KV cache bit size for MLX (e.g., 4 or 8)",
+        type=float,
+        help="KV cache bit size for MLX engines (e.g., 4, 8, or 3.5 for TurboQuant)",
+    )
+    parser.add_argument(
+        "--kv-quant-scheme",
+        default=None,
+        help="(MLX-VLM) KV quantization scheme: uniform or turboquant",
     )
     parser.add_argument(
         "--max-kv-size",
@@ -309,9 +319,13 @@ Examples:
     # Add engine-specific arguments
     if args.engine == "mlx" and args.kv_bit is not None:
         pass_through_args.extend(["--kv-bit", str(args.kv_bit)])
-    if args.engine == "mlx" and args.max_kv_size is not None:
+    if args.engine == "mlx-vlm" and args.kv_bit is not None:
+        pass_through_args.extend(["--kv-bits", str(args.kv_bit)])
+    if args.engine == "mlx-vlm" and args.kv_quant_scheme is not None:
+        pass_through_args.extend(["--kv-quant-scheme", args.kv_quant_scheme])
+    if args.engine in ("mlx", "mlx-vlm") and args.max_kv_size is not None:
         pass_through_args.extend(["--max-kv-size", str(args.max_kv_size)])
-    if args.engine == "mlx" and args.trust_remote_code:
+    if args.engine in ("mlx", "mlx-vlm") and args.trust_remote_code:
         pass_through_args.append("--trust-remote-code")
 
     if args.engine == "llamacpp":

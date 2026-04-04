@@ -960,8 +960,8 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=200,
-        help="Maximum tokens to generate (default: 200)",
+        default=128,
+        help="Maximum tokens to generate (default: 128)",
     )
     parser.add_argument(
         "--save-responses",

@@ -138,7 +138,7 @@ def extract_generated_text(stdout: str, stderr: str, prompt: str) -> str:
 
 
 def run_cli_benchmark(
-    model_name: str, context_file: Path, max_tokens: int = 200
+    model_name: str, context_file: Path, max_tokens: int = 128
 ) -> Optional[Dict]:
     """Run Ollama benchmark using CLI for a given context file.
     

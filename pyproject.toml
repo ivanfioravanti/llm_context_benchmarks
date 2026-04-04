@@ -31,7 +31,8 @@ dependencies = [
   "markupsafe>=3.0.3",
   "matplotlib>=3.10.6",
   "mlx>=0.30.6",
-  "mlx-lm==0.30.7",
+  "mlx-lm>=0.30.7",
+  "mlx-vlm>=0.4.4",
   "mlx-metal>=0.30.6",
   "nodeenv>=1.9.1",
   "numpy>=2.3.3",
@@ -74,6 +75,7 @@ generate-context-files = "generate_context_files:main"
 ollama-api-benchmark = "ollama_api_benchmark:main"
 ollama-cli-benchmark = "ollama_cli_benchmark:main"
 mlx-benchmark = "mlx_benchmark:main"
+mlx-vlm-benchmark = "mlx_vlm_benchmark:main"
 mlx-distributed-benchmark = "mlx_distributed_benchmark:main"
 llamacpp-benchmark = "llamacpp_benchmark:main"
 lmstudio-benchmark = "lmstudio_benchmark:main"
@@ -99,6 +101,7 @@ py-modules = [
   "llamacpp_benchmark",
   "lmstudio_benchmark",
   "mlx_benchmark",
+  "mlx_vlm_benchmark",
   "mlx_distributed_benchmark",
   "ollama_api_benchmark",
   "ollama_cli_benchmark",

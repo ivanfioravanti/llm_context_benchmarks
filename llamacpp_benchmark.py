@@ -62,7 +62,7 @@ def get_server_info(server_url: str) -> Dict:
 
 
 def benchmark_llamacpp(
-    server_url: str, context_file: Path, max_tokens: int = 200, timeout: int = 3600
+    server_url: str, context_file: Path, max_tokens: int = 128, timeout: int = 3600
 ) -> Optional[Dict]:
     """Benchmark llama.cpp server with a given context file.
 

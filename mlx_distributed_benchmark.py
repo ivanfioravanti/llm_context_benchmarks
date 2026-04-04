@@ -75,7 +75,7 @@ def run_benchmark(
     launcher: str = "mlx.launch",
     launch_env: Optional[List[str]] = None,
     pipeline: bool = False,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     timeout: int = 1800,
 ) -> Optional[Dict]:
     """Run one distributed MLX benchmark for a context file."""

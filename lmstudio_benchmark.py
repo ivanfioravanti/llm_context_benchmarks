@@ -80,7 +80,7 @@ def get_server_info(server_url):
     return {"model": "lmstudio-model"}
 
 
-def benchmark_lmstudio(server_url, context_file, max_tokens=200, model_name=None, timeout=300):
+def benchmark_lmstudio(server_url, context_file, max_tokens=128, model_name=None, timeout=300):
     """Benchmark LM Studio server with a given context file using native API.
 
     Args:
@@ -199,8 +199,8 @@ def main():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=200,
-        help="Maximum tokens to generate (default: 200)",
+        default=128,
+        help="Maximum tokens to generate (default: 128)",
     )
     parser.add_argument(
         "--save-responses",

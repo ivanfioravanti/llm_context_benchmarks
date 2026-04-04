@@ -122,7 +122,7 @@ def run_benchmark(
     model,
     tokenizer,
     context_file: Path,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     ignore_chat_template: bool = False,
 ) -> Optional[Dict]:
     """Run benchmark for a single context file using mlx_lm.stream_generate."""

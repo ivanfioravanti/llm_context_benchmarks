@@ -21,7 +21,7 @@ import benchmark_common as common
 
 
 def run_benchmark(
-    model_name: str, context_file: Path, max_tokens: int = 200
+    model_name: str, context_file: Path, max_tokens: int = 128
 ) -> Optional[Dict]:
     """Run Ollama benchmark for a given context file.
     

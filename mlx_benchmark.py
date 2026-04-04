@@ -148,7 +148,7 @@ def run_benchmark(
     tokenizer,
     context_file: Path,
     kv_bit: Optional[int] = None,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     max_kv_size: Optional[int] = None,
     ignore_chat_template: bool = False,
     chat_template_config: Optional[str] = None,
@@ -287,7 +287,7 @@ def run_cached_benchmark(
     tokenizer,
     context_files: List[Path],
     kv_bit: Optional[int] = None,
-    max_tokens: int = 200,
+    max_tokens: int = 128,
     max_kv_size: Optional[int] = None,
     ignore_chat_template: bool = False,
     chat_template_config: Optional[str] = None,
@@ -491,7 +491,7 @@ def run_batch_benchmark(
     tokenizer,
     batch_sizes: List[int],
     prompt_tokens: int = 2048,
-    gen_tokens: int = 256,
+    gen_tokens: int = 128,
     num_trials: int = 3,
     vocab_size: Optional[int] = None,
 ) -> List[Dict]:
@@ -645,8 +645,8 @@ def main() -> int:
     parser.add_argument(
         "--batch-gen-tokens",
         type=int,
-        default=256,
-        help="Number of tokens to generate per sequence in batch benchmark (default: 256)",
+        default=128,
+        help="Number of tokens to generate per sequence in batch benchmark (default: 128)",
     )
     parser.add_argument(
         "--batch-trials",

@@ -31,9 +31,15 @@ def generate_context_file(source_text, target_tokens, output_file, encoding_name
     print(f"Target: {target_tokens} tokens for {output_file}")
 
     # Always start from the beginning and take up to target_tokens
-    # If source is shorter than target, use all of it
-    tokens_to_use = min(target_tokens, source_token_count)
-    target_token_ids = source_tokens[:tokens_to_use]
+    # If source is shorter than target, loop it by repeating from the start
+    if source_token_count >= target_tokens:
+        target_token_ids = source_tokens[:target_tokens]
+    else:
+        repeats = target_tokens // source_token_count
+        remainder = target_tokens % source_token_count
+        target_token_ids = source_tokens * repeats + source_tokens[:remainder]
+        print(f"  Note: Source text ({source_token_count} tokens) looped {repeats + 1}x to reach {target_tokens}")
+
     result_text = encoding.decode(target_token_ids)
 
     # Verify token count
@@ -44,9 +50,6 @@ def generate_context_file(source_text, target_tokens, output_file, encoding_name
         f.write(result_text)
 
     print(f"  Created {output_file} with {final_count} tokens")
-
-    if source_token_count < target_tokens:
-        print(f"  Note: Source text only has {source_token_count} tokens, file is shorter than target {target_tokens}")
 
     return final_count
 
@@ -59,8 +62,8 @@ def main():
     parser.add_argument(
         "--sizes",
         type=str,
-        default="2,4,8,16,32,64,128",
-        help="Comma-separated list of sizes in thousands of tokens (default: 2,4,8,16,32,64,128)",
+        default="2,4,8,16,32,64,128,256",
+        help="Comma-separated list of sizes in thousands of tokens (default: 2,4,8,16,32,64,128,256)",
     )
     parser.add_argument(
         "--encoding",

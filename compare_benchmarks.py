@@ -54,7 +54,7 @@ def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
 def _extract_quantization(model_name: str) -> str:
     """Extract quantization info from model name (e.g. 8bit, 4-bit, Q4_K_M, fp16, int8)."""
     for pattern in [
-        r"(?<![a-zA-Z])(\d+[-]?bit)(?![a-zA-Z])",   # 2bit 4bit 6bit 8bit 4-bit …
+        r"(?<![a-zA-Z])(\d+[-]?bit)(?![a-zA-Z])",  # 2bit 4bit 6bit 8bit 4-bit …
         r"(?<![a-zA-Z])(Q\d+(?:[_-][\w]+)*)(?![\w])",  # Q4_0 Q4_K_M Q8_0 …
         r"(?<![a-zA-Z])(fp16|bf16|fp32|f16|f32|int4|int8)(?![\w])",  # float/int types
     ]:
@@ -154,28 +154,16 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     """Create comparison charts from multiple benchmark results."""
 
     # Check if any benchmark has memory data
-    has_memory_data = any(
-        any(r.get("peak_memory_gb", 0) > 0 for r in data["results"])
-        for data in benchmark_data
-    )
+    has_memory_data = any(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
 
     # Check if any benchmark has perplexity data
-    has_perplexity_data = any(
-        data.get("perplexity_data") is not None
-        for data in benchmark_data
-    )
+    has_perplexity_data = any(data.get("perplexity_data") is not None for data in benchmark_data)
 
     # Check if any benchmark has batch data
-    has_batch_data = any(
-        data.get("batch_data") is not None
-        for data in benchmark_data
-    )
+    has_batch_data = any(data.get("batch_data") is not None for data in benchmark_data)
 
     # Check if any benchmark has cached KV results
-    has_cached_data = any(
-        bool(data.get("cached_results"))
-        for data in benchmark_data
-    )
+    has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
 
     # Set up the plot style
     plt.style.use("default")
@@ -206,7 +194,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
 
     num_rows = (num_plots + 1) // 2
     cols = 2 if num_plots > 1 else 1
-    
+
     fig, axes_flat = plt.subplots(num_rows, cols, figsize=(8 * cols, 5.5 * num_rows))
     axes_all = np.array(axes_flat).flatten()
 
@@ -216,10 +204,18 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
 
     # Colors for different benchmarks
     readable_colors = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
     ]
-    colors = readable_colors[:len(benchmark_data)]
+    colors = readable_colors[: len(benchmark_data)]
     if len(benchmark_data) > len(readable_colors):
         colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
 
@@ -245,13 +241,21 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         for ctx in context_sizes:
             context_nums.append(float(ctx[:-1]) * 1000 if ctx.endswith("k") else int(ctx))
 
-        sorted_data = sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory))
+        sorted_data = sorted(
+            zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory)
+        )
         cn, cs, pp, gn, tt, tf, pm = zip(*sorted_data)
-        all_series.append({
-            "context_nums": cn, "context_labels": cs,
-            "prompt_tps": pp, "generation_tps": gn,
-            "total_time": tt, "ttft": tf, "memory": pm,
-        })
+        all_series.append(
+            {
+                "context_nums": cn,
+                "context_labels": cs,
+                "prompt_tps": pp,
+                "generation_tps": gn,
+                "total_time": tt,
+                "ttft": tf,
+                "memory": pm,
+            }
+        )
 
     # Markers for each series
     markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
@@ -301,13 +305,27 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                     ppl_errors.append(ppl_data.get("std_error", 0))
                     ppl_colors.append(colors[i])
             if ppl_values:
-                bars = ax.bar(range(len(ppl_values)), ppl_values, yerr=ppl_errors,
-                              color=ppl_colors, alpha=0.8, capsize=5, width=0.6)
+                bars = ax.bar(
+                    range(len(ppl_values)),
+                    ppl_values,
+                    yerr=ppl_errors,
+                    color=ppl_colors,
+                    alpha=0.8,
+                    capsize=5,
+                    width=0.6,
+                )
                 ax.set_xticks(range(len(ppl_names)))
                 ax.set_xticklabels(ppl_names, rotation=30, ha="right", fontsize=9)
                 for bar, val in zip(bars, ppl_values):
-                    ax.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(),
-                            f"{val:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        bar.get_height(),
+                        f"{val:.2f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=10,
+                        fontweight="bold",
+                    )
             continue
 
         if key == "inc_prompt_tps":
@@ -320,11 +338,26 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 x_vals = [r["context_size"] for r in sorted_cached]
                 y_vals = [r.get("incremental_prompt_tps", 0) for r in sorted_cached]
                 marker = markers[i % len(markers)]
-                ax.plot(x_vals, y_vals, "--", marker=marker, linewidth=2,
-                        label=clean_names[i], color=colors[i], markersize=6)
+                ax.plot(
+                    x_vals,
+                    y_vals,
+                    "--",
+                    marker=marker,
+                    linewidth=2,
+                    label=clean_names[i],
+                    color=colors[i],
+                    markersize=6,
+                )
                 for x, y in zip(x_vals, y_vals):
-                    ax.annotate(f"{y:.1f}", (x, y), textcoords="offset points",
-                                xytext=(0, 8), ha="center", fontsize=7, color=colors[i])
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
             ax.set_xlabel("Context Size")
             ax.tick_params(axis="x", rotation=45)
             ax.legend(fontsize=9)
@@ -342,8 +375,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 batch_sizes = [r["batch_size"] for r in batch]
                 batch_tps = [r[data_key] for r in batch]
                 marker = markers[i % len(markers)]
-                ax.plot(batch_sizes, batch_tps, marker=marker, linewidth=2,
-                        label=clean_names[i], color=colors[i])
+                ax.plot(batch_sizes, batch_tps, marker=marker, linewidth=2, label=clean_names[i], color=colors[i])
                 for x, y in zip(batch_sizes, batch_tps):
                     ax.annotate(
                         f"{y:.1f}",
@@ -367,8 +399,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
             x_vals = series["context_labels"]
             y_vals = series[key]
             marker = markers[i % len(markers)]
-            ax.plot(x_vals, y_vals, marker=marker, linewidth=2,
-                    label=clean_names[i], color=colors[i], markersize=6)
+            ax.plot(x_vals, y_vals, marker=marker, linewidth=2, label=clean_names[i], color=colors[i], markersize=6)
             # Add value annotations
             for x, y in zip(x_vals, y_vals):
                 if key == "ttft":
@@ -396,9 +427,17 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     # Single shared legend at the top of the figure
     handles, labels = axes_all[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=min(len(handles), 4),
-                   fontsize=10, bbox_to_anchor=(0.5, 1.0), frameon=True,
-                   fancybox=True, shadow=True)
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=min(len(handles), 4),
+            fontsize=10,
+            bbox_to_anchor=(0.5, 1.0),
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+        )
 
     fig.suptitle("LLM Benchmark Comparison", fontsize=16, fontweight="bold", y=1.03)
     plt.tight_layout(rect=[0, 0, 1, 0.97])
@@ -495,39 +534,45 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         if not results:
             continue
         for r in results:
-            detailed_data.append({
-                "Model": display_name,
-                "Context": r["context_size"],
-                "Prompt TPS": round(r.get("prompt_tps", 0), 2),
-                "Generation TPS": round(r.get("generation_tps", 0), 2),
-                "Total Time": round(r.get("total_time", 0), 2),
-                "TTFT": round(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)), 2),
-                "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
-            })
+            detailed_data.append(
+                {
+                    "Model": display_name,
+                    "Context": r["context_size"],
+                    "Prompt TPS": round(r.get("prompt_tps", 0), 2),
+                    "Generation TPS": round(r.get("generation_tps", 0), 2),
+                    "Total Time": round(r.get("total_time", 0), 2),
+                    "TTFT": round(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)), 2),
+                    "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
+                }
+            )
         # Add batch data if present
         batch = data.get("batch_data")
         if batch:
             for b in batch:
-                detailed_data.append({
-                    "Model": display_name,
-                    "Context": f"batch_{b['batch_size']}",
-                    "Prompt TPS": round(b.get("prompt_tps", 0), 2),
-                    "Generation TPS": round(b.get("generation_tps", 0), 2),
-                    "Total Time": "",
-                    "TTFT": "",
-                    "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
-                })
+                detailed_data.append(
+                    {
+                        "Model": display_name,
+                        "Context": f"batch_{b['batch_size']}",
+                        "Prompt TPS": round(b.get("prompt_tps", 0), 2),
+                        "Generation TPS": round(b.get("generation_tps", 0), 2),
+                        "Total Time": "",
+                        "TTFT": "",
+                        "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
+                    }
+                )
         # Add cached KV data if present
         for r in data.get("cached_results", []):
-            detailed_data.append({
-                "Model": display_name,
-                "Context": f"{r['context_size']}_cached",
-                "Prompt TPS": round(r.get("incremental_prompt_tps", 0), 2),
-                "Generation TPS": round(r.get("generation_tps", 0), 2),
-                "Total Time": round(r.get("total_time", 0), 2),
-                "TTFT": round(r.get("time_to_first_token", 0), 2),
-                "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
-            })
+            detailed_data.append(
+                {
+                    "Model": display_name,
+                    "Context": f"{r['context_size']}_cached",
+                    "Prompt TPS": round(r.get("incremental_prompt_tps", 0), 2),
+                    "Generation TPS": round(r.get("generation_tps", 0), 2),
+                    "Total Time": round(r.get("total_time", 0), 2),
+                    "TTFT": round(r.get("time_to_first_token", 0), 2),
+                    "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
+                }
+            )
 
     if detailed_data:
         detailed_df = pd.DataFrame(detailed_data)
@@ -577,6 +622,212 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     return csv_path, table_path
 
 
+def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
+    """Create a styled comparison table image comparing benchmarks side by side.
+
+    When exactly two benchmarks are compared, produces a detailed table with
+    speedup ratios and memory savings — similar to academic comparison tables.
+    For 3+ benchmarks, shows columns for each run.
+    """
+    if len(benchmark_data) < 2:
+        print("Need at least 2 benchmarks for comparison table image.")
+        return None
+
+    # Collect all context sizes across benchmarks
+    all_contexts = set()
+    for data in benchmark_data:
+        for r in data["results"]:
+            all_contexts.add(r["context_size"])
+
+    def ctx_sort_key(ctx):
+        return float(ctx.replace("k", "")) if ctx.endswith("k") else float(ctx)
+
+    sorted_contexts = sorted(all_contexts, key=ctx_sort_key)
+
+    # Build lookup: benchmark_index -> context_size -> result
+    lookups = []
+    for data in benchmark_data:
+        lookup = {}
+        for r in data["results"]:
+            lookup[r["context_size"]] = r
+        lookups.append(lookup)
+
+    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+
+    has_memory = any(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
+
+    n_benchmarks = len(benchmark_data)
+    is_pair = n_benchmarks == 2
+
+    # Use short aliases for column headers, full names go in the subtitle
+    aliases = [chr(ord("A") + i) for i in range(n_benchmarks)]
+
+    # Build column structure
+    col_labels = ["Context"]
+    for alias in aliases:
+        col_labels.append(f"Prefill\n{alias}")
+    if is_pair:
+        col_labels.append("Prefill\nSpeedup")
+    for alias in aliases:
+        col_labels.append(f"Decode\n{alias}")
+    if is_pair:
+        col_labels.append("Decode\nSpeedup")
+    if has_memory:
+        for alias in aliases:
+            col_labels.append(f"Mem (GB)\n{alias}")
+        if is_pair:
+            col_labels.append("Mem\nSaved")
+
+    n_cols = len(col_labels)
+
+    # Build row data
+    rows = []
+    for ctx in sorted_contexts:
+        row = [ctx]
+        results = [lookups[i].get(ctx) for i in range(n_benchmarks)]
+
+        # Prefill TPS
+        prefill_vals = [r.get("prompt_tps", 0) if r else 0 for r in results]
+        for v in prefill_vals:
+            row.append(f"{v:.1f}" if v > 0 else "\u2014")
+        if is_pair and prefill_vals[0] > 0 and prefill_vals[1] > 0:
+            row.append(f"{prefill_vals[1] / prefill_vals[0]:.2f}x")
+        elif is_pair:
+            row.append("\u2014")
+
+        # Decode TPS
+        decode_vals = [r.get("generation_tps", 0) if r else 0 for r in results]
+        for v in decode_vals:
+            row.append(f"{v:.1f}" if v > 0 else "\u2014")
+        if is_pair and decode_vals[0] > 0 and decode_vals[1] > 0:
+            row.append(f"{decode_vals[1] / decode_vals[0]:.2f}x")
+        elif is_pair:
+            row.append("\u2014")
+
+        # Memory
+        if has_memory:
+            mem_vals = [r.get("peak_memory_gb", 0) if r else 0 for r in results]
+            for v in mem_vals:
+                row.append(f"{v:.2f}" if v > 0 else "\u2014")
+            if is_pair and mem_vals[0] > 0 and mem_vals[1] > 0:
+                saved_pct = (mem_vals[0] - mem_vals[1]) / mem_vals[0] * 100
+                row.append(f"{saved_pct:+.0f}%")
+            elif is_pair:
+                row.append("\u2014")
+
+        rows.append(row)
+
+    # --- Render with matplotlib ---
+    fig_w = max(14, n_cols * 1.6)
+    fig_h = max(3, (len(rows) + 2) * 0.55)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off")
+
+    bg_color = "#1a1a2e"
+    header_bg = "#16213e"
+    row_even = "#1a1a2e"
+    row_odd = "#0f3460"
+    text_color = "#e0e0e0"
+    header_text = "#ffffff"
+    accent_green = "#00b894"
+    accent_red = "#d63031"
+
+    fig.patch.set_facecolor(bg_color)
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=col_labels,
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.6)
+
+    # Style header
+    for col_idx in range(n_cols):
+        cell = table[0, col_idx]
+        cell.set_facecolor(header_bg)
+        cell.set_text_props(color=header_text, fontweight="bold", fontsize=9)
+        cell.set_edgecolor("#2d3436")
+        cell.set_linewidth(0.5)
+
+    # Style data rows
+    for row_idx in range(len(rows)):
+        bg = row_even if row_idx % 2 == 0 else row_odd
+        for col_idx in range(n_cols):
+            cell = table[row_idx + 1, col_idx]
+            cell.set_facecolor(bg)
+            cell.set_text_props(color=text_color, fontsize=10)
+            cell.set_edgecolor("#2d3436")
+            cell.set_linewidth(0.5)
+
+            cell_text = rows[row_idx][col_idx]
+
+            # Color speedup cells
+            if is_pair and col_idx in (n_benchmarks + 1, 2 * n_benchmarks + 2):
+                if cell_text.endswith("x") and cell_text != "\u2014":
+                    val = float(cell_text[:-1])
+                    if val > 1.01:
+                        cell.set_text_props(color=accent_green, fontweight="bold")
+                    elif val < 0.99:
+                        cell.set_text_props(color=accent_red, fontweight="bold")
+
+            # Color memory saved cells
+            if is_pair and has_memory and col_idx == n_cols - 1:
+                if cell_text.endswith("%") and cell_text != "\u2014":
+                    val = float(cell_text[:-1])
+                    if val > 0:
+                        cell.set_facecolor(accent_green)
+                        cell.set_text_props(color="white", fontweight="bold")
+                    elif val < 0:
+                        cell.set_facecolor(accent_red)
+                        cell.set_text_props(color="white", fontweight="bold")
+
+    # Title with hardware info
+    hw = benchmark_data[0].get("hardware_info", {})
+    chip = hw.get("chip", "Unknown").replace("Apple ", "")
+    mem_gb = hw.get("memory_gb", "")
+    title_parts = [chip]
+    if mem_gb:
+        title_parts.append(f"{mem_gb} GB")
+    title = " \u00b7 ".join(title_parts)
+
+    fig.text(
+        0.5,
+        0.98,
+        title,
+        ha="center",
+        va="top",
+        fontsize=13,
+        fontweight="bold",
+        color=header_text,
+        fontfamily="monospace",
+        transform=fig.transFigure,
+    )
+
+    # Legend mapping aliases to benchmark names
+    legend_lines = [f"{aliases[i]} = {clean_names[i]}" for i in range(n_benchmarks)]
+    fig.text(
+        0.5,
+        0.94,
+        "    ".join(legend_lines),
+        ha="center",
+        va="top",
+        fontsize=9,
+        color="#aaaaaa",
+        fontfamily="monospace",
+        transform=fig.transFigure,
+    )
+
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    table_img_path = output_dir / "comparison_table.png"
+    plt.savefig(table_img_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"Comparison table image saved to: {table_img_path}")
+    return table_img_path
+
+
 def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     """Create a performance heatmap with a separate section per quantization level.
 
@@ -611,22 +862,26 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         avg_gen_tps = float(np.mean([r.get("generation_tps", 0) for r in results]))
 
         cached = data.get("cached_results", [])
-        avg_inc_prompt_tps = float(np.mean([r.get("incremental_prompt_tps", 0) for r in cached])) if cached else float("nan")
+        avg_inc_prompt_tps = (
+            float(np.mean([r.get("incremental_prompt_tps", 0) for r in cached])) if cached else float("nan")
+        )
 
         batch = data.get("batch_data")
         peak_batch_prompt = float(max(r["prompt_tps"] for r in batch)) if batch else float("nan")
         peak_batch_gen = float(max(r["generation_tps"] for r in batch)) if batch else float("nan")
 
-        rows.append({
-            "quant": quant,
-            "chip_short": chip_short,
-            "base_model": base_model,
-            "avg_prompt_tps": avg_prompt_tps,
-            "avg_gen_tps": avg_gen_tps,
-            "avg_inc_prompt_tps": avg_inc_prompt_tps,
-            "peak_batch_prompt_tps": peak_batch_prompt,
-            "peak_batch_gen_tps": peak_batch_gen,
-        })
+        rows.append(
+            {
+                "quant": quant,
+                "chip_short": chip_short,
+                "base_model": base_model,
+                "avg_prompt_tps": avg_prompt_tps,
+                "avg_gen_tps": avg_gen_tps,
+                "avg_inc_prompt_tps": avg_inc_prompt_tps,
+                "peak_batch_prompt_tps": peak_batch_prompt,
+                "peak_batch_gen_tps": peak_batch_gen,
+            }
+        )
 
     if not rows:
         print("No data available for heatmap.")
@@ -642,11 +897,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     # Filter out columns where ALL values are NaN across ALL groups
     active_col_indices = []
     for col_idx, key in enumerate(metric_keys):
-        has_data = any(
-            not np.isnan(row[key])
-            for group_rows in quant_groups.values()
-            for row in group_rows
-        )
+        has_data = any(not np.isnan(row[key]) for group_rows in quant_groups.values() for row in group_rows)
         if has_data:
             active_col_indices.append(col_idx)
 
@@ -672,7 +923,9 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     fig_h = max(5, total_data_rows * 2.0 + n_groups * 1.5)
 
     fig, axes = plt.subplots(
-        n_groups, 1, figsize=(fig_w, fig_h),
+        n_groups,
+        1,
+        figsize=(fig_w, fig_h),
         gridspec_kw={"height_ratios": height_ratios, "hspace": 0.65},
     )
     if n_groups == 1:
@@ -727,8 +980,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
                 else:
                     cell_text = f"{pct:.0f}%\n({raw_val:.1f})"
                     text_color = "white" if pct < 25 else "black"
-                ax.text(j, i, cell_text, ha="center", va="center",
-                        fontsize=9, color=text_color, fontweight="bold")
+                ax.text(j, i, cell_text, ha="center", va="center", fontsize=9, color=text_color, fontweight="bold")
 
         cbar = plt.colorbar(im, ax=ax, label="% of Best", shrink=0.8, pad=0.02)
         cbar.ax.tick_params(labelsize=9)
@@ -736,12 +988,16 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     if model_title:
         fig.suptitle(
             f"Performance Heatmap — {model_title}\n(% of best per quantization group)",
-            fontweight="bold", fontsize=14, y=1.01,
+            fontweight="bold",
+            fontsize=14,
+            y=1.01,
         )
     else:
         fig.suptitle(
             "Performance Heatmap (% of best per quantization group)",
-            fontweight="bold", fontsize=14, y=1.01,
+            fontweight="bold",
+            fontsize=14,
+            y=1.01,
         )
 
     plt.tight_layout()
@@ -805,7 +1061,16 @@ Examples:
     parser.add_argument(
         "--charts",
         nargs="+",
-        choices=["prompt_tps", "generation_tps", "ttft", "memory", "inc_prompt_tps", "perplexity", "batch_prompt", "batch_gen"],
+        choices=[
+            "prompt_tps",
+            "generation_tps",
+            "ttft",
+            "memory",
+            "inc_prompt_tps",
+            "perplexity",
+            "batch_prompt",
+            "batch_gen",
+        ],
         help="Specific charts to generate (default: all available)",
     )
 
@@ -845,6 +1110,7 @@ Examples:
     # Create comparison charts and tables
     create_comparison_charts(benchmark_data, output_dir, charts=args.charts)
     create_comparison_table(benchmark_data, output_dir)
+    create_comparison_table_image(benchmark_data, output_dir)
     create_heatmap(benchmark_data, output_dir)
 
     print(f"\n✅ Comparison complete! Results saved to: {output_dir}/")
