@@ -625,9 +625,9 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
 def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     """Create a styled comparison table image comparing benchmarks side by side.
 
-    When exactly two benchmarks are compared, produces a detailed table with
-    speedup ratios and memory savings — similar to academic comparison tables.
-    For 3+ benchmarks, shows columns for each run.
+    Each value cell shows the raw number plus a percentage vs the best value
+    in its group for that row.  The best value gets a green highlight; others
+    show how far behind they are.  Works for 2+ benchmarks.
     """
     if len(benchmark_data) < 2:
         print("Need at least 2 benchmarks for comparison table image.")
@@ -653,73 +653,70 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         lookups.append(lookup)
 
     clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
-
     has_memory = any(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
-
     n_benchmarks = len(benchmark_data)
-    is_pair = n_benchmarks == 2
-
-    # Use short aliases for column headers, full names go in the subtitle
     aliases = [chr(ord("A") + i) for i in range(n_benchmarks)]
 
-    # Build column structure
+    # Build column structure and track which columns belong to which metric group.
+    # A "group" is a set of columns (one per benchmark) that should be compared
+    # against each other to find the best value per row.
+    # higher_is_better: True for TPS metrics, False for memory.
     col_labels = ["Context"]
+    # groups: list of (start_col, end_col_exclusive, higher_is_better)
+    groups = []
+
+    start = len(col_labels)
     for alias in aliases:
         col_labels.append(f"Prefill\n{alias}")
-    if is_pair:
-        col_labels.append("Prefill\nSpeedup")
+    groups.append((start, start + n_benchmarks, True))
+
+    start = len(col_labels)
     for alias in aliases:
         col_labels.append(f"Decode\n{alias}")
-    if is_pair:
-        col_labels.append("Decode\nSpeedup")
+    groups.append((start, start + n_benchmarks, True))
+
     if has_memory:
+        start = len(col_labels)
         for alias in aliases:
             col_labels.append(f"Mem (GB)\n{alias}")
-        if is_pair:
-            col_labels.append("Mem\nSaved")
+        groups.append((start, start + n_benchmarks, False))
 
     n_cols = len(col_labels)
 
-    # Build row data
-    rows = []
+    # Build row data (raw numeric values parallel to cell text)
+    rows = []  # display strings
+    raw_values = []  # float values for comparison (0 means missing)
+
     for ctx in sorted_contexts:
         row = [ctx]
+        raw_row = [0.0]  # context column placeholder
         results = [lookups[i].get(ctx) for i in range(n_benchmarks)]
 
         # Prefill TPS
         prefill_vals = [r.get("prompt_tps", 0) if r else 0 for r in results]
         for v in prefill_vals:
             row.append(f"{v:.1f}" if v > 0 else "\u2014")
-        if is_pair and prefill_vals[0] > 0 and prefill_vals[1] > 0:
-            row.append(f"{prefill_vals[1] / prefill_vals[0]:.2f}x")
-        elif is_pair:
-            row.append("\u2014")
+            raw_row.append(v)
 
         # Decode TPS
         decode_vals = [r.get("generation_tps", 0) if r else 0 for r in results]
         for v in decode_vals:
             row.append(f"{v:.1f}" if v > 0 else "\u2014")
-        if is_pair and decode_vals[0] > 0 and decode_vals[1] > 0:
-            row.append(f"{decode_vals[1] / decode_vals[0]:.2f}x")
-        elif is_pair:
-            row.append("\u2014")
+            raw_row.append(v)
 
         # Memory
         if has_memory:
             mem_vals = [r.get("peak_memory_gb", 0) if r else 0 for r in results]
             for v in mem_vals:
                 row.append(f"{v:.2f}" if v > 0 else "\u2014")
-            if is_pair and mem_vals[0] > 0 and mem_vals[1] > 0:
-                saved_pct = (mem_vals[0] - mem_vals[1]) / mem_vals[0] * 100
-                row.append(f"{saved_pct:+.0f}%")
-            elif is_pair:
-                row.append("\u2014")
+                raw_row.append(v)
 
         rows.append(row)
+        raw_values.append(raw_row)
 
     # --- Render with matplotlib ---
-    fig_w = max(14, n_cols * 1.6)
-    fig_h = max(3, (len(rows) + 2) * 0.55)
+    fig_w = max(14, n_cols * 1.8)
+    fig_h = max(3, (len(rows) + 2) * 0.65)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.axis("off")
 
@@ -730,6 +727,7 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     text_color = "#e0e0e0"
     header_text = "#ffffff"
     accent_green = "#00b894"
+    accent_green_dim = "#1e5c4a"
     accent_red = "#d63031"
 
     fig.patch.set_facecolor(bg_color)
@@ -742,7 +740,7 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1, 1.6)
+    table.scale(1, 1.8)
 
     # Style header
     for col_idx in range(n_cols):
@@ -752,9 +750,21 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         cell.set_edgecolor("#2d3436")
         cell.set_linewidth(0.5)
 
-    # Style data rows
+    # Style data rows with best-value highlighting
     for row_idx in range(len(rows)):
         bg = row_even if row_idx % 2 == 0 else row_odd
+
+        # Pre-compute best value per group for this row
+        group_best = {}  # group_start -> (best_val, best_col)
+        for g_start, g_end, higher in groups:
+            vals = [(raw_values[row_idx][c], c) for c in range(g_start, g_end) if raw_values[row_idx][c] > 0]
+            if vals:
+                if higher:
+                    best_val, best_col = max(vals, key=lambda x: x[0])
+                else:
+                    best_val, best_col = min(vals, key=lambda x: x[0])
+                group_best[g_start] = (best_val, best_col)
+
         for col_idx in range(n_cols):
             cell = table[row_idx + 1, col_idx]
             cell.set_facecolor(bg)
@@ -762,27 +772,32 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
             cell.set_edgecolor("#2d3436")
             cell.set_linewidth(0.5)
 
-            cell_text = rows[row_idx][col_idx]
+            # Check if this column belongs to a group
+            for g_start, g_end, higher in groups:
+                if g_start <= col_idx < g_end:
+                    val = raw_values[row_idx][col_idx]
+                    if val <= 0 or g_start not in group_best:
+                        break
+                    best_val, best_col = group_best[g_start]
+                    base_text = rows[row_idx][col_idx]
 
-            # Color speedup cells
-            if is_pair and col_idx in (n_benchmarks + 1, 2 * n_benchmarks + 2):
-                if cell_text.endswith("x") and cell_text != "\u2014":
-                    val = float(cell_text[:-1])
-                    if val > 1.01:
-                        cell.set_text_props(color=accent_green, fontweight="bold")
-                    elif val < 0.99:
-                        cell.set_text_props(color=accent_red, fontweight="bold")
-
-            # Color memory saved cells
-            if is_pair and has_memory and col_idx == n_cols - 1:
-                if cell_text.endswith("%") and cell_text != "\u2014":
-                    val = float(cell_text[:-1])
-                    if val > 0:
-                        cell.set_facecolor(accent_green)
-                        cell.set_text_props(color="white", fontweight="bold")
-                    elif val < 0:
-                        cell.set_facecolor(accent_red)
-                        cell.set_text_props(color="white", fontweight="bold")
+                    if col_idx == best_col:
+                        # Best value — green highlight
+                        cell.set_facecolor(accent_green_dim)
+                        cell.set_text_props(color=accent_green, fontweight="bold", fontsize=10)
+                    else:
+                        # Show percentage difference from best
+                        if higher:
+                            pct = (val - best_val) / best_val * 100  # negative = worse
+                        else:
+                            pct = (best_val - val) / best_val * 100  # negative = worse (higher mem)
+                        pct_text = f"{pct:+.0f}%"
+                        cell.get_text().set_text(f"{base_text}\n{pct_text}")
+                        if pct < -5:
+                            cell.set_text_props(color="#ff7675", fontsize=9)
+                        else:
+                            cell.set_text_props(color="#b0b0b0", fontsize=9)
+                    break
 
     # Title with hardware info
     hw = benchmark_data[0].get("hardware_info", {})
@@ -808,19 +823,26 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
 
     # Legend mapping aliases to benchmark names
     legend_lines = [f"{aliases[i]} = {clean_names[i]}" for i in range(n_benchmarks)]
+    legend_text = "    ".join(legend_lines)
+    # Wrap long legends
+    if len(legend_text) > 120:
+        mid = len(legend_lines) // 2
+        line1 = "    ".join(legend_lines[:mid])
+        line2 = "    ".join(legend_lines[mid:])
+        legend_text = f"{line1}\n{line2}"
     fig.text(
         0.5,
         0.94,
-        "    ".join(legend_lines),
+        legend_text,
         ha="center",
         va="top",
-        fontsize=9,
+        fontsize=8,
         color="#aaaaaa",
         fontfamily="monospace",
         transform=fig.transFigure,
     )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     table_img_path = output_dir / "comparison_table.png"
     plt.savefig(table_img_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
