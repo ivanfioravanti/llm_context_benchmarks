@@ -35,6 +35,68 @@ def _clean_display_name(name: str) -> str:
     return re.sub(r"_\d{8,}$", "", name)
 
 
+# Known engine names used in output folder prefixes. Multi-word names are listed
+# first so longest-prefix matching picks e.g. "mlx_vlm" before "mlx".
+KNOWN_ENGINES = (
+    "ollama_api",
+    "ollama_cli",
+    "mlx_vlm",
+    "mlx-distributed",
+    "llamacpp_embed",
+    "openai_compat",
+    "deepseek",
+    "exo",
+    "grok",
+    "llamacpp",
+    "lmstudio",
+    "mlx",
+    "paroquant",
+    "vllm",
+)
+
+
+def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str]:
+    """Extract (engine, model) from a benchmark folder name.
+
+    Folder format: ``benchmark_{framework}_{model}_{machine}_{YYYYMMDD}_{HHMMSS}``
+    where ``{framework}`` may itself contain underscores (e.g. ``ollama_api``,
+    ``mlx_vlm``) and ``{machine}`` is omitted in older folders.
+    """
+    body = folder_name
+    if body.startswith("benchmark_"):
+        body = body[len("benchmark_") :]
+
+    # Strip trailing _YYYYMMDD_HHMMSS timestamp if present
+    body = re.sub(r"_\d{8}_\d{6}$", "", body)
+
+    # Identify the engine using a longest-prefix match against known names
+    engine = None
+    for known in KNOWN_ENGINES:
+        if body == known or body.startswith(known + "_"):
+            engine = known
+            body = body[len(known) :].lstrip("_")
+            break
+    if engine is None:
+        first_underscore = body.find("_")
+        if first_underscore == -1:
+            return body or "unknown", "unknown"
+        engine = body[:first_underscore]
+        body = body[first_underscore + 1 :]
+
+    # body is now "{model}" or "{model}_{machine}". Strip a trailing machine
+    # token if it matches the chip recorded in hardware_info or the Apple
+    # Silicon naming convention (e.g. M1, M2Max, M5Ultra).
+    chip_compact = re.sub(r"\s+", "", (hardware_info or {}).get("chip", "").replace("Apple ", ""))
+    if "_" in body:
+        head, tail = body.rsplit("_", 1)
+        if chip_compact and tail == chip_compact:
+            body = head
+        elif re.match(r"^M\d[A-Za-z0-9]*$", tail):
+            body = head
+
+    return engine, body or "unknown"
+
+
 def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
     """Strip quantization, hardware, and date tokens from model name to get the base model name."""
     base = model
@@ -103,14 +165,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
 
     # Extract engine and model from folder name
     folder_name = folder_path.name
-    parts = folder_name.split("_")
-    if len(parts) >= 3:
-        engine = parts[1]  # benchmark_ENGINE_model_timestamp
-        model_parts = parts[2:-1]  # Everything between engine and timestamp
-        model = "_".join(model_parts)
-    else:
-        engine = "unknown"
-        model = "unknown"
+    engine, model = _parse_folder_metadata(folder_name, hardware_info)
 
     # Read perplexity data if available
     perplexity_file = folder_path / "perplexity.json"
@@ -451,6 +506,108 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     return chart_path
 
 
+def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
+    """Create a focused 1x2 chart with only Prompt Processing and Generation speed."""
+
+    plt.style.use("default")
+
+    readable_colors = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
+    colors = readable_colors[: len(benchmark_data)]
+    if len(benchmark_data) > len(readable_colors):
+        colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
+
+    markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
+    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+
+    # Pre-extract and sort series per benchmark
+    all_series = []
+    for data in benchmark_data:
+        results = data["results"]
+        if not results:
+            all_series.append(None)
+            continue
+
+        context_sizes = [r["context_size"] for r in results]
+        prompt_tps = [r.get("prompt_tps", 0) for r in results]
+        generation_tps = [r.get("generation_tps", 0) for r in results]
+        context_nums = [float(c[:-1]) * 1000 if c.endswith("k") else int(c) for c in context_sizes]
+
+        cn, cs, pp, gn = zip(*sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps)))
+        all_series.append({"context_labels": cs, "prompt_tps": pp, "generation_tps": gn})
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
+    specs = [
+        ("prompt_tps", "Prompt Processing Speed"),
+        ("generation_tps", "Text Generation Speed"),
+    ]
+
+    for ax, (key, title) in zip(axes, specs):
+        ax.set_title(title, fontweight="bold", fontsize=13)
+        ax.set_ylabel("Tokens/sec")
+        ax.set_xlabel("Context Size")
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis="x", rotation=45)
+
+        for i, series in enumerate(all_series):
+            if series is None:
+                continue
+            x_vals = series["context_labels"]
+            y_vals = series[key]
+            ax.plot(
+                x_vals,
+                y_vals,
+                marker=markers[i % len(markers)],
+                linewidth=2,
+                label=clean_names[i],
+                color=colors[i],
+                markersize=6,
+            )
+            for x, y in zip(x_vals, y_vals):
+                ax.annotate(
+                    f"{y:.1f}",
+                    (x, y),
+                    textcoords="offset points",
+                    xytext=(0, 8),
+                    ha="center",
+                    fontsize=7,
+                    color=colors[i],
+                )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=min(len(handles), 4),
+            fontsize=10,
+            bbox_to_anchor=(0.5, 1.0),
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+        )
+
+    fig.suptitle("LLM Speed Comparison", fontsize=16, fontweight="bold", y=1.06)
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+
+    chart_path = output_dir / "comparison_speed_chart.png"
+    plt.savefig(chart_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Speed comparison chart saved to: {chart_path}")
+    return chart_path
+
+
 def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
     """Create a comparison table with key metrics in X post-friendly format."""
 
@@ -653,7 +810,10 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         lookups.append(lookup)
 
     clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
-    has_memory = any(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
+    # Only show the memory columns if every benchmark in the comparison reports
+    # peak memory — otherwise we end up with a half-empty column dominated by
+    # N/A cells from providers that don't measure it.
+    has_memory = all(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
     n_benchmarks = len(benchmark_data)
     aliases = [chr(ord("A") + i) for i in range(n_benchmarks)]
 
@@ -894,6 +1054,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
         rows.append(
             {
+                "engine": data.get("engine", ""),
                 "quant": quant,
                 "chip_short": chip_short,
                 "base_model": base_model,
@@ -980,11 +1141,21 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             ax.set_xticklabels([""] * n_cols)
             ax.tick_params(axis="x", length=0)
 
-        # Row labels: include model name only when multiple base models exist
+        # Row labels: include the engine when there is more than one engine in
+        # the group, otherwise rows for the same model on the same machine would
+        # collapse to identical labels (e.g. three "M5Max" rows).
+        engines_in_group = {r.get("engine", "") for r in group_rows}
+        multi_engine = len(engines_in_group) > 1
         if single_model:
-            row_labels = [r["chip_short"] for r in group_rows]
+            if multi_engine:
+                row_labels = [f"{r['engine']} / {r['chip_short']}" for r in group_rows]
+            else:
+                row_labels = [r["chip_short"] for r in group_rows]
         else:
-            row_labels = [f"{r['base_model']} / {r['chip_short']}" for r in group_rows]
+            if multi_engine:
+                row_labels = [f"{r['engine']}: {r['base_model']} / {r['chip_short']}" for r in group_rows]
+            else:
+                row_labels = [f"{r['base_model']} / {r['chip_short']}" for r in group_rows]
         ax.set_yticks(range(n_group_rows))
         ax.set_yticklabels(row_labels, fontsize=10)
 
@@ -1131,6 +1302,7 @@ Examples:
 
     # Create comparison charts and tables
     create_comparison_charts(benchmark_data, output_dir, charts=args.charts)
+    create_speed_chart(benchmark_data, output_dir)
     create_comparison_table(benchmark_data, output_dir)
     create_comparison_table_image(benchmark_data, output_dir)
     create_heatmap(benchmark_data, output_dir)

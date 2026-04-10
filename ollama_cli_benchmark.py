@@ -10,14 +10,90 @@ Usage:
 """
 
 import argparse
+import hashlib
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import benchmark_common as common
+
+
+def _derive_num_ctx(context_file: Path, max_tokens: int) -> int:
+    """Derive num_ctx for a context filename (stem like '64k' -> 65536)."""
+    ctx_k = float(context_file.stem.rstrip("k"))
+    expected_prompt_tokens = int(ctx_k * 1024)
+    return expected_prompt_tokens + max_tokens + 256
+
+
+def _create_temp_model(base_model: str, num_ctx: int, num_predict: int) -> str:
+    """Create a temporary ollama model that overrides num_ctx and num_predict.
+
+    The `ollama run` CLI has no flags for num_ctx or num_predict. The only way
+    to set them is via a Modelfile. We create a tiny Modelfile that points
+    FROM the base model and layers the parameter overrides on top — ollama
+    create is fast for this because it doesn't copy weights, just adds a
+    parameter layer to the manifest.
+    """
+    # Deterministic tag per (base, num_ctx, num_predict) so repeated benchmark
+    # runs reuse the same temp model instead of accumulating stale ones.
+    key = f"{base_model}:{num_ctx}:{num_predict}".encode()
+    tag = "benchmark-tmp-" + hashlib.md5(key).hexdigest()[:10]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".modelfile", delete=False) as f:
+        f.write(f"FROM {base_model}\n")
+        f.write(f"PARAMETER num_ctx {num_ctx}\n")
+        f.write(f"PARAMETER num_predict {num_predict}\n")
+        modelfile_path = f.name
+
+    try:
+        result = subprocess.run(
+            ["ollama", "create", tag, "-f", modelfile_path],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ollama create failed for temp model '{tag}': {result.stderr.strip()}"
+            )
+    finally:
+        try:
+            os.unlink(modelfile_path)
+        except OSError:
+            pass
+
+    return tag
+
+
+def _remove_temp_model(tag: str) -> None:
+    """Best-effort removal of a temporary ollama model."""
+    try:
+        subprocess.run(
+            ["ollama", "rm", tag],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        pass
+
+
+def _make_cache_buster() -> str:
+    """Generate a unique prefix string to bust Ollama's prompt cache.
+
+    Ollama reuses KV cache whenever a new prompt shares a prefix with the
+    previous request. For cold-prefill benchmarking, prepend a unique marker
+    so no two prompts share a prefix. ~20 chars / ~10 tokens — negligible
+    overhead relative to the real prompt.
+    """
+    import uuid
+
+    return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
 def parse_ollama_output(output: str) -> Dict:
@@ -138,15 +214,21 @@ def extract_generated_text(stdout: str, stderr: str, prompt: str) -> str:
 
 
 def run_cli_benchmark(
-    model_name: str, context_file: Path, max_tokens: int = 128
+    model_name: str,
+    context_file: Path,
+    cold_prefill: bool = True,
+    timeout: int = 3600,
 ) -> Optional[Dict]:
     """Run Ollama benchmark using CLI for a given context file.
-    
+
     Args:
-        model_name: Name of the Ollama model
+        model_name: Name of the Ollama model (expected to be a temp model with
+            num_ctx and num_predict parameters baked in via Modelfile)
         context_file: Path to the context file
-        max_tokens: Maximum tokens to generate
-        
+        cold_prefill: If True, prepend a unique cache-buster to the prompt so
+            Ollama's KV cache reuse doesn't inflate prompt-processing numbers
+        timeout: subprocess timeout in seconds
+
     Returns:
         Dictionary with benchmark results or None if failed
     """
@@ -156,74 +238,110 @@ def run_cli_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    # Count prompt tokens (approximate)
-    prompt_tokens = len(prompt.split())
+    # Bust Ollama's prompt cache by prepending a unique marker so no two
+    # prompts share a prefix. Adds ~10 tokens of overhead.
+    if cold_prefill:
+        prompt = _make_cache_buster() + prompt
 
-    # Prepare the command
-    cmd = ["ollama", "run", model_name, "--verbose", prompt]
+    # Pipe the prompt via stdin instead of passing it as argv. The old
+    # `ollama run model --verbose "prompt"` form hit ARG_MAX (~256KB on macOS)
+    # for anything above ~60k tokens. stdin has no size limit.
+    cmd = ["ollama", "run", model_name, "--verbose"]
 
-    # Start timing
     start_time = time.time()
 
     try:
-        # Run the command and capture output
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600
-        )  # 60 minute timeout
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
 
-        # Calculate total wall time
         total_wall_time = time.time() - start_time
 
-        # Parse the metrics from stderr (with --verbose, metrics go to stderr)
+        # Parse metrics from stderr (`--verbose` sends timings to stderr)
         metrics = parse_ollama_output(result.stderr)
 
         # Extract generated text from stdout
         generated_text = extract_generated_text(result.stdout, result.stderr, prompt)
 
-        # If we didn't get prompt eval rate from parsing, calculate it
+        # Derive prompt_eval_rate from duration + count if not in the regex output
         if (
             "prompt_eval_rate" not in metrics
-            and "prompt_eval_duration" in metrics
+            and metrics.get("prompt_eval_duration", 0) > 0
             and "prompt_eval_count" in metrics
         ):
-            if metrics["prompt_eval_duration"] > 0:
-                metrics["prompt_eval_rate"] = (
-                    metrics["prompt_eval_count"] / metrics["prompt_eval_duration"]
-                )
+            metrics["prompt_eval_rate"] = (
+                metrics["prompt_eval_count"] / metrics["prompt_eval_duration"]
+            )
 
-        # If we didn't get eval rate from parsing, calculate it
+        # Same for eval_rate
         if (
             "eval_rate" not in metrics
-            and "eval_duration" in metrics
+            and metrics.get("eval_duration", 0) > 0
             and "eval_count" in metrics
         ):
-            if metrics["eval_duration"] > 0:
-                metrics["eval_rate"] = metrics["eval_count"] / metrics["eval_duration"]
+            metrics["eval_rate"] = metrics["eval_count"] / metrics["eval_duration"]
 
-        # Ensure we have the required metrics
-        if "eval_count" not in metrics or "eval_rate" not in metrics:
-            print(f"Failed to parse required metrics from output")
-            print(f"Parsed metrics: {metrics}")
+        # Refuse to fabricate a prompt token count. If Ollama did not report
+        # one, the row is unreliable — return None rather than pretending
+        # len(prompt.split()) is a token count.
+        if "prompt_eval_count" not in metrics:
+            print("  ERROR: Ollama did not report prompt_eval_count. Skipping row.")
+            if result.stderr:
+                print(f"  stderr excerpt: {result.stderr[:500]}")
             return None
 
-        # Debug logging
+        if "eval_count" not in metrics or "eval_rate" not in metrics:
+            print("  ERROR: Failed to parse required metrics from output")
+            print(f"  Parsed metrics: {metrics}")
+            return None
+
+        prompt_eval_count = metrics["prompt_eval_count"]
+        prompt_eval_duration = metrics.get("prompt_eval_duration", 0)
+
+        # Tokenizer-independent truncation detection. Don't compare against
+        # the filename expectation — context files are generated with tiktoken
+        # cl100k_base and the model's native tokenizer (e.g. qwen) typically
+        # produces 10-20% fewer tokens for the same English text, which would
+        # trip a naive expected-count check. Use a char-to-token lower bound:
+        # if Ollama processed fewer tokens than file_chars / 10, it's
+        # genuinely dropping content.
+        file_chars = len(prompt)
+        min_plausible_tokens = file_chars // 10
+        if prompt_eval_count < min_plausible_tokens:
+            print(
+                f"  WARNING: processed {prompt_eval_count} prompt tokens from a "
+                f"{file_chars}-char file — well below the ~{min_plausible_tokens} "
+                f"tokens expected. Ollama likely truncated the prompt. Results "
+                f"for this row are INVALID."
+            )
+
         print(
-            f"  Prompt: {metrics.get('prompt_eval_count', 0)} tokens at {metrics.get('prompt_eval_rate', 0):.1f} t/s"
+            f"  Prompt: {prompt_eval_count} tokens at "
+            f"{metrics.get('prompt_eval_rate', 0):.1f} t/s"
         )
         print(
-            f"  Generation: {metrics.get('eval_count', 0)} tokens at {metrics.get('eval_rate', 0):.1f} t/s"
+            f"  Generation: {metrics.get('eval_count', 0)} tokens at "
+            f"{metrics.get('eval_rate', 0):.1f} t/s"
         )
+        if prompt_eval_duration > 0:
+            print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
         return {
-            "context_size": Path(context_file).stem,
-            "prompt_tokens": metrics.get("prompt_eval_count", prompt_tokens),
+            "context_size": context_file.stem,
+            "prompt_tokens": prompt_eval_count,
             "prompt_tps": metrics.get("prompt_eval_rate", 0),
             "generation_tokens": metrics.get("eval_count", 0),
             "generation_tps": metrics.get("eval_rate", 0),
             "total_time": total_wall_time,
             "eval_duration": metrics.get("eval_duration", 0),
-            "prompt_eval_duration": metrics.get("prompt_eval_duration", 0),
+            "prompt_eval_duration": prompt_eval_duration,
+            # Matches mlx_benchmark semantics: library-reported prefill duration.
+            "time_to_first_token": prompt_eval_duration,
             "generated_text": generated_text,
             "wall_time": total_wall_time,
         }
@@ -292,12 +410,180 @@ def check_model_available(model_name: str) -> bool:
         return True  # Try to proceed anyway
 
 
+def run_batch_benchmark(
+    temp_model: str,
+    batch_sizes: List[int],
+    prompt_tokens: int = 2048,
+    gen_tokens: int = 128,
+    num_trials: int = 3,
+    cold_prefill: bool = True,
+    timeout: int = 3600,
+) -> List[Dict]:
+    """Run batch benchmark by firing concurrent `ollama run` subprocesses.
+
+    This is the CLI analog of run_batch_benchmark in ollama_api_benchmark. Each
+    "concurrent request" is a separate `ollama run` subprocess that talks to
+    the same daemon, so the server-side continuous batching (controlled by
+    OLLAMA_NUM_PARALLEL) kicks in the same way it does for the API path —
+    just with per-subprocess startup overhead (~50-200ms) bolted on top.
+
+    IMPORTANT: the daemon must be started with OLLAMA_NUM_PARALLEL >=
+    max(batch_sizes), otherwise requests are queued serially.
+
+    Args:
+        temp_model: Ollama model tag (must already be created with num_ctx
+            and num_predict parameters baked in)
+        batch_sizes: Concurrency levels to test
+        prompt_tokens: Approximate prompt tokens per request
+        gen_tokens: Tokens to generate per request
+        num_trials: Trials per batch size (averaged)
+        cold_prefill: Prepend a unique cache-buster to each request's prompt
+        timeout: Per-subprocess timeout in seconds
+
+    Returns:
+        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
+    """
+    import concurrent.futures
+    import statistics
+
+    # Build a synthetic prompt of approximately prompt_tokens length. Same
+    # tiktoken encoding as ollama_api_benchmark and openai_benchmark, so the
+    # batch numbers across engines are directly comparable.
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        base_text = "The quick brown fox jumps over the lazy dog. "
+        base_tokens = enc.encode(base_text)
+        repeats = max(1, prompt_tokens // len(base_tokens))
+        prompt_text = base_text * repeats
+        tokens = enc.encode(prompt_text)[:prompt_tokens]
+        prompt_text = enc.decode(tokens)
+    except Exception:
+        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+
+    def single_request() -> Dict:
+        """Send one non-streaming request via `ollama run` and parse metrics."""
+        body = (_make_cache_buster() + prompt_text) if cold_prefill else prompt_text
+        result = subprocess.run(
+            ["ollama", "run", temp_model, "--verbose"],
+            input=body,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        metrics = parse_ollama_output(result.stderr)
+        return {
+            "prompt_tokens": metrics.get("prompt_eval_count", 0),
+            "generation_tokens": metrics.get("eval_count", 0),
+        }
+
+    batch_results = []
+
+    for bs in batch_sizes:
+        print(
+            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, "
+            f"{gen_tokens} gen tokens)..."
+        )
+
+        # Per-batch-size warmup so all slots are allocated before timing
+        print("    Warmup...")
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                list(pool.map(lambda _: single_request(), range(bs)))
+        except Exception as e:
+            print(f"    Warmup failed for batch size {bs}: {e} — skipping this size")
+            continue
+
+        trial_prompt_tps = []
+        trial_gen_tps = []
+
+        for trial in range(num_trials):
+            try:
+                start = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                    futures = [pool.submit(single_request) for _ in range(bs)]
+                    responses = [f.result() for f in futures]
+                wall_time = time.time() - start
+            except Exception as e:
+                print(f"    Trial {trial + 1} failed: {e}")
+                continue
+
+            total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
+            total_gen_tok = sum(r["generation_tokens"] for r in responses)
+            # Aggregate throughput across all concurrent requests divided by
+            # the wall clock for the whole batch.
+            agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0
+            agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0
+
+            trial_prompt_tps.append(agg_prompt_tps)
+            trial_gen_tps.append(agg_gen_tps)
+
+            print(
+                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s "
+                f"({wall_time:.1f}s)"
+            )
+
+        if trial_prompt_tps:
+            avg_prompt = statistics.mean(trial_prompt_tps)
+            avg_gen = statistics.mean(trial_gen_tps)
+            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            batch_results.append(
+                {
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt, 2),
+                    "generation_tps": round(avg_gen, 2),
+                    "peak_memory_gb": 0.0,  # Not available via Ollama API
+                }
+            )
+
+    return batch_results
+
+
 def main() -> int:
     """Main function to run Ollama CLI benchmarks."""
     parser = argparse.ArgumentParser(
         description="Run Ollama benchmarks using command-line interface"
     )
     parser.add_argument("model", help="Ollama model name (e.g., llama3.2, mistral)")
+
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend a unique marker to every prompt to bust Ollama's KV "
+        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
+
+    parser.add_argument(
+        "--batch-sizes",
+        default="1,2,4,8",
+        help="Comma-separated batch sizes for concurrent-request benchmark (default: 1,2,4,8)",
+    )
+    parser.add_argument(
+        "--batch-prompt-tokens",
+        type=int,
+        default=2048,
+        help="Approximate prompt tokens per request in batch benchmark (default: 2048)",
+    )
+    parser.add_argument(
+        "--batch-gen-tokens",
+        type=int,
+        default=128,
+        help="Tokens to generate per request in batch benchmark (default: 128)",
+    )
+    parser.add_argument(
+        "--batch-trials",
+        type=int,
+        default=3,
+        help="Number of trials per batch size (default: 3)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Skip batch benchmark",
+    )
 
     # Add common arguments
     common.setup_common_args(parser)
@@ -324,55 +610,155 @@ def main() -> int:
     print(f"Hardware: {hardware_str}")
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
-    # Warmup run
+    # Ollama run has no --num-ctx or --num-predict flag, so we create a
+    # temporary model via Modelfile that bakes in the parameters we need.
+    # Size num_ctx for the LARGEST context we'll run + headroom, so the
+    # same temp model serves every row.
     warmup_file = common.find_warmup_file()
-    if warmup_file:
-        print(f"\n{'=' * 50}")
-        print(f"Warmup run (excluded from results): {warmup_file.name}")
-        print(f"{'=' * 50}")
-        run_cli_benchmark(args.model, warmup_file, args.max_tokens)
-        print("Warmup complete.")
-    else:
-        print("Warning: 0.5k.txt not found, skipping warmup.")
+    all_files = context_files + ([warmup_file] if warmup_file else [])
+    max_num_ctx = max(_derive_num_ctx(f, args.max_tokens) for f in all_files)
 
-    # Run benchmarks
-    import time
-    start_time = time.time()
-    results = []
-    for file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {file.name}...")
-        print(f"{'=' * 50}")
-
-        result = run_cli_benchmark(args.model, file, args.max_tokens)
-        if result:
-            results.append(result)
-
-            # Save the generated text if requested
-            if args.save_responses:
-                output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(
-                    result, args.model, output_filename, "Ollama CLI"
-                )
-    
-    total_benchmark_time = time.time() - start_time
-
-    if not results:
-        print("\nNo successful benchmark results")
+    print(f"\nCreating temporary model with num_ctx={max_num_ctx}, num_predict={args.max_tokens}...")
+    try:
+        temp_main = _create_temp_model(args.model, num_ctx=max_num_ctx, num_predict=args.max_tokens)
+        print(f"  Created: {temp_main}")
+    except Exception as e:
+        print(f"Failed to create temp model: {e}")
         return 1
 
-    # Save all outputs using common function
-    common.save_all_outputs(
-        results, output_dir, args.model, "Ollama CLI", hardware_info, args
-    )
+    temp_batch = None
+    exit_code = 0
 
-    # Print summary using common function
-    common.print_benchmark_summary(
-        results, args.model, "Ollama CLI", hardware_info, output_dir, total_benchmark_time
-    )
+    try:
+        # Warmup run (excluded from results)
+        if warmup_file:
+            print(f"\n{'=' * 50}")
+            print(f"Warmup run (excluded from results): {warmup_file.name}")
+            print(f"{'=' * 50}")
+            run_cli_benchmark(temp_main, warmup_file, cold_prefill=args.cold_prefill, timeout=args.timeout)
+            print("Warmup complete.")
+        else:
+            print("Warning: 0.5k.txt not found, skipping warmup.")
 
-    return 0
+        # Run benchmarks
+        start_time = time.time()
+        results = []
+        for file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {file.name}...")
+            print(f"{'=' * 50}")
+
+            result = run_cli_benchmark(
+                temp_main, file, cold_prefill=args.cold_prefill, timeout=args.timeout
+            )
+            if result:
+                results.append(result)
+
+                if args.save_responses:
+                    output_filename = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(
+                        result, args.model, output_filename, "Ollama CLI"
+                    )
+
+        total_benchmark_time = time.time() - start_time
+
+        if not results:
+            print("\nNo successful benchmark results")
+            exit_code = 1
+            return exit_code
+
+        # Run batch benchmark (concurrent-request continuous batching)
+        batch_results = None
+        if not args.no_batch:
+            batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
+            max_bs = max(batch_sizes)
+            print(f"\nRunning batch benchmark (concurrent requests: {batch_sizes})...")
+
+            # OLLAMA_NUM_PARALLEL guardrail — read by the daemon at startup,
+            # not per request. We can only see the var if it's set in our
+            # shell; on macOS launchctl daemons this may not be visible.
+            num_parallel = os.environ.get("OLLAMA_NUM_PARALLEL")
+            if num_parallel is not None:
+                try:
+                    if int(num_parallel) < max_bs:
+                        print(
+                            f"  WARNING: OLLAMA_NUM_PARALLEL={num_parallel} < max batch size "
+                            f"{max_bs}. Server will queue requests serially — numbers will be "
+                            f"misleading."
+                        )
+                except ValueError:
+                    pass
+            else:
+                print(
+                    f"  NOTE: OLLAMA_NUM_PARALLEL is not set in this shell. Ensure the Ollama "
+                    f"daemon was started with OLLAMA_NUM_PARALLEL >= {max_bs}, or the server "
+                    f"will queue requests and report latency, not batched throughput."
+                )
+
+            # Batch uses different prompt/gen token budgets — make a second
+            # temp model sized for it. Same cleanup path via the outer finally.
+            batch_num_ctx = args.batch_prompt_tokens + args.batch_gen_tokens + 256
+            try:
+                temp_batch = _create_temp_model(
+                    args.model,
+                    num_ctx=batch_num_ctx,
+                    num_predict=args.batch_gen_tokens,
+                )
+                print(f"  Created batch temp model: {temp_batch}")
+            except Exception as e:
+                print(f"  Failed to create batch temp model: {e} — skipping batch benchmark")
+                temp_batch = None
+
+            if temp_batch:
+                try:
+                    batch_results = run_batch_benchmark(
+                        temp_batch,
+                        batch_sizes,
+                        prompt_tokens=args.batch_prompt_tokens,
+                        gen_tokens=args.batch_gen_tokens,
+                        num_trials=args.batch_trials,
+                        cold_prefill=args.cold_prefill,
+                        timeout=args.timeout,
+                    )
+                    if batch_results:
+                        print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
+                    else:
+                        print("\nBatch benchmark produced no results")
+                except Exception as e:
+                    print(f"\nBatch benchmark failed (continuing): {e}")
+
+        # Save all outputs using common function
+        common.save_all_outputs(
+            results,
+            output_dir,
+            args.model,
+            "Ollama CLI",
+            hardware_info,
+            args,
+            batch_results=batch_results,
+        )
+
+        # Print summary using common function
+        common.print_benchmark_summary(
+            results,
+            args.model,
+            "Ollama CLI",
+            hardware_info,
+            output_dir,
+            total_benchmark_time,
+            batch_results=batch_results,
+        )
+
+        return 0
+
+    finally:
+        # Always clean up temp models, even on failure / KeyboardInterrupt
+        print("\nCleaning up temporary models...")
+        _remove_temp_model(temp_main)
+        if temp_batch:
+            _remove_temp_model(temp_batch)
 
 
 if __name__ == "__main__":

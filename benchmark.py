@@ -18,6 +18,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Engines whose benchmark script can auto-detect the model from the server
+# when no model is explicitly provided. For these, the dispatcher may invoke
+# the script without a leading positional model argument.
+AUTO_MODEL_ENGINES = {"lmstudio"}
+
 
 def get_available_engines():
     """Return list of available benchmark engines."""
@@ -115,10 +120,15 @@ def run_benchmark(engine, model, args):
         print(f"Error: Benchmark script '{engine_info['script']}' not found.")
         return 1
 
-    # Build command
-    cmd = [sys.executable, str(script_path), model] + args
+    # Build command. Only pass `model` as the leading positional if we have
+    # a real model name — auto-detect engines (e.g. lmstudio) can resolve
+    # it from the server themselves.
+    cmd = [sys.executable, str(script_path)]
+    if model:
+        cmd.append(model)
+    cmd.extend(args)
 
-    print(f"Running {engine} benchmark for model: {model}")
+    print(f"Running {engine} benchmark for model: {model or '(auto-detect)'}")
     print(f"Command: {' '.join(cmd)}\n")
 
     # Run the benchmark
@@ -294,7 +304,31 @@ Examples:
         list_engines()
         return 1
 
-    if not args.model:
+    # Defensive: argparse's `parse_known_args` combined with nargs='?' for the
+    # `model` positional can accidentally slurp a stray token into args.model
+    # when there's an unknown flag (e.g. a typo like --bstch-sizes). Reject
+    # values that clearly aren't a model name — anything starting with '-',
+    # or anything that looks like a comma-separated number list. If the user
+    # omitted the model entirely, rescue the stray token by pushing it back
+    # into unknown_args so the downstream script still sees it.
+    def _looks_like_garbage_model(value: str) -> bool:
+        if not value:
+            return False
+        if value.startswith("-"):
+            return True
+        stripped = value.replace(",", "").replace(".", "")
+        return stripped.isdigit()
+
+    if args.model and _looks_like_garbage_model(args.model):
+        print(
+            f"Warning: '{args.model}' doesn't look like a model name — "
+            f"treating it as a stray argument. (Likely caused by a typo in "
+            f"a flag name upstream of it.)"
+        )
+        unknown_args.insert(0, args.model)
+        args.model = None
+
+    if not args.model and args.engine not in AUTO_MODEL_ENGINES:
         parser.print_help()
         print(f"\nError: Model is required for engine '{args.engine}'.")
         engine_info = engines.get(args.engine, {})

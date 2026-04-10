@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import statistics
 import sys
 import threading
 import warnings
@@ -217,6 +218,172 @@ def run_benchmark(
         return None
 
 
+def run_batch_benchmark(
+    model,
+    processor,
+    batch_sizes: List[int],
+    prompt_tokens: int = 2048,
+    gen_tokens: int = 128,
+    num_trials: int = 3,
+    vocab_size: Optional[int] = None,
+) -> List[Dict]:
+    """Run batch benchmark measuring throughput at different batch sizes.
+
+    Mirrors `mlx_benchmark.run_batch_benchmark` (mlx_benchmark.py:489-590) but
+    against mlx_vlm. The model is driven text-only (no images/audios), so we
+    pass `prompts=` as a list of decoded random-token strings, one per batch
+    slot, to mlx_vlm.batch_generate. For batch size 1 we use stream_generate
+    and collect the final GenerationResult's library-reported TPS.
+
+    Args:
+        model: Loaded mlx_vlm model
+        processor: mlx_vlm processor (contains tokenizer + vision/audio pre)
+        batch_sizes: Concurrency levels to test
+        prompt_tokens: Approximate prompt tokens per slot
+        gen_tokens: Tokens to generate per slot
+        num_trials: Trials per batch size (mean taken)
+        vocab_size: Vocab to sample from; auto-detected from config if None
+
+    Returns:
+        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
+    """
+    import mlx.core as mx
+    import mlx_vlm
+
+    # Resolve the underlying tokenizer (processor wraps one for VLMs)
+    tokenizer = getattr(processor, "tokenizer", processor)
+
+    # Resolve vocab size. VLMs often keep vocab under `text_config` in the
+    # model config, mirroring mlx_benchmark's fallback chain.
+    if vocab_size is None:
+        cfg = getattr(model, "config", None)
+        cfg_get = (lambda k: getattr(cfg, k, None)) if cfg is not None else (lambda k: None)
+        text_cfg = cfg_get("text_config")
+        vocab_size = (
+            cfg_get("vocab_size")
+            or (getattr(text_cfg, "vocab_size", None) if text_cfg is not None else None)
+            or getattr(tokenizer, "vocab_size", None)
+        )
+    if not vocab_size:
+        print("  ERROR: could not determine vocab_size — skipping batch benchmark")
+        return []
+
+    batch_results = []
+
+    # Disable EOS so random-token prompts don't trigger early stopping mid-
+    # generation. Same pattern as mlx_benchmark.py:519-525. Restore in finally.
+    _raw_eos = getattr(tokenizer, "eos_token_ids", set())
+    original_eos = {_raw_eos} if isinstance(_raw_eos, int) else set(_raw_eos)
+    restored_via_private_attr = hasattr(tokenizer, "_eos_token_ids")
+    if restored_via_private_attr:
+        tokenizer._eos_token_ids = set()
+    else:
+        try:
+            tokenizer.eos_token_ids = set()
+        except Exception:
+            pass
+
+    try:
+        for bs in batch_sizes:
+            print(
+                f"\n  Batch size {bs} ({num_trials} trials, {prompt_tokens} prompt tokens, "
+                f"{gen_tokens} gen tokens)..."
+            )
+            mx.reset_peak_memory()
+
+            # Generate bs DIFFERENT random token sequences, one per slot, so
+            # there's no shared-prefix KV reuse across slots. mlx_vlm expects
+            # strings, so decode each row to text — the round-trip may shift
+            # the exact token count by a few tokens but stays close enough.
+            random_ids = mx.random.randint(0, vocab_size, (bs, prompt_tokens)).tolist()
+            try:
+                prompts = [tokenizer.decode(ids) for ids in random_ids]
+            except Exception as e:
+                print(f"    Failed to decode random prompts: {e} — skipping batch size {bs}")
+                continue
+
+            # Warmup at this batch size
+            print("    Warmup...")
+            try:
+                if bs == 1:
+                    for _ in mlx_vlm.stream_generate(
+                        model, processor, prompt=prompts[0], max_tokens=gen_tokens
+                    ):
+                        pass
+                else:
+                    mlx_vlm.batch_generate(
+                        model, processor, prompts=prompts, max_tokens=gen_tokens, verbose=False
+                    )
+            except Exception as e:
+                print(f"    Warmup failed for batch size {bs}: {e} — skipping")
+                continue
+
+            trial_prompt_tps = []
+            trial_gen_tps = []
+
+            for trial in range(num_trials):
+                try:
+                    if bs == 1:
+                        last_response = None
+                        for response in mlx_vlm.stream_generate(
+                            model, processor, prompt=prompts[0], max_tokens=gen_tokens
+                        ):
+                            last_response = response
+                        if last_response is not None:
+                            trial_prompt_tps.append(last_response.prompt_tps)
+                            trial_gen_tps.append(last_response.generation_tps)
+                            print(
+                                f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} "
+                                f"tg {last_response.generation_tps:.1f} t/s"
+                            )
+                    else:
+                        resp = mlx_vlm.batch_generate(
+                            model,
+                            processor,
+                            prompts=prompts,
+                            max_tokens=gen_tokens,
+                            verbose=False,
+                        )
+                        trial_prompt_tps.append(resp.stats.prompt_tps)
+                        trial_gen_tps.append(resp.stats.generation_tps)
+                        print(
+                            f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} "
+                            f"tg {resp.stats.generation_tps:.1f} t/s"
+                        )
+                except Exception as e:
+                    print(f"    Trial {trial + 1} failed: {e}")
+                    continue
+
+            if trial_prompt_tps:
+                avg_prompt_tps = statistics.mean(trial_prompt_tps)
+                avg_gen_tps = statistics.mean(trial_gen_tps)
+                peak_mem = mx.get_peak_memory() / 1e9
+
+                print(
+                    f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
+                    f"peak mem {peak_mem:.2f} GB"
+                )
+
+                batch_results.append(
+                    {
+                        "batch_size": bs,
+                        "prompt_tps": round(avg_prompt_tps, 2),
+                        "generation_tps": round(avg_gen_tps, 2),
+                        "peak_memory_gb": round(peak_mem, 3),
+                    }
+                )
+    finally:
+        if restored_via_private_attr:
+            tokenizer._eos_token_ids = original_eos
+        else:
+            try:
+                tokenizer.eos_token_ids = original_eos
+            except Exception:
+                pass
+
+    return batch_results
+
+
 def check_mlx_vlm_installed() -> bool:
     """Check if MLX-VLM is installed."""
     try:
@@ -258,6 +425,34 @@ def main() -> int:
         "--ignore-chat-template",
         action="store_true",
         help="Use raw prompt text instead of chat template",
+    )
+    parser.add_argument(
+        "--batch-sizes",
+        default="1,2,4,8,16,32",
+        help="Comma-separated batch sizes for batch benchmark (default: 1,2,4,8,16,32)",
+    )
+    parser.add_argument(
+        "--batch-prompt-tokens",
+        type=int,
+        default=2048,
+        help="Number of prompt tokens per sequence in batch benchmark (default: 2048)",
+    )
+    parser.add_argument(
+        "--batch-gen-tokens",
+        type=int,
+        default=128,
+        help="Number of tokens to generate per sequence in batch benchmark (default: 128)",
+    )
+    parser.add_argument(
+        "--batch-trials",
+        type=int,
+        default=3,
+        help="Number of trials per batch size, takes mean (default: 3)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Skip batch benchmark",
     )
 
     # Add common arguments
@@ -363,6 +558,32 @@ def main() -> int:
         print("\nNo successful benchmark results")
         return 1
 
+    # Run batch benchmark (throughput at different batch sizes via mlx_vlm.batch_generate)
+    batch_results = None
+    if not args.no_batch:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
+        print(f"\nRunning batch benchmark (sizes: {batch_sizes})...")
+
+        # Seed MLX RNG for reproducible batch runs (same pattern as mlx_benchmark)
+        import mlx.core as mx
+
+        mx.random.seed(0)
+        try:
+            batch_results = run_batch_benchmark(
+                model,
+                processor,
+                batch_sizes,
+                prompt_tokens=args.batch_prompt_tokens,
+                gen_tokens=args.batch_gen_tokens,
+                num_trials=args.batch_trials,
+            )
+            if batch_results:
+                print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
+            else:
+                print("\nBatch benchmark produced no results")
+        except Exception as e:
+            print(f"\nBatch benchmark failed (continuing): {e}")
+
     # Save all outputs
     common.save_all_outputs(
         results,
@@ -372,6 +593,7 @@ def main() -> int:
         hardware_info,
         args,
         include_memory=True,
+        batch_results=batch_results,
     )
 
     # Print summary
@@ -382,6 +604,7 @@ def main() -> int:
         hardware_info,
         output_dir,
         total_benchmark_time,
+        batch_results=batch_results,
     )
 
     return 0

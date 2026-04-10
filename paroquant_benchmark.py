@@ -258,7 +258,8 @@ def run_batch_benchmark(
     batch_results: List[Dict] = []
 
     # Disable EOS to avoid early stopping on random prompts
-    original_eos = set(getattr(tokenizer, "eos_token_ids", set()))
+    _raw_eos = getattr(tokenizer, "eos_token_ids", set())
+    original_eos = {_raw_eos} if isinstance(_raw_eos, int) else set(_raw_eos)
     restored_via_private_attr = hasattr(tokenizer, "_eos_token_ids")
     if restored_via_private_attr:
         tokenizer._eos_token_ids = set()
