@@ -53,6 +53,7 @@ def run_benchmark(
     context_file: Path,
     max_tokens: int = 128,
     cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Run Ollama benchmark for a given context file.
 
@@ -74,7 +75,7 @@ def run_benchmark(
     # the KV cache from a previous warmup or benchmark row that shares a
     # prefix will be reused, inflating prompt_tps (prompt_eval_count covers
     # the full prompt but prompt_eval_duration covers only the uncached delta).
-    if cold_prefill:
+    if cold_prefill or _run_idx is not None:
         prompt = _make_cache_buster() + prompt
 
     # Size the KV cache to fit this context file (plus generation headroom).
@@ -442,7 +443,7 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("ollama_api", args.model)
+    output_dir = common.create_output_directory("ollama_api", args.model, cold_prefill=args.cold_prefill)
 
     # Find context files using common module
     context_files = common.find_context_files(args.contexts)
@@ -478,7 +479,7 @@ def main() -> int:
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(args.model, file, args.max_tokens, cold_prefill=args.cold_prefill)
+        result = common.run_benchmark_peak(run_benchmark, args.model, file, args.max_tokens, cold_prefill=args.cold_prefill, n_runs=args.runs)
         if result:
             results.append(result)
 

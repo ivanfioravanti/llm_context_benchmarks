@@ -218,6 +218,7 @@ def run_cli_benchmark(
     context_file: Path,
     cold_prefill: bool = True,
     timeout: int = 3600,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Run Ollama benchmark using CLI for a given context file.
 
@@ -240,7 +241,7 @@ def run_cli_benchmark(
 
     # Bust Ollama's prompt cache by prepending a unique marker so no two
     # prompts share a prefix. Adds ~10 tokens of overhead.
-    if cold_prefill:
+    if cold_prefill or _run_idx is not None:
         prompt = _make_cache_buster() + prompt
 
     # Pipe the prompt via stdin instead of passing it as argv. The old
@@ -596,7 +597,7 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("ollama_cli", args.model)
+    output_dir = common.create_output_directory("ollama_cli", args.model, cold_prefill=args.cold_prefill)
 
     # Find context files using common module
     context_files = common.find_context_files(args.contexts)
@@ -650,8 +651,8 @@ def main() -> int:
             print(f"Benchmarking {file.name}...")
             print(f"{'=' * 50}")
 
-            result = run_cli_benchmark(
-                temp_main, file, cold_prefill=args.cold_prefill, timeout=args.timeout
+            result = common.run_benchmark_peak(
+                run_cli_benchmark, temp_main, file, cold_prefill=args.cold_prefill, timeout=args.timeout, n_runs=args.runs
             )
             if result:
                 results.append(result)

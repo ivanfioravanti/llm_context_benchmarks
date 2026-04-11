@@ -99,6 +99,8 @@ def run_benchmark(
     max_tokens: int = 128,
     max_kv_size: Optional[int] = None,
     ignore_chat_template: bool = False,
+    cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Run MLX-VLM benchmark for a given context file.
 
@@ -111,18 +113,23 @@ def run_benchmark(
         max_tokens: Maximum tokens to generate
         max_kv_size: Maximum KV cache size in tokens (optional)
         ignore_chat_template: If true, skip chat template wrapping
+        cold_prefill: Prepend UUID prefix to bust any framework-level caching (default: True)
 
     Returns:
         Dictionary with benchmark results or None if failed
     """
     import mlx.core as mx
     import mlx_vlm
+    from mlx_vlm.models.cache import make_prompt_cache
 
     print(f"Running benchmark for {context_file}...")
 
     try:
         with open(context_file, "r") as f:
             prompt = f.read()
+
+        if cold_prefill or _run_idx is not None:
+            prompt = common.make_cache_buster() + prompt
 
         formatted_prompt = prepare_prompt(prompt, processor, model.config, ignore_chat_template)
 
@@ -133,6 +140,14 @@ def run_benchmark(
             kwargs["kv_quant_scheme"] = kv_quant_scheme
         if max_kv_size is not None:
             kwargs["max_kv_size"] = max_kv_size
+
+        # Build the cache externally so we can read its size after generation.
+        # mlx_vlm.stream_generate would otherwise build one internally via
+        # generate_step (mlx_vlm/generate.py:467) and we'd never see it.
+        # Behaviour is identical either way — see stream_generate's branch at
+        # mlx_vlm/generate.py:717-723 which honours an externally-supplied cache.
+        prompt_cache = make_prompt_cache(model.language_model, max_kv_size=max_kv_size)
+        kwargs["prompt_cache"] = prompt_cache
 
         # Reset peak memory before each run
         mx.reset_peak_memory()
@@ -192,10 +207,12 @@ def run_benchmark(
         generation_tps = last_response.generation_tps
         peak_memory_gb = last_response.peak_memory
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
+        kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
 
         print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
         print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
         print(f"  Peak memory: {peak_memory_gb:.3f} GB")
+        print(f"  KV cache: {kv_cache_gb:.3f} GB")
         if prompt_eval_duration > 0:
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
@@ -207,6 +224,7 @@ def run_benchmark(
             "generation_tokens": generation_tokens,
             "generation_tps": generation_tps,
             "peak_memory_gb": peak_memory_gb,
+            "kv_cache_gb": kv_cache_gb,
             "total_time": total_wall_time,
             "generated_text": generated_text,
             "prompt_eval_duration": prompt_eval_duration,
@@ -320,6 +338,7 @@ def run_batch_benchmark(
 
             trial_prompt_tps = []
             trial_gen_tps = []
+            trial_kv_bytes = []
 
             for trial in range(num_trials):
                 try:
@@ -332,6 +351,12 @@ def run_batch_benchmark(
                         if last_response is not None:
                             trial_prompt_tps.append(last_response.prompt_tps)
                             trial_gen_tps.append(last_response.generation_tps)
+                            # GenerationResult.kv_cache_bytes (patched
+                            # mlx_vlm fork). On stock mlx_vlm this attribute
+                            # is missing and the trial just contributes 0.
+                            kv_bytes = getattr(last_response, "kv_cache_bytes", 0) or 0
+                            if kv_bytes:
+                                trial_kv_bytes.append(int(kv_bytes))
                             print(
                                 f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} "
                                 f"tg {last_response.generation_tps:.1f} t/s"
@@ -346,6 +371,12 @@ def run_batch_benchmark(
                         )
                         trial_prompt_tps.append(resp.stats.prompt_tps)
                         trial_gen_tps.append(resp.stats.generation_tps)
+                        # BatchStats.kv_cache_bytes (patched mlx_vlm fork —
+                        # tracked in BatchGenerator._next at the peak across
+                        # the run). Falls back to 0 on stock mlx_vlm.
+                        kv_bytes = getattr(resp.stats, "kv_cache_bytes", 0) or 0
+                        if kv_bytes:
+                            trial_kv_bytes.append(int(kv_bytes))
                         print(
                             f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} "
                             f"tg {resp.stats.generation_tps:.1f} t/s"
@@ -358,20 +389,23 @@ def run_batch_benchmark(
                 avg_prompt_tps = statistics.mean(trial_prompt_tps)
                 avg_gen_tps = statistics.mean(trial_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
+                avg_kv_gb = (statistics.mean(trial_kv_bytes) / 1e9) if trial_kv_bytes else 0.0
 
                 print(
                     f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
                     f"peak mem {peak_mem:.2f} GB"
+                    + (f", kv cache {avg_kv_gb:.2f} GB" if avg_kv_gb > 0 else "")
                 )
 
-                batch_results.append(
-                    {
-                        "batch_size": bs,
-                        "prompt_tps": round(avg_prompt_tps, 2),
-                        "generation_tps": round(avg_gen_tps, 2),
-                        "peak_memory_gb": round(peak_mem, 3),
-                    }
-                )
+                row = {
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt_tps, 2),
+                    "generation_tps": round(avg_gen_tps, 2),
+                    "peak_memory_gb": round(peak_mem, 3),
+                }
+                if avg_kv_gb > 0:
+                    row["kv_cache_gb"] = round(avg_kv_gb, 3)
+                batch_results.append(row)
     finally:
         if restored_via_private_attr:
             tokenizer._eos_token_ids = original_eos
@@ -454,6 +488,13 @@ def main() -> int:
         action="store_true",
         help="Skip batch benchmark",
     )
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prevent server-side KV cache reuse for cold-prefill numbers (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
 
     # Add common arguments
     common.setup_common_args(parser)
@@ -468,8 +509,16 @@ def main() -> int:
     # Extract model name from URL
     model_name = args.model.split("/")[-1]
 
+    # Tag the output directory with _TBQ when TurboQuant KV quantization is
+    # used so it's easy to spot which runs are turboquant'd from a glance.
+    # create_output_directory adds the underscore before the machine segment,
+    # so the suffix is just "_TBQ" — the final folder reads "..._TBQ_M5Max_...".
+    output_model_name = model_name
+    if args.kv_quant_scheme == "turboquant":
+        output_model_name = f"{model_name}_TBQ"
+
     # Create output directory
-    output_dir = common.create_output_directory("mlx_vlm", model_name)
+    output_dir = common.create_output_directory("mlx_vlm", output_model_name, cold_prefill=args.cold_prefill)
 
     # Find context files
     context_files = common.find_context_files(args.contexts)
@@ -504,6 +553,7 @@ def main() -> int:
         print("Chat template: disabled (raw prompt)")
     else:
         print("Chat template: enabled when processor provides one")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
     # Warmup run using the smallest context file
     warmup_file = context_files[0]
@@ -535,7 +585,8 @@ def main() -> int:
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model,
             processor,
             file,
@@ -544,6 +595,8 @@ def main() -> int:
             max_tokens=args.max_tokens,
             max_kv_size=args.max_kv_size,
             ignore_chat_template=args.ignore_chat_template,
+            cold_prefill=args.cold_prefill,
+            n_runs=args.runs,
         )
         if result:
             results.append(result)

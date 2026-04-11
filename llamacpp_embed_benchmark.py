@@ -200,7 +200,7 @@ def main() -> int:
 
     model_name = Path(model_path).name
 
-    output_dir = common.create_output_directory("llamacpp_embed", model_name, args.output_dir)
+    output_dir = common.create_output_directory("llamacpp_embed", model_name, args.output_dir, cold_prefill=True)
 
     context_files = common.find_context_files(args.contexts, args.context_dir)
     if not context_files:
@@ -238,12 +238,14 @@ def main() -> int:
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             llm=llm,
             context_file=context_file,
             max_tokens=args.max_tokens,
             timeout=args.timeout,
             seed=args.seed,
+            n_runs=args.runs,
         )
 
         if not result:

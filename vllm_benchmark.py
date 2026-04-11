@@ -598,9 +598,14 @@ def run_benchmark(
     stream: bool = True,
     use_vllm_metrics: bool = False,
     debug: bool = False,
+    cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict[str, object]]:
     with open(context_file, "r") as f:
         prompt = f.read()
+
+    if cold_prefill or _run_idx is not None:
+        prompt = common.make_cache_buster() + prompt
 
     metrics_before: Dict[str, float] = {}
     if use_vllm_metrics:
@@ -805,6 +810,14 @@ def main() -> int:
         help="Disable vLLM /metrics sampling for stats.",
     )
     parser.set_defaults(metrics=False)
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend a unique marker to every prompt to bust KV "
+        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
 
     args = parser.parse_args()
 
@@ -840,9 +853,10 @@ def main() -> int:
 
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
     print(f"Timeout: {args.timeout}s")
 
-    output_dir = common.create_output_directory("vllm", args.model, args.output_dir)
+    output_dir = common.create_output_directory("vllm", args.model, args.output_dir, cold_prefill=args.cold_prefill)
 
     # Warmup run
     warmup_file = common.find_warmup_file()
@@ -879,7 +893,8 @@ def main() -> int:
         print("=" * 50)
 
         try:
-            result = run_benchmark(
+            result = common.run_benchmark_peak(
+                run_benchmark,
                 model_name=args.model,
                 context_file=context_file,
                 base_url=base_url,
@@ -891,6 +906,8 @@ def main() -> int:
                 stream=args.stream,
                 use_vllm_metrics=args.metrics,
                 debug=args.debug,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
             )
         except requests.exceptions.HTTPError as e:
             message = str(e)

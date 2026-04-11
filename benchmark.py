@@ -67,10 +67,20 @@ def get_available_engines():
             "description": "MLX-VLM vision-language models (Apple Silicon)",
             "example": "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
         },
+        "omlx": {
+            "script": "omlx_benchmark.py",
+            "description": "oMLX inference server (Apple Silicon, OpenAI-compatible)",
+            "example": "gemma-4-26b-a4b-it-4bit",
+        },
         "paroquant": {
             "script": "paroquant_benchmark.py",
             "description": "Paroquant quantized inference (MLX, Apple Silicon)",
             "example": "my-org/My-Model-PQ",
+        },
+        "vmlx": {
+            "script": "vmlx_benchmark.py",
+            "description": "vMLX / MLX Studio server (Apple Silicon, OpenAI-compatible)",
+            "example": "mlx-community/Qwen3-8B-4bit",
         },
     }
     return engines
@@ -223,6 +233,13 @@ Examples:
         help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)",
     )
 
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=3,
+        help="Number of runs per context size; peak score is kept (default: 3)",
+    )
+
     # Engine-specific options
     parser.add_argument(
         "--kv-bit",
@@ -343,6 +360,7 @@ Examples:
     pass_through_args.extend(["--contexts", args.contexts])
     pass_through_args.extend(["--max-tokens", str(args.max_tokens)])
     pass_through_args.extend(["--timeout", str(args.timeout)])
+    pass_through_args.extend(["--runs", str(args.runs)])
 
     if args.save_responses:
         pass_through_args.append("--save-responses")

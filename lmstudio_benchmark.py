@@ -133,6 +133,7 @@ def run_benchmark(
     cold_prefill: bool = True,
     timeout: int = 3600,
     api_version: str = DEFAULT_API_VERSION,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark a single context file against LM Studio's native API.
 
@@ -152,7 +153,7 @@ def run_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    if cold_prefill:
+    if cold_prefill or _run_idx is not None:
         prompt = _make_cache_buster() + prompt
 
     start_time = time.time()
@@ -552,6 +553,12 @@ def main() -> int:
         action="store_true",
         help="Skip batch benchmark",
     )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=3,
+        help="Number of runs per context size; peak score is kept (default: 3)",
+    )
 
     common.setup_common_args(parser)
     args = parser.parse_args()
@@ -618,7 +625,7 @@ def main() -> int:
         return 1
 
     # Output directory
-    output_dir = common.create_output_directory("lmstudio", model_id)
+    output_dir = common.create_output_directory("lmstudio", model_id, cold_prefill=args.cold_prefill)
 
     # Warmup. Use a realistic max_tokens (not 1) so thinking-mode models
     # actually emit content tokens — with max_tokens=1 a Qwen3.5-style
@@ -651,7 +658,8 @@ def main() -> int:
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             base_url,
             model_id,
             file,
@@ -659,6 +667,7 @@ def main() -> int:
             cold_prefill=args.cold_prefill,
             timeout=args.timeout,
             api_version=args.api_version,
+            n_runs=args.runs,
         )
         if result:
             results.append(result)

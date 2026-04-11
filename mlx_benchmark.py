@@ -169,6 +169,7 @@ def run_benchmark(
         Dictionary with benchmark results or None if failed
     """
     import mlx_lm
+    from mlx_lm.models.cache import make_prompt_cache
 
     print(f"Running benchmark for {context_file}...")
 
@@ -188,6 +189,11 @@ def run_benchmark(
             kwargs["kv_bits"] = kv_bit
         if max_kv_size is not None:
             kwargs["max_kv_size"] = max_kv_size
+
+        # Build the cache externally so we can read its size after generation.
+        # mlx_lm.stream_generate would otherwise create one internally and we
+        # would never get a handle to it. Behaviour is identical either way.
+        prompt_cache = make_prompt_cache(model, max_kv_size=max_kv_size)
 
         # Reset peak memory before each run to get per-context-size measurement
         import mlx.core as mx
@@ -213,7 +219,12 @@ def run_benchmark(
         last_response = None
         generated_text = ""
         for response in mlx_lm.stream_generate(
-            model, tokenizer, prompt=prepared_prompt, max_tokens=max_tokens, **kwargs
+            model,
+            tokenizer,
+            prompt=prepared_prompt,
+            max_tokens=max_tokens,
+            prompt_cache=prompt_cache,
+            **kwargs,
         ):
             if not first_token_received:
                 first_token_received = True
@@ -256,10 +267,12 @@ def run_benchmark(
         generation_tps = last_response.generation_tps
         peak_memory_gb = last_response.peak_memory
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
+        kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
 
         print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
         print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
         print(f"  Peak memory: {peak_memory_gb:.3f} GB")
+        print(f"  KV cache: {kv_cache_gb:.3f} GB")
         if prompt_eval_duration > 0:
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
@@ -271,6 +284,7 @@ def run_benchmark(
             "generation_tokens": generation_tokens,
             "generation_tps": generation_tps,
             "peak_memory_gb": peak_memory_gb,
+            "kv_cache_gb": kv_cache_gb,
             "total_time": total_wall_time,
             "generated_text": generated_text,
             "prompt_eval_duration": prompt_eval_duration,
@@ -434,6 +448,7 @@ def run_cached_benchmark(
             generation_tokens = last_response.generation_tokens
             generation_tps = last_response.generation_tps
             peak_memory_gb = last_response.peak_memory
+            kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
 
             prompt_eval_duration = ttft if ttft > 0 else safe_duration(num_delta, last_response.prompt_tps)
             incremental_prompt_tps = num_delta / prompt_eval_duration if prompt_eval_duration > 0 else 0
@@ -442,6 +457,7 @@ def run_cached_benchmark(
             print(f"  Incremental prompt TPS: {incremental_prompt_tps:.3f} tokens-per-sec")
             print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
             print(f"  Peak memory: {peak_memory_gb:.3f} GB")
+            print(f"  KV cache: {kv_cache_gb:.3f} GB")
             if prompt_eval_duration > 0:
                 print(f"  Time to first token: {prompt_eval_duration:.2f}s")
             print(f"  Total wall time: {total_wall_time:.2f}s")
@@ -463,6 +479,7 @@ def run_cached_benchmark(
                         "generation_tokens": generation_tokens,
                         "generation_tps": generation_tps,
                         "peak_memory_gb": peak_memory_gb,
+                        "kv_cache_gb": kv_cache_gb,
                         "total_time": total_wall_time,
                         "eval_duration": generation_duration,
                         "generated_text": generated_text,
@@ -511,6 +528,7 @@ def run_batch_benchmark(
     """
     import mlx.core as mx
     from mlx_lm import batch_generate, stream_generate
+    from mlx_lm.models.cache import make_prompt_cache
 
     if vocab_size is None:
         vocab_size = tokenizer.vocab_size
@@ -545,24 +563,39 @@ def run_batch_benchmark(
             # Actual trials - reuse same prompts
             trial_prompt_tps = []
             trial_gen_tps = []
+            trial_kv_bytes = []
 
             for trial in range(num_trials):
                 if bs == 1:
-                    # Pass token IDs directly to stream_generate (like mlx_lm.benchmark)
+                    # Build the cache externally so we can read its size after.
+                    trial_cache = make_prompt_cache(model)
                     last_response = None
-                    for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
+                    for response in stream_generate(
+                        model, tokenizer, prompts[0], max_tokens=gen_tokens, prompt_cache=trial_cache
+                    ):
                         last_response = response
                     if last_response is not None:
                         trial_prompt_tps.append(last_response.prompt_tps)
                         trial_gen_tps.append(last_response.generation_tps)
+                        trial_kv_bytes.append(common.kv_cache_bytes(trial_cache))
                         print(
                             f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s"
                         )
                 else:
-                    # batch_generate expects List[List[int]] of token IDs
-                    resp = batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
+                    # batch_generate exposes the per-prompt caches via
+                    # return_prompt_caches=True so we can sum nbytes across the
+                    # whole batch (matches what peak_memory_gb measures).
+                    resp = batch_generate(
+                        model,
+                        tokenizer,
+                        prompts=prompts,
+                        max_tokens=gen_tokens,
+                        return_prompt_caches=True,
+                    )
                     trial_prompt_tps.append(resp.stats.prompt_tps)
                     trial_gen_tps.append(resp.stats.generation_tps)
+                    if resp.caches:
+                        trial_kv_bytes.append(sum(common.kv_cache_bytes(c) for c in resp.caches))
                     print(
                         f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s"
                     )
@@ -571,8 +604,12 @@ def run_batch_benchmark(
                 avg_prompt_tps = statistics.mean(trial_prompt_tps)
                 avg_gen_tps = statistics.mean(trial_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
+                avg_kv_gb = (statistics.mean(trial_kv_bytes) / 1e9) if trial_kv_bytes else 0.0
 
-                print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, peak mem {peak_mem:.2f} GB")
+                print(
+                    f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
+                    f"peak mem {peak_mem:.2f} GB, kv cache {avg_kv_gb:.2f} GB"
+                )
 
                 batch_results.append(
                     {
@@ -580,6 +617,7 @@ def run_batch_benchmark(
                         "prompt_tps": round(avg_prompt_tps, 2),
                         "generation_tps": round(avg_gen_tps, 2),
                         "peak_memory_gb": round(peak_mem, 3),
+                        "kv_cache_gb": round(avg_kv_gb, 3),
                     }
                 )
     finally:
@@ -693,7 +731,7 @@ def main() -> int:
     model_name = args.model.split("/")[-1]
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("mlx", model_name)
+    output_dir = common.create_output_directory("mlx", model_name, cold_prefill=True)
 
     # Find context files using common module
     context_files = common.find_context_files(args.contexts)
@@ -827,7 +865,8 @@ def main() -> int:
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model,
             tokenizer,
             file,
@@ -836,6 +875,7 @@ def main() -> int:
             args.max_kv_size,
             args.ignore_chat_template,
             args.chat_template_config,
+            n_runs=args.runs,
         )
         if result:
             results.append(result)

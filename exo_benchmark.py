@@ -533,7 +533,7 @@ def main() -> int:
         print(f"Request model: {request_model}")
     print(f"Max tokens: {args.max_tokens}")
 
-    output_dir = common.create_output_directory("exo", args.model)
+    output_dir = common.create_output_directory("exo", args.model, cold_prefill=True)
 
     results = []
     benchmark_start = time.time()
@@ -543,7 +543,8 @@ def main() -> int:
         print(f"Benchmarking {context_file.name}...")
         print("=" * 50)
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model_name=args.model,
             context_file=context_file,
             client=client,
@@ -554,6 +555,7 @@ def main() -> int:
             timeout=args.timeout,
             stream=args.stream,
             bench_mode=args.bench_mode,
+            n_runs=args.runs,
         )
 
         if result:

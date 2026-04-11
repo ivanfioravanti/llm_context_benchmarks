@@ -212,6 +212,30 @@ def save_generated_text(result, model_name, output_path, framework=""):
     print(f"Generated text saved to {output_path}")
 
 
+def kv_cache_bytes(cache_list) -> int:
+    """Sum the byte size of an mlx-lm / mlx-vlm prompt cache list.
+
+    Each cache layer in mlx-lm exposes an ``nbytes`` property. mlx-vlm reuses
+    those classes but adds a few of its own (``SimpleKVCache``,
+    ``SlidingWindowCache``, ``StaticKVCache``) that don't define ``nbytes`` —
+    for those we fall back to summing ``keys.nbytes + values.nbytes``.
+    """
+    total = 0
+    for c in cache_list or []:
+        try:
+            total += int(c.nbytes)
+            continue
+        except (AttributeError, NotImplementedError):
+            pass
+        k = getattr(c, "keys", None)
+        v = getattr(c, "values", None)
+        if k is not None and hasattr(k, "nbytes"):
+            total += int(k.nbytes)
+        if v is not None and hasattr(v, "nbytes"):
+            total += int(v.nbytes)
+    return total
+
+
 def save_results_csv(results, csv_path, exclude_fields=None):
     """Save benchmark results to CSV, excluding specified fields.
 
@@ -269,9 +293,16 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
 
         line = f"{r['context_size']} {prompt_part} tg {r['generation_tps']:.0f} t/s"
 
-        # Add memory information if available
+        # Add memory information if available. When both peak memory and KV
+        # cache are present, label both explicitly so the line stays readable.
+        has_kv = "kv_cache_gb" in r
         if "peak_memory_gb" in r:
-            line += f" {r['peak_memory_gb']:.1f}GB"
+            if has_kv:
+                line += f" mem {r['peak_memory_gb']:.1f}GB"
+            else:
+                line += f" {r['peak_memory_gb']:.1f}GB"
+        if has_kv:
+            line += f" kv {r['kv_cache_gb']:.2f}GB"
 
         xpost += line + "\n"
         total_tokens += r.get("generation_tokens", 0)
@@ -284,6 +315,11 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
     if batch_results:
         parts = [f"b{r['batch_size']} {r['generation_tps']:.0f}" for r in batch_results]
         xpost += f"\nBatch TPS: {' '.join(parts)}"
+        if any("kv_cache_gb" in r for r in batch_results):
+            kv_parts = [
+                f"b{r['batch_size']} {r.get('kv_cache_gb', 0):.2f}GB" for r in batch_results
+            ]
+            xpost += f"\nBatch KV : {' '.join(kv_parts)}"
 
     if cached_results:
         xpost += "\n\nCached KV Cache (incremental prefill)\n"
@@ -295,8 +331,14 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
                 f"inc_pp {r.get('incremental_prompt_tps', 0):.0f} "
                 f"tg {r['generation_tps']:.0f} t/s"
             )
+            has_kv = "kv_cache_gb" in r
             if "peak_memory_gb" in r:
-                line += f" {r['peak_memory_gb']:.1f}GB"
+                if has_kv:
+                    line += f" mem {r['peak_memory_gb']:.1f}GB"
+                else:
+                    line += f" {r['peak_memory_gb']:.1f}GB"
+            if has_kv:
+                line += f" kv {r['kv_cache_gb']:.2f}GB"
             xpost += line + "\n"
 
     return xpost.strip()
@@ -328,8 +370,14 @@ def generate_table(
 
     total_tokens = 0
     if include_memory:
-        table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory\n"
-        table += "--------|------------|---------|------------|--------\n"
+        # Show KV cache column when any result reports it (mlx / mlx-vlm)
+        has_kv = any("kv_cache_gb" in r for r in results)
+        if has_kv:
+            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory   | KV Cache\n"
+            table += "--------|------------|---------|------------|----------|----------\n"
+        else:
+            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory\n"
+            table += "--------|------------|---------|------------|--------\n"
 
         # Add data rows with memory
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
@@ -339,7 +387,14 @@ def generate_table(
                 prompt_str = f"{r.get('prompt_tokens', 0)} tok"
             else:
                 prompt_str = f"{r['prompt_tps']:>10.1f}"
-            table += f"{r['context_size']:>7} | {prompt_str:>10} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {r.get('peak_memory_gb', 0):>6.1f} GB\n"
+            row = (
+                f"{r['context_size']:>7} | {prompt_str:>10} | "
+                f"{r['generation_tps']:>7.1f} | {gen_tokens:>10} | "
+                f"{r.get('peak_memory_gb', 0):>6.1f} GB"
+            )
+            if has_kv:
+                row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
+            table += row + "\n"
             total_tokens += gen_tokens
     else:
         # Check if we need special handling for LM Studio
@@ -368,24 +423,49 @@ def generate_table(
         table += f"\nPerplexity: {perplexity:.2f}"
 
     if batch_results:
+        batch_has_kv = any("kv_cache_gb" in r for r in batch_results)
         table += "\n\nBatch Benchmark\n"
-        table += "Batch | Prompt TPS | Gen TPS | Memory\n"
-        table += "------|------------|---------|--------\n"
+        if batch_has_kv:
+            table += "Batch | Prompt TPS | Gen TPS | Memory   | KV Cache\n"
+            table += "------|------------|---------|----------|----------\n"
+        else:
+            table += "Batch | Prompt TPS | Gen TPS | Memory\n"
+            table += "------|------------|---------|--------\n"
         for r in batch_results:
-            table += f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB\n"
+            row = (
+                f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | "
+                f"{r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB"
+            )
+            if batch_has_kv:
+                row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
+            table += row + "\n"
 
     if cached_results:
+        cached_has_kv = any("kv_cache_gb" in r for r in cached_results)
         table += "\n\nCached KV Cache (incremental prefill)\n"
-        table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS\n"
-        table += "--------|-----------|-----------|------------|-----------------|--------\n"
+        if cached_has_kv:
+            table += (
+                "Context | Total Tok | Delta Tok | Cached Tok | "
+                "Inc Prefill TPS | Gen TPS | KV Cache\n"
+            )
+            table += (
+                "--------|-----------|-----------|------------|"
+                "-----------------|---------|----------\n"
+            )
+        else:
+            table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS\n"
+            table += "--------|-----------|-----------|------------|-----------------|--------\n"
         for r in sorted(cached_results, key=lambda x: float(x["context_size"][:-1])):
             if r.get("cached_tokens", 0) == 0:
                 continue
-            table += (
+            row = (
                 f"{r['context_size']:>7} | {r['prompt_tokens']:>9} | "
                 f"{r.get('delta_tokens', 0):>9} | {r.get('cached_tokens', 0):>10} | "
-                f"{r.get('incremental_prompt_tps', 0):>15.1f} | {r['generation_tps']:>7.1f}\n"
+                f"{r.get('incremental_prompt_tps', 0):>15.1f} | {r['generation_tps']:>7.1f}"
             )
+            if cached_has_kv:
+                row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
+            table += row + "\n"
 
     return table
 
@@ -582,6 +662,7 @@ def create_chart_mlx(
     prompt_tps = []
     gen_tps = []
     peak_memory = []
+    kv_cache = []
     generation_tokens = []
     total_times = []
     ttft_times = []
@@ -591,19 +672,37 @@ def create_chart_mlx(
         prompt_tps.append(r["prompt_tps"])
         gen_tps.append(r["generation_tps"])
         peak_memory.append(r["peak_memory_gb"])
+        kv_cache.append(r.get("kv_cache_gb", 0))
         generation_tokens.append(r["generation_tokens"])
         total_times.append(r.get("total_time", 0))
         ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
 
-    # Create figure - 4x2 grid if batch results present, else 3x2
-    num_rows = 4 if batch_results else 3
-    fig_height = 20 if batch_results else 16
+    has_kv_cache = any(v > 0 for v in kv_cache)
+
+    # Detect whether the batch sweep also tracked KV cache (mlx-lm always does;
+    # mlx-vlm does once the patched fork is in place). When present, we add a
+    # 5th row showing batch peak memory + batch kv cache vs batch size so the
+    # KV growth across batch sizes is visible alongside the TPS panels.
+    batch_has_kv = bool(batch_results) and any("kv_cache_gb" in r for r in batch_results)
+
+    # Create figure - 5x2 if batch+kv, 4x2 if just batch, else 3x2
+    if batch_has_kv:
+        num_rows = 5
+        fig_height = 24
+    elif batch_results:
+        num_rows = 4
+        fig_height = 20
+    else:
+        num_rows = 3
+        fig_height = 16
     fig, axes = plt.subplots(num_rows, 2, figsize=(15, fig_height), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
     ax1, ax2 = axes[0]
     ax3, ax4 = axes[1]
     ax5, ax6 = axes[2]
     if batch_results:
         ax7, ax8 = axes[3]
+    if batch_has_kv:
+        ax9, ax10 = axes[4]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -788,12 +887,13 @@ def create_chart_mlx(
                 ax4.text(i + 0.15, t, f"{t:.2f}s", ha="left", va="bottom", fontsize=8, color="#2196F3")
             ax4.legend()
 
-    # Fifth subplot - Peak Memory Usage
-    ax5.set_title("Peak Memory Usage", fontsize=14, pad=10)
+    # Fifth subplot - Peak Memory Usage (with KV cache overlay if present)
+    title5 = "Peak Memory Usage" + (" & KV Cache" if has_kv_cache else "")
+    ax5.set_title(title5, fontsize=14, pad=10)
 
     # Bar chart for memory
     color_memory = "#ff9800"
-    bars = ax5.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7)
+    bars = ax5.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7, label="Peak Memory")
 
     # Add value labels on bars
     if peak_memory:
@@ -815,6 +915,23 @@ def create_chart_mlx(
     ax5.set_ylabel("Memory (GB)", color=color_memory)
     ax5.tick_params(axis="y", labelcolor=color_memory)
     ax5.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
+
+    # Overlay KV cache as a line on the same y-axis (both are GB)
+    if has_kv_cache:
+        color_kv = "#2196F3"
+        ax5.plot(x, kv_cache, "s-", color=color_kv, linewidth=2, markersize=8, label="KV Cache")
+        for i, kv in enumerate(kv_cache):
+            if kv > 0:
+                ax5.text(
+                    i,
+                    kv,
+                    f"{kv:.2f} GB",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                    color=color_kv,
+                )
+        ax5.legend(loc="upper left", fontsize=9)
 
     # Add grid
     ax5.grid(True, axis="y", alpha=0.3)
@@ -888,6 +1005,59 @@ def create_chart_mlx(
         ax8.grid(True, alpha=0.3)
         ax8.set_ylim(0, max(batch_gen_tps) * 1.15 if batch_gen_tps and max(batch_gen_tps) > 0 else 1)
 
+    # Row 5: Batch Peak Memory + Batch KV Cache (when KV is tracked per batch)
+    if batch_has_kv:
+        batch_peak_mem = [r.get("peak_memory_gb", 0) for r in batch_results]
+        batch_kv = [r.get("kv_cache_gb", 0) for r in batch_results]
+
+        # Batch Peak Memory bars
+        ax9.set_title("Batch Peak Memory Usage", fontsize=14, pad=10)
+        color_bm = "#ff9800"
+        ax9_bars = ax9.bar(bx, batch_peak_mem, color=color_bm, width=0.6, alpha=0.7)
+        if batch_peak_mem:
+            max_bm = max(batch_peak_mem) if batch_peak_mem else 1
+            for bar, mem in zip(ax9_bars, batch_peak_mem):
+                ax9.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height() + max_bm * 0.02,
+                    f"{mem:.1f} GB",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    color=color_bm,
+                )
+        ax9.set_xticks(bx)
+        ax9.set_xticklabels(batch_labels)
+        ax9.set_xlabel("Batch Size")
+        ax9.set_ylabel("Memory (GB)", color=color_bm)
+        ax9.tick_params(axis="y", labelcolor=color_bm)
+        ax9.set_ylim(0, max(batch_peak_mem) * 1.2 if batch_peak_mem and max(batch_peak_mem) > 0 else 1)
+        ax9.grid(True, axis="y", alpha=0.3)
+
+        # Batch KV Cache bars
+        ax10.set_title("Batch KV Cache Usage", fontsize=14, pad=10)
+        color_bkv = "#2196F3"
+        ax10_bars = ax10.bar(bx, batch_kv, color=color_bkv, width=0.6, alpha=0.7)
+        if batch_kv:
+            max_bkv = max(batch_kv) if batch_kv else 1
+            for bar, kv in zip(ax10_bars, batch_kv):
+                ax10.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height() + max_bkv * 0.02,
+                    f"{kv:.2f} GB",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    color=color_bkv,
+                )
+        ax10.set_xticks(bx)
+        ax10.set_xticklabels(batch_labels)
+        ax10.set_xlabel("Batch Size")
+        ax10.set_ylabel("KV Cache (GB)", color=color_bkv)
+        ax10.tick_params(axis="y", labelcolor=color_bkv)
+        ax10.set_ylim(0, max(batch_kv) * 1.2 if batch_kv and max(batch_kv) > 0 else 1)
+        ax10.grid(True, axis="y", alpha=0.3)
+
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
@@ -919,13 +1089,16 @@ def _get_machine_name() -> str:
     return platform.node().split(".")[0]
 
 
-def create_output_directory(framework_name: str, model_name: str, base_dir: str = "output") -> Path:
+def create_output_directory(
+    framework_name: str, model_name: str, base_dir: str = "output", cold_prefill: bool = True
+) -> Path:
     """Create timestamped output directory for benchmark results.
 
     Args:
         framework_name: Name of the framework (e.g., "ollama", "mlx", "llamacpp")
         model_name: Name of the model being benchmarked
         base_dir: Base directory for output (default: "output")
+        cold_prefill: If True, append _nocache suffix to directory name
 
     Returns:
         Path object for the created directory
@@ -940,7 +1113,8 @@ def create_output_directory(framework_name: str, model_name: str, base_dir: str 
     # Extract short machine name for the directory
     machine_name = _get_machine_name()
 
-    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}_{machine_name}_{timestamp}"
+    cache_tag = "_nocache" if cold_prefill else "_cache"
+    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}{cache_tag}_{machine_name}_{timestamp}"
     output_dir.mkdir(exist_ok=True)
 
     return output_dir
@@ -979,11 +1153,70 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
         help="Output chart filename (default: benchmark_chart.png)",
     )
     parser.add_argument(
+        "--runs",
+        type=int,
+        default=3,
+        help="Number of runs per context size; peak score is kept (default: 3)",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=3600,
         help="Timeout in seconds for each benchmark (default: 3600 = 60 minutes)",
     )
+
+
+def make_cache_buster() -> str:
+    """Generate a unique prefix to bust server-side KV prompt cache.
+
+    Many inference servers (Ollama, llama.cpp, vLLM, LM Studio, etc.) reuse the
+    KV cache when consecutive prompts share a prefix.  That causes
+    prompt_eval_duration to report only the *uncached delta* while
+    prompt_eval_count still reports the full length, inflating the derived
+    prompt tokens/sec.  Prepending a per-call UUID prefix forces a prefix
+    miss so every row is cold prefill.  ~10 tokens of overhead per prompt.
+    """
+    import uuid
+
+    return f"[session-{uuid.uuid4().hex[:16]}]\n"
+
+
+def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwargs):
+    """Run benchmark N times and return the result with peak generation_tps.
+
+    Each run gets a unique ``_run_idx`` keyword argument so the engine can
+    bust any server-side KV cache that may carry over from a previous run.
+    Engines that accept ``_run_idx`` should use it to vary the prompt prefix
+    (e.g. ``common.make_cache_buster()`` already includes a UUID; the run
+    index is an additional differentiator).
+
+    Args:
+        run_fn: Engine-specific run_benchmark function.
+        *args: Positional arguments forwarded to run_fn.
+        n_runs: Number of runs per context size.
+        metric: Metric to maximize when selecting the peak run.
+        **kwargs: Keyword arguments forwarded to run_fn.
+
+    Returns:
+        Result dict from the run with the highest metric value, or None if all runs fail.
+    """
+    best_result = None
+    best_score = -1
+    for run_idx in range(1, n_runs + 1):
+        print(f"  Run {run_idx}/{n_runs}...")
+        kwargs["_run_idx"] = run_idx
+        result = run_fn(*args, **kwargs)
+        if result:
+            score = result.get(metric, 0)
+            print(f"    {metric}: {score:.2f}")
+            if score > best_score:
+                best_score = score
+                best_result = result
+    if best_result:
+        print(f"  Peak {metric}: {best_score:.2f}")
+    # Clean up so the kwarg doesn't leak if the dict is reused
+    kwargs.pop("_run_idx", None)
+    return best_result
 
 
 def save_all_outputs(
@@ -1136,9 +1369,13 @@ def print_benchmark_summary(
         print("BATCH BENCHMARK RESULTS")
         print("=" * 50)
         for r in batch_results:
-            print(
-                f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s, {r['peak_memory_gb']:.2f} GB"
+            line = (
+                f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} "
+                f"tg {r['generation_tps']:.1f} t/s, mem {r['peak_memory_gb']:.2f} GB"
             )
+            if "kv_cache_gb" in r:
+                line += f", kv {r['kv_cache_gb']:.2f} GB"
+            print(line)
 
     # Print cached benchmark results if available
     if cached_results:

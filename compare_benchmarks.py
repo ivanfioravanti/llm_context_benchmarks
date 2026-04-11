@@ -119,11 +119,23 @@ def _extract_quantization(model_name: str) -> str:
         r"(?<![a-zA-Z])(\d+[-]?bit)(?![a-zA-Z])",  # 2bit 4bit 6bit 8bit 4-bit …
         r"(?<![a-zA-Z])(Q\d+(?:[_-][\w]+)*)(?![\w])",  # Q4_0 Q4_K_M Q8_0 …
         r"(?<![a-zA-Z])(fp16|bf16|fp32|f16|f32|int4|int8)(?![\w])",  # float/int types
+        r"(?<![a-zA-Z])(TBQ)(?![\w])",  # TurboQuant
     ]:
         match = re.search(pattern, model_name, re.IGNORECASE)
         if match:
             return match.group(1)
-    return "unknown"
+    return "bf16"
+
+
+def _quant_group_key(quant: str) -> str:
+    """Bucket TurboQuant runs together with bf16 in the heatmap.
+
+    TBQ is conceptually bf16 weights with a KV-cache quantization trick on top,
+    so for grouping purposes the two belong in the same heatmap section. The
+    original ``quant`` value is still kept on the row so the label rendering
+    can tag TBQ rows distinctly within the merged section.
+    """
+    return "bf16" if quant.upper() == "TBQ" else quant
 
 
 def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
@@ -211,11 +223,20 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     # Check if any benchmark has memory data
     has_memory_data = any(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
 
+    # Only show KV cache subplot if every benchmark in the comparison reports
+    # it — otherwise providers without the metric would draw lines at 0.
+    has_kv_cache_data = all(any(r.get("kv_cache_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
+
     # Check if any benchmark has perplexity data
     has_perplexity_data = any(data.get("perplexity_data") is not None for data in benchmark_data)
 
     # Check if any benchmark has batch data
     has_batch_data = any(data.get("batch_data") is not None for data in benchmark_data)
+
+    # Check if any benchmark has KV cache reported on its batch rows
+    has_batch_kv_data = any(
+        any("kv_cache_gb" in r for r in (data.get("batch_data") or [])) for data in benchmark_data
+    )
 
     # Check if any benchmark has cached KV results
     has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
@@ -231,6 +252,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     ]
     if has_memory_data:
         subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
+    if has_kv_cache_data:
+        subplot_specs.append(("kv_cache", "KV Cache Size", "KV Cache (GB)"))
     if has_cached_data:
         subplot_specs.append(("inc_prompt_tps", "Incremental Prompt TPS (Cached KV)", "Tokens/sec"))
     if has_perplexity_data:
@@ -238,6 +261,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     if has_batch_data:
         subplot_specs.append(("batch_prompt", "Batch Prompt TPS", "Tokens/sec"))
         subplot_specs.append(("batch_gen", "Batch Generation TPS", "Tokens/sec"))
+    if has_batch_kv_data:
+        subplot_specs.append(("batch_kv", "Batch KV Cache Size", "KV Cache (GB)"))
 
     if charts:
         subplot_specs = [spec for spec in subplot_specs if spec[0] in charts]
@@ -291,15 +316,16 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         total_times = [r.get("total_time", 0) for r in results]
         ttft_times = [r.get("time_to_first_token", r.get("prompt_eval_duration", 0)) for r in results]
         peak_memory = [r.get("peak_memory_gb", 0) for r in results]
+        kv_cache_gb = [r.get("kv_cache_gb", 0) for r in results]
 
         context_nums = []
         for ctx in context_sizes:
             context_nums.append(float(ctx[:-1]) * 1000 if ctx.endswith("k") else int(ctx))
 
         sorted_data = sorted(
-            zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory)
+            zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory, kv_cache_gb)
         )
-        cn, cs, pp, gn, tt, tf, pm = zip(*sorted_data)
+        cn, cs, pp, gn, tt, tf, pm, kv = zip(*sorted_data)
         all_series.append(
             {
                 "context_nums": cn,
@@ -309,6 +335,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 "total_time": tt,
                 "ttft": tf,
                 "memory": pm,
+                "kv_cache": kv,
             }
         )
 
@@ -418,22 +445,34 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
             ax.legend(fontsize=9)
             continue
 
-        if key in ("batch_prompt", "batch_gen"):
-            # Batch prompt/generation TPS vs batch size
-            data_key = "prompt_tps" if key == "batch_prompt" else "generation_tps"
-            title = "Batch Prompt TPS" if key == "batch_prompt" else "Batch Generation TPS"
+        if key in ("batch_prompt", "batch_gen", "batch_kv"):
+            # Batch prompt/generation TPS or KV cache vs batch size
+            if key == "batch_prompt":
+                data_key, title = "prompt_tps", "Batch Prompt TPS"
+                fmt = "{:.1f}"
+            elif key == "batch_gen":
+                data_key, title = "generation_tps", "Batch Generation TPS"
+                fmt = "{:.1f}"
+            else:
+                data_key, title = "kv_cache_gb", "Batch KV Cache Size"
+                fmt = "{:.2f}"
             ax.set_title(title, fontweight="bold", fontsize=13)
             for i, data in enumerate(benchmark_data):
                 batch = data.get("batch_data")
                 if not batch:
                     continue
-                batch_sizes = [r["batch_size"] for r in batch]
-                batch_tps = [r[data_key] for r in batch]
+                # For batch_kv, only plot rows that actually have the field —
+                # avoids drawing a line at zero for engines that don't track it.
+                rows = [r for r in batch if (key != "batch_kv" or "kv_cache_gb" in r)]
+                if not rows:
+                    continue
+                batch_sizes = [r["batch_size"] for r in rows]
+                batch_y = [r.get(data_key, 0) for r in rows]
                 marker = markers[i % len(markers)]
-                ax.plot(batch_sizes, batch_tps, marker=marker, linewidth=2, label=clean_names[i], color=colors[i])
-                for x, y in zip(batch_sizes, batch_tps):
+                ax.plot(batch_sizes, batch_y, marker=marker, linewidth=2, label=clean_names[i], color=colors[i])
+                for x, y in zip(batch_sizes, batch_y):
                     ax.annotate(
-                        f"{y:.1f}",
+                        fmt.format(y),
                         (x, y),
                         textcoords="offset points",
                         xytext=(0, 8),
@@ -631,6 +670,10 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         peak_mem_values = [r.get("peak_memory_gb", 0) for r in results]
         peak_memory = max(peak_mem_values) if peak_mem_values else 0
 
+        # Peak KV cache (max across all context sizes) — mlx / mlx-vlm only
+        kv_cache_values = [r.get("kv_cache_gb", 0) for r in results]
+        peak_kv_cache = max(kv_cache_values) if kv_cache_values else 0
+
         # Hardware info
         chip = hardware_info.get("chip", "Unknown")
         memory = hardware_info.get("memory_gb", 0)
@@ -667,6 +710,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
                 "Avg Inc Prompt TPS": avg_inc_prompt_tps_str,
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
+                "Peak KV Cache": f"{peak_kv_cache:.2f}GB" if peak_kv_cache > 0 else "N/A",
                 "Perplexity": ppl_str,
                 "Peak Batch Prompt TPS": peak_batch_prompt_str,
                 "Peak Batch Gen TPS": peak_batch_str,
@@ -700,6 +744,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                     "Total Time": round(r.get("total_time", 0), 2),
                     "TTFT": round(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)), 2),
                     "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
+                    "KV Cache GB": round(r.get("kv_cache_gb", 0), 3),
                 }
             )
         # Add batch data if present
@@ -715,6 +760,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                         "Total Time": "",
                         "TTFT": "",
                         "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
+                        "KV Cache GB": round(b.get("kv_cache_gb", 0), 3),
                     }
                 )
         # Add cached KV data if present
@@ -728,6 +774,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                     "Total Time": round(r.get("total_time", 0), 2),
                     "TTFT": round(r.get("time_to_first_token", 0), 2),
                     "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
+                    "KV Cache GB": round(r.get("kv_cache_gb", 0), 3),
                 }
             )
 
@@ -755,6 +802,8 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         xpost_text += f"\n  {entry['Total Tokens']} tokens in {entry['Total Time']}"
         if entry["Peak Memory"] != "N/A":
             xpost_text += f"\n  Peak Memory: {entry['Peak Memory']}"
+        if entry.get("Peak KV Cache", "N/A") != "N/A":
+            xpost_text += f"\n  Peak KV Cache: {entry['Peak KV Cache']}"
         if entry.get("Perplexity", "N/A") != "N/A":
             xpost_text += f"\n  Perplexity: {entry['Perplexity']}"
         if entry.get("Avg Inc Prompt TPS", "N/A") != "N/A":
@@ -810,10 +859,11 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         lookups.append(lookup)
 
     clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
-    # Only show the memory columns if every benchmark in the comparison reports
-    # peak memory — otherwise we end up with a half-empty column dominated by
-    # N/A cells from providers that don't measure it.
+    # Only show the memory / KV-cache columns if every benchmark in the
+    # comparison reports them — otherwise we end up with a half-empty column
+    # dominated by N/A cells from providers that don't measure them.
     has_memory = all(any(r.get("peak_memory_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
+    has_kv_cache = all(any(r.get("kv_cache_gb", 0) > 0 for r in data["results"]) for data in benchmark_data)
     n_benchmarks = len(benchmark_data)
     aliases = [chr(ord("A") + i) for i in range(n_benchmarks)]
 
@@ -839,6 +889,12 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         start = len(col_labels)
         for alias in aliases:
             col_labels.append(f"Mem (GB)\n{alias}")
+        groups.append((start, start + n_benchmarks, False))
+
+    if has_kv_cache:
+        start = len(col_labels)
+        for alias in aliases:
+            col_labels.append(f"KV (GB)\n{alias}")
         groups.append((start, start + n_benchmarks, False))
 
     n_cols = len(col_labels)
@@ -868,6 +924,13 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         if has_memory:
             mem_vals = [r.get("peak_memory_gb", 0) if r else 0 for r in results]
             for v in mem_vals:
+                row.append(f"{v:.2f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+
+        # KV cache
+        if has_kv_cache:
+            kv_vals = [r.get("kv_cache_gb", 0) if r else 0 for r in results]
+            for v in kv_vals:
                 row.append(f"{v:.2f}" if v > 0 else "\u2014")
                 raw_row.append(v)
 
@@ -1056,6 +1119,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             {
                 "engine": data.get("engine", ""),
                 "quant": quant,
+                "quant_group": _quant_group_key(quant),
                 "chip_short": chip_short,
                 "base_model": base_model,
                 "avg_prompt_tps": avg_prompt_tps,
@@ -1070,10 +1134,10 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         print("No data available for heatmap.")
         return None
 
-    # Group by quantization level
+    # Group by quantization level (TBQ is folded into bf16 — see _quant_group_key)
     quant_groups: dict = defaultdict(list)
     for row in rows:
-        quant_groups[row["quant"]].append(row)
+        quant_groups[row["quant_group"]].append(row)
     ordered_quants = sorted(quant_groups.keys())
     n_groups = len(ordered_quants)
 
@@ -1143,19 +1207,27 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
         # Row labels: include the engine when there is more than one engine in
         # the group, otherwise rows for the same model on the same machine would
-        # collapse to identical labels (e.g. three "M5Max" rows).
+        # collapse to identical labels (e.g. three "M5Max" rows). When the
+        # group folds multiple quants together (e.g. bf16 + TBQ), tag rows
+        # whose underlying quant differs from the group key so the section
+        # stays self-explanatory.
         engines_in_group = {r.get("engine", "") for r in group_rows}
         multi_engine = len(engines_in_group) > 1
-        if single_model:
+        quants_in_group = {r.get("quant", "") for r in group_rows}
+        mixed_quants = len(quants_in_group) > 1
+
+        def _row_label(r):
+            parts = []
+            if mixed_quants and r.get("quant", "") != quant:
+                parts.append(r["quant"])
             if multi_engine:
-                row_labels = [f"{r['engine']} / {r['chip_short']}" for r in group_rows]
-            else:
-                row_labels = [r["chip_short"] for r in group_rows]
-        else:
-            if multi_engine:
-                row_labels = [f"{r['engine']}: {r['base_model']} / {r['chip_short']}" for r in group_rows]
-            else:
-                row_labels = [f"{r['base_model']} / {r['chip_short']}" for r in group_rows]
+                parts.append(r["engine"])
+            if not single_model:
+                parts.append(r["base_model"])
+            parts.append(r["chip_short"])
+            return " / ".join(parts)
+
+        row_labels = [_row_label(r) for r in group_rows]
         ax.set_yticks(range(n_group_rows))
         ax.set_yticklabels(row_labels, fontsize=10)
 

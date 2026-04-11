@@ -124,8 +124,22 @@ def run_benchmark(
     context_file: Path,
     max_tokens: int = 128,
     ignore_chat_template: bool = False,
+    cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
-    """Run benchmark for a single context file using mlx_lm.stream_generate."""
+    """Run benchmark for a single context file using mlx_lm.stream_generate.
+
+    Args:
+        model: Loaded Paroquant model
+        tokenizer: Loaded tokenizer
+        context_file: Path to the context file
+        max_tokens: Maximum tokens to generate
+        ignore_chat_template: If true, skip chat template wrapping
+        cold_prefill: Prepend UUID prefix to bust any framework-level caching (default: True)
+
+    Returns:
+        Dictionary with benchmark results or None if failed
+    """
     import mlx.core as mx
     import mlx_lm
 
@@ -134,6 +148,9 @@ def run_benchmark(
     try:
         with open(context_file, "r") as f:
             prompt = f.read()
+
+        if cold_prefill or _run_idx is not None:
+            prompt = common.make_cache_buster() + prompt
 
         prepared_prompt = prepare_prompt(prompt, tokenizer, ignore_chat_template)
 
@@ -395,6 +412,13 @@ def main() -> int:
         action="store_true",
         help="Skip perplexity computation",
     )
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prevent server-side KV cache reuse for cold-prefill numbers (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
 
     # Common arguments
     common.setup_common_args(parser)
@@ -413,7 +437,7 @@ def main() -> int:
     model_name = args.model.split("/")[-1]
 
     # Create output directory
-    output_dir = common.create_output_directory("paroquant", model_name)
+    output_dir = common.create_output_directory("paroquant", model_name, cold_prefill=args.cold_prefill)
 
     # Find context files
     context_files = common.find_context_files(args.contexts)
@@ -442,6 +466,7 @@ def main() -> int:
         print("Chat template: disabled (raw prompt)")
     else:
         print("Chat template: enabled when tokenizer provides one")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
     # Warmup run using the smallest context file
     import mlx_lm
@@ -541,8 +566,10 @@ def main() -> int:
         print(f"Benchmarking {file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model, tokenizer, file, args.max_tokens, args.ignore_chat_template,
+            cold_prefill=args.cold_prefill, n_runs=args.runs,
         )
         if result:
             results.append(result)

@@ -158,12 +158,17 @@ def run_benchmark(
     top_p: float,
     timeout: int,
     stream: bool = True,
+    cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark DeepSeek for a given context file."""
     print(f"Running benchmark for {context_file}...")
 
     with open(context_file, "r") as handle:
         prompt = handle.read()
+
+    if cold_prefill or _run_idx is not None:
+        prompt = common.make_cache_buster() + prompt
 
     try:
         if stream:
@@ -300,6 +305,14 @@ def main() -> int:
         help="Model identifier sent to the DeepSeek API (defaults to the positional model unless auto-adjusted)",
     )
     parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend a unique marker to every prompt to bust KV "
+        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
+    parser.add_argument(
         "--stream",
         dest="stream",
         action="store_true",
@@ -356,8 +369,9 @@ def main() -> int:
     if request_model != args.model:
         print(f"Request model: {request_model}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
-    output_dir = common.create_output_directory("deepseek", args.model)
+    output_dir = common.create_output_directory("deepseek", args.model, cold_prefill=args.cold_prefill)
 
     # Warmup run
     warmup_file = common.find_warmup_file()
@@ -375,6 +389,7 @@ def main() -> int:
             top_p=args.top_p,
             timeout=args.timeout,
             stream=args.stream,
+            cold_prefill=args.cold_prefill,
         )
         print("Warmup complete.")
     else:
@@ -388,7 +403,8 @@ def main() -> int:
         print(f"Benchmarking {context_file.name}...")
         print("=" * 50)
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model_name=args.model,
             context_file=context_file,
             client=client,
@@ -398,6 +414,8 @@ def main() -> int:
             top_p=args.top_p,
             timeout=args.timeout,
             stream=args.stream,
+            cold_prefill=args.cold_prefill,
+            n_runs=args.runs,
         )
 
         if result:

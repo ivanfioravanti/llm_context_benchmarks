@@ -267,7 +267,7 @@ def main() -> int:
         return 1
 
     model_name = args.model.split("/")[-1]
-    output_dir = common.create_output_directory("mlx-distributed", model_name, args.output_dir)
+    output_dir = common.create_output_directory("mlx-distributed", model_name, args.output_dir, cold_prefill=True)
 
     context_files = common.find_context_files(args.contexts, args.context_dir)
     if not context_files:
@@ -317,7 +317,8 @@ def main() -> int:
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(
+        result = common.run_benchmark_peak(
+            run_benchmark,
             model_url=args.model,
             context_file=context_file,
             backend=args.backend,
@@ -328,6 +329,7 @@ def main() -> int:
             pipeline=args.pipeline,
             max_tokens=args.max_tokens,
             timeout=args.timeout,
+            n_runs=args.runs,
         )
         if (
             not result
@@ -338,7 +340,8 @@ def main() -> int:
                 "Fast sync run failed; retrying this context with MLX_METAL_FAST_SYNCH=0..."
             )
             fallback_env = set_env_value(args.env, "MLX_METAL_FAST_SYNCH", "0")
-            result = run_benchmark(
+            result = common.run_benchmark_peak(
+                run_benchmark,
                 model_url=args.model,
                 context_file=context_file,
                 backend=args.backend,
@@ -349,6 +352,7 @@ def main() -> int:
                 pipeline=args.pipeline,
                 max_tokens=args.max_tokens,
                 timeout=args.timeout,
+                n_runs=args.runs,
             )
             if result:
                 result["fast_synch_fallback"] = 1

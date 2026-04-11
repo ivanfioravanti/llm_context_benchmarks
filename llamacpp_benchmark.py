@@ -29,7 +29,9 @@ from benchmark_common import (
     find_context_files,
     format_hardware_string,
     get_hardware_info,
+    make_cache_buster,
     print_benchmark_summary,
+    run_benchmark_peak,
     save_all_outputs,
     save_generated_text,
     setup_common_args,
@@ -62,7 +64,8 @@ def get_server_info(server_url: str) -> Dict:
 
 
 def benchmark_llamacpp(
-    server_url: str, context_file: Path, max_tokens: int = 128, timeout: int = 3600
+    server_url: str, context_file: Path, max_tokens: int = 128, timeout: int = 3600, cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark llama.cpp server with a given context file.
 
@@ -71,6 +74,7 @@ def benchmark_llamacpp(
         context_file: Path to the context file
         max_tokens: Maximum number of tokens to generate
         timeout: Request timeout in seconds
+        cold_prefill: Prevent server-side KV cache reuse (default: True)
 
     Returns:
         Dictionary with benchmark results or None if failed
@@ -78,6 +82,9 @@ def benchmark_llamacpp(
     # Read the context file
     with open(context_file, "r") as f:
         prompt = f.read()
+
+    if cold_prefill or _run_idx is not None:
+        prompt = make_cache_buster() + prompt
 
     # Prepare the request payload
     payload = {
@@ -87,7 +94,7 @@ def benchmark_llamacpp(
         "top_k": 40,
         "top_p": 0.95,
         "stream": True,
-        "cache_prompt": False,
+        "cache_prompt": not cold_prefill,
     }
 
     # Record start time
@@ -186,7 +193,14 @@ def main() -> int:
         default=8080,
         help="Port of the llama.cpp server (default: 8080)",
     )
-    
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prevent server-side KV cache reuse for cold-prefill numbers (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
+
     # Add common arguments
     setup_common_args(parser)
     
@@ -219,6 +233,7 @@ def main() -> int:
     print(f"\nHardware: {hardware_str}")
     print(f"Model: {model_name}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Cold prefill: {'enabled (cache_prompt=false)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
     # Find context files
     context_files = find_context_files(args.contexts)
@@ -226,7 +241,7 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = create_output_directory("llamacpp", args.model)
+    output_dir = create_output_directory("llamacpp", args.model, cold_prefill=args.cold_prefill)
 
     results = []
 
@@ -238,8 +253,9 @@ def main() -> int:
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
 
-        result = benchmark_llamacpp(
-            server_url, context_file, args.max_tokens, args.timeout
+        result = run_benchmark_peak(
+            benchmark_llamacpp, server_url, context_file, args.max_tokens, args.timeout,
+            cold_prefill=args.cold_prefill, n_runs=args.runs
         )
 
         if result:

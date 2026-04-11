@@ -66,6 +66,7 @@ dependencies = [
   "tzdata>=2025.2",
   "urllib3>=2.5.0",
   "virtualenv>=20.34.0",
+  "torchvision>=0.26.0",
 ]
 
 [project.scripts]
@@ -83,10 +84,18 @@ exo-benchmark = "exo_benchmark:main"
 deepseek-benchmark = "deepseek_benchmark:main"
 grok-benchmark = "grok_benchmark:main"
 openai-benchmark = "openai_benchmark:main"
+omlx-benchmark = "omlx_benchmark:main"
+vmlx-benchmark = "vmlx_benchmark:main"
 
 [build-system]
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.uv.sources]
+# Local editable install of the patched mlx-vlm fork (adds
+# BatchStats.kv_cache_bytes / GenerationResult.kv_cache_bytes). Remove or
+# pin to a registry version before publishing.
+mlx-vlm = { path = "../mlx-vlm", editable = true }
 
 [tool.setuptools]
 packages = []
@@ -106,4 +115,6 @@ py-modules = [
   "ollama_api_benchmark",
   "ollama_cli_benchmark",
   "openai_benchmark",
+  "omlx_benchmark",
+  "vmlx_benchmark",
 ]

@@ -64,6 +64,8 @@ def run_benchmark(
     context_file: Path,
     max_tokens: int = 128,
     timeout: int = 3600,
+    cold_prefill: bool = True,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark a single context file against the OpenAI-compatible endpoint.
 
@@ -73,6 +75,9 @@ def run_benchmark(
     """
     with open(context_file) as f:
         prompt = f.read()
+
+    if cold_prefill or _run_idx is not None:
+        prompt = common.make_cache_buster() + prompt
 
     start_time = time.time()
     first_token_time: Optional[float] = None
@@ -344,6 +349,14 @@ def main() -> int:
         action="store_true",
         help="Skip batch benchmark",
     )
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend a unique marker to every prompt to bust KV "
+        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
 
     common.setup_common_args(parser)
     args = parser.parse_args()
@@ -375,12 +388,13 @@ def main() -> int:
     print(f"Model:      {model}")
     print(f"Hardware:   {hardware_str}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
     context_files = common.find_context_files(args.contexts)
     if not context_files:
         return 1
 
-    output_dir = common.create_output_directory("openai_compat", model)
+    output_dir = common.create_output_directory("openai_compat", model, cold_prefill=args.cold_prefill)
 
     results = []
     benchmark_start = time.time()
@@ -390,7 +404,9 @@ def main() -> int:
         print(f"Benchmarking {ctx_file.name} ...")
         print(f"{'=' * 50}")
 
-        result = run_benchmark(client, model, ctx_file, args.max_tokens, args.timeout)
+        result = common.run_benchmark_peak(
+            run_benchmark, client, model, ctx_file, args.max_tokens, args.timeout, cold_prefill=args.cold_prefill, n_runs=args.runs,
+        )
         if result:
             results.append(result)
 

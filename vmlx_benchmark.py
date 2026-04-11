@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark script for xAI's Grok models via OpenAI-compatible API."""
+"""Benchmark script for vMLX (MLX Studio) using OpenAI-compatible API."""
 
 from __future__ import annotations
 
@@ -12,32 +12,40 @@ from typing import Dict, Optional
 
 from openai import OpenAI
 
-try:
-    from openai import AzureOpenAI  # type: ignore
-except ImportError:  # pragma: no cover
-    AzureOpenAI = None  # type: ignore
-
 import benchmark_common as common
 
-GROK_API_URL = "https://api.x.ai/v1"
-DEFAULT_MODEL = "grok-beta"
+VMLX_API_URL = "http://127.0.0.1:8001/v1"
 
 
-def normalize_azure_endpoint(endpoint: str) -> str:
-    """Strip query strings and deployment paths from Azure endpoints."""
+def _make_cache_buster() -> str:
+    """Generate a unique prefix to bust vMLX's prefix KV cache.
 
-    if not endpoint:
-        return endpoint
+    vMLX uses a tiered prefix cache. When a new prompt shares a prefix with a
+    previous request, cached tokens are reused, making prompt_eval_duration
+    cover only the uncached delta while prompt_tokens reports the full length —
+    inflating derived prompt t/s.  Prepending a per-call UUID forces a prefix
+    miss so every row is cold prefill.  ~10 tokens of overhead per prompt.
+    """
+    import uuid
 
-    clean = endpoint.split("?")[0].rstrip("/")
-
-    if "/models/" in clean:
-        clean = clean.split("/models/")[0]
-
-    return clean
+    return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
-def call_grok(
+def ensure_endpoint(url: str) -> str:
+    """Normalize a vMLX endpoint for OpenAI-compatible clients."""
+
+    if not url:
+        return VMLX_API_URL
+
+    normalized = url.strip().rstrip("/")
+
+    if normalized.endswith("/chat/completions"):
+        normalized = normalized[: -len("/chat/completions")]
+
+    return normalized
+
+
+def call_vmlx(
     client: OpenAI,
     request_model: str,
     prompt: str,
@@ -46,7 +54,7 @@ def call_grok(
     top_p: float,
     timeout: int,
 ) -> Dict:
-    """Send a non-streaming chat completion request to Grok."""
+    """Send a non-streaming chat completion request to vMLX."""
 
     response = client.chat.completions.create(
         model=request_model,
@@ -63,9 +71,7 @@ def call_grok(
             {
                 "message": {
                     "content": response.choices[0].message.content or "",
-                    "reasoning_content": getattr(
-                        response.choices[0].message, "reasoning_content", ""
-                    ),
+                    "reasoning_content": getattr(response.choices[0].message, "reasoning_content", ""),
                 }
             }
         ],
@@ -73,7 +79,7 @@ def call_grok(
     }
 
 
-def call_grok_streaming(
+def call_vmlx_streaming(
     client: OpenAI,
     request_model: str,
     prompt: str,
@@ -82,7 +88,7 @@ def call_grok_streaming(
     top_p: float,
     timeout: int,
 ) -> Dict[str, object]:
-    """Stream a chat completion, capturing time-to-first-token metrics."""
+    """Stream a chat completion from vMLX, capturing time-to-first-token."""
 
     message_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -142,12 +148,24 @@ def call_grok_streaming(
     total_time = time.time() - start_time
     prompt_eval_duration = (first_token_time - start_time) if first_token_time else 0.0
 
+    # Extract cached tokens from prompt_tokens_details (vMLX reports KV cache
+    # hits via this field). Prompt throughput should be based on fresh tokens
+    # only — cached tokens skip prefill entirely, so including them inflates
+    # prompt TPS by orders of magnitude when running sequential benchmarks
+    # over files that share a common prefix.
+    prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+    if isinstance(prompt_tokens_details, dict):
+        cached_tokens = prompt_tokens_details.get("cached_tokens", 0) or 0
+    else:
+        cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
+
     return {
         "generated_text": "".join(message_parts),
         "reasoning_text": "".join(reasoning_parts),
         "usage": usage,
         "total_time": total_time,
         "prompt_eval_duration": prompt_eval_duration,
+        "cached_tokens": cached_tokens,
     }
 
 
@@ -164,18 +182,22 @@ def run_benchmark(
     cold_prefill: bool = True,
     _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
-    """Benchmark Grok for a given context file."""
+    """Benchmark vMLX for a given context file."""
     print(f"Running benchmark for {context_file}...")
 
     with open(context_file, "r") as handle:
         prompt = handle.read()
 
+    # Bust vMLX's prefix KV cache by prepending a unique marker. Without this,
+    # the tiered cache from a previous warmup or benchmark row that shares a
+    # prefix will be reused, inflating prompt_tps.
     if cold_prefill or _run_idx is not None:
-        prompt = common.make_cache_buster() + prompt
+        prompt = _make_cache_buster() + prompt
 
     try:
+        cached_tokens = 0
         if stream:
-            stream_result = call_grok_streaming(
+            stream_result = call_vmlx_streaming(
                 client=client,
                 request_model=request_model,
                 prompt=prompt,
@@ -192,9 +214,10 @@ def run_benchmark(
             reasoning_text = stream_result.get("reasoning_text", "")
             total_time = float(stream_result.get("total_time", 0.0))
             prompt_eval_duration = float(stream_result.get("prompt_eval_duration", 0.0))
+            cached_tokens = int(stream_result.get("cached_tokens", 0))
         else:
             start_time = time.time()
-            data = call_grok(
+            data = call_vmlx(
                 client=client,
                 request_model=request_model,
                 prompt=prompt,
@@ -210,7 +233,7 @@ def run_benchmark(
             generated_text = message.get("content", "")
             reasoning_text = message.get("reasoning_content", "")
     except Exception as exc:
-        print(f"Error contacting Grok API: {exc}")
+        print(f"Error contacting vMLX API: {exc}")
         return None
 
     usage = data.get("usage", {})
@@ -228,29 +251,47 @@ def run_benchmark(
         inferred = total_tokens - prompt_tokens
         if inferred > 0:
             generation_tokens = inferred
+    reasoning_tokens = usage.get("reasoning_tokens")
+
+    if stream and not usage:
+        print("Warning: Streamed response did not include token usage; throughput metrics may be zero.")
+
+    # Prompt throughput is based on fresh (non-cached) tokens only.
+    # Cached tokens skip prefill entirely, so including them inflates
+    # prompt TPS by orders of magnitude when running sequential benchmarks
+    # over files that share a common prefix.
+    fresh_prompt_tokens = prompt_tokens - cached_tokens
 
     generation_duration = max(total_time - prompt_eval_duration, 0.0)
     eval_duration = generation_duration if generation_duration > 0 else total_time
 
     prompt_tps = (
-        prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 else 0.0
+        fresh_prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 and fresh_prompt_tokens > 0 else 0.0
     )
     generation_tps = (
-        generation_tokens / generation_duration if generation_duration > 0 else 0.0
+        generation_tokens / generation_duration if generation_duration and generation_duration > 0 else 0.0
     )
 
     print(f"  Prompt tokens: {prompt_tokens}")
+    if cached_tokens > 0:
+        print(f"  Cached tokens: {cached_tokens} (excluded from prompt throughput)")
+        print(f"  Fresh prompt tokens: {fresh_prompt_tokens}")
     print(f"  Generation tokens: {generation_tokens}")
+    if reasoning_tokens:
+        print(f"  Reasoning tokens: {reasoning_tokens}")
     print(f"  Total tokens: {total_tokens}")
     if prompt_eval_duration > 0:
         print(f"  Time to first token: {prompt_eval_duration:.2f}s")
-        print(f"  Prompt throughput: {prompt_tps:.2f} tokens/sec")
+        if fresh_prompt_tokens > 0:
+            print(f"  Prompt throughput: {prompt_tps:.2f} tokens/sec (fresh tokens only)")
     print(f"  Generation throughput: {generation_tps:.2f} tokens/sec")
     print(f"  Total time: {total_time:.2f}s")
 
     result: Dict[str, object] = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
+        "cached_tokens": cached_tokens,
+        "fresh_prompt_tokens": fresh_prompt_tokens,
         "generation_tokens": generation_tokens,
         "prompt_tps": prompt_tps,
         "generation_tps": generation_tps,
@@ -262,6 +303,8 @@ def run_benchmark(
         "total_tokens": total_tokens,
     }
 
+    if reasoning_tokens is not None:
+        result["reasoning_tokens"] = reasoning_tokens
     if reasoning_text:
         result["reasoning_text"] = reasoning_text
 
@@ -269,56 +312,35 @@ def run_benchmark(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Grok benchmarks using xAI API")
-    parser.add_argument(
-        "model",
-        nargs="?",
-        default=DEFAULT_MODEL,
-        help="Grok model id (default: grok-beta)",
-    )
+    parser = argparse.ArgumentParser(description="Run vMLX (MLX Studio) benchmarks using OpenAI-compatible API")
+    parser.add_argument("model", help="Model id (e.g., mlx-community/Qwen3-8B-4bit)")
 
     common.setup_common_args(parser)
 
     parser.add_argument(
         "--api-key",
-        help="xAI API key (defaults to XAI_API_KEY environment variable)",
+        help="API key (defaults to VMLX_API_KEY environment variable)",
     )
     parser.add_argument(
         "--temperature",
         type=float,
         default=0.7,
-        help="Sampling temperature (default: 0.7)",
+        help="Sampling temperature for generation (default: 0.7)",
     )
     parser.add_argument(
         "--top-p",
         type=float,
         default=0.95,
-        help="Nucleus sampling top-p (default: 0.95)",
+        help="Nucleus sampling top-p value (default: 0.95)",
     )
     parser.add_argument(
         "--base-url",
-        default=GROK_API_URL,
-        help="Override Grok API endpoint (default: https://api.x.ai/v1)",
+        default=VMLX_API_URL,
+        help="Override vMLX API endpoint (default: http://127.0.0.1:8001/v1)",
     )
     parser.add_argument(
         "--request-model",
-        help="Model identifier sent in the request payload (defaults to positional model)",
-    )
-    parser.add_argument(
-        "--api-version",
-        help="API version for Azure-hosted Grok deployments (e.g., 2024-05-01-preview)",
-    )
-    parser.add_argument(
-        "--azure-endpoint",
-        help="Azure endpoint base URL (e.g., https://resource.services.ai.azure.com)",
-    )
-    parser.add_argument(
-        "--cold-prefill",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Prepend a unique marker to every prompt to bust KV "
-        "cache reuse, forcing cold prefill on every row (default: enabled; "
-        "use --no-cold-prefill for cached/warm-reuse numbers)",
+        help="Model identifier sent to the API (defaults to the positional model)",
     )
     parser.add_argument(
         "--stream",
@@ -330,68 +352,58 @@ def main() -> int:
         "--no-stream",
         dest="stream",
         action="store_false",
-        help="Disable streaming responses (prompt TPS will rely on total time)",
+        help="Disable streaming responses (prompt TPS will be 0)",
     )
     parser.set_defaults(stream=True)
 
+    parser.add_argument(
+        "--cold-prefill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend a unique marker to every prompt to bust vMLX's prefix "
+        "KV cache, forcing cold prefill on every row (default: enabled; "
+        "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
+
     args = parser.parse_args()
 
-    api_key = args.api_key or os.getenv("XAI_API_KEY")
+    api_key = args.api_key or os.getenv("VMLX_API_KEY")
     if not api_key:
-        print("Error: xAI API key required. Set --api-key or XAI_API_KEY.")
-        return 1
+        api_key = "local"
+        print("No API key provided; using placeholder key. Set --api-key or VMLX_API_KEY if the server requires authentication.")
 
+    base_url = ensure_endpoint(args.base_url)
     request_model = args.request_model or args.model
 
     context_files = common.find_context_files(args.contexts)
     if not context_files:
         return 1
 
-    azure_endpoint = args.azure_endpoint
-    use_azure = bool(azure_endpoint) or "azure.com" in args.base_url.lower()
+    print("\nCollecting hardware information...")
+    hardware_info = common.get_hardware_info()
+    hardware_str = common.format_hardware_string(hardware_info)
+    print(f"Hardware: {hardware_str}")
 
-    if use_azure:
-        if AzureOpenAI is None:
-            print("Error: Azure OpenAI client not available. Upgrade openai>=1.35.0.")
-            return 1
-
-        endpoint = normalize_azure_endpoint(azure_endpoint or args.base_url)
-        api_version = args.api_version or "2024-05-01-preview"
-
-        try:
-            client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
-        except Exception as exc:
-            print(f"Error initializing Azure Grok client: {exc}")
-            return 1
-    else:
-        try:
-            client = OpenAI(api_key=api_key, base_url=args.base_url)
-        except Exception as exc:
-            print(f"Error initializing Grok client: {exc}")
-            return 1
-
-    endpoint_for_info = normalize_azure_endpoint(azure_endpoint or args.base_url) if use_azure else args.base_url
-
-    hardware_info = {
-        "api_endpoint": endpoint_for_info,
-        "api_model": args.model,
-    }
+    hardware_info["api_endpoint"] = base_url
+    hardware_info["api_model"] = args.model
     if request_model != args.model:
         hardware_info["api_request_model"] = request_model
-    if use_azure:
-        hardware_info["api_version"] = args.api_version or "2024-05-01-preview"
+
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+    except Exception as exc:
+        print(f"Error initializing vMLX client: {exc}")
+        return 1
 
     print("\nConnection details:")
-    print(f"Endpoint: {endpoint_for_info if use_azure else args.base_url}")
+    print(f"Endpoint: {base_url}")
     print(f"Model: {args.model}")
     if request_model != args.model:
         print(f"Request model: {request_model}")
-    if use_azure:
-        print(f"API version: {args.api_version or '2024-05-01-preview'}")
     print(f"Max tokens: {args.max_tokens}")
     print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
-    output_dir = common.create_output_directory("grok", args.model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory("vmlx", args.model, cold_prefill=args.cold_prefill)
 
     # Warmup run
     warmup_file = common.find_warmup_file()
@@ -442,7 +454,7 @@ def main() -> int:
             results.append(result)
             if args.save_responses:
                 response_path = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(result, args.model, response_path, "Grok API")
+                common.save_generated_text(result, args.model, response_path, "vMLX API")
 
     if not results:
         print("\nNo successful benchmark results")
@@ -450,11 +462,11 @@ def main() -> int:
 
     total_benchmark_time = time.time() - benchmark_start
 
-    common.save_all_outputs(results, output_dir, args.model, "Grok API", hardware_info, args)
+    common.save_all_outputs(results, output_dir, args.model, "vMLX API", hardware_info, args)
     common.print_benchmark_summary(
         results,
         args.model,
-        "Grok API",
+        "vMLX API",
         hardware_info,
         output_dir,
         total_benchmark_time,
