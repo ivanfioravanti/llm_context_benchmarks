@@ -331,14 +331,22 @@ def _infer_from_vllm_metrics(
 ) -> Tuple[int, int, int, float, float, float]:
     """Use per-model vLLM counters/histograms to fill missing usage and timings."""
     inferred_prompt = _safe_int(
-        math.nan if math.isnan(metric_deltas.get("vllm:prompt_tokens_total", math.nan)) else metric_deltas.get("vllm:prompt_tokens_total"),
+        (
+            math.nan
+            if math.isnan(metric_deltas.get("vllm:prompt_tokens_total", math.nan))
+            else metric_deltas.get("vllm:prompt_tokens_total")
+        ),
         0,
     )
     if inferred_prompt > 0 and prompt_tokens <= 0:
         prompt_tokens = inferred_prompt
 
     inferred_generation = _safe_int(
-        math.nan if math.isnan(metric_deltas.get("vllm:generation_tokens_total", math.nan)) else metric_deltas.get("vllm:generation_tokens_total"),
+        (
+            math.nan
+            if math.isnan(metric_deltas.get("vllm:generation_tokens_total", math.nan))
+            else metric_deltas.get("vllm:generation_tokens_total")
+        ),
         0,
     )
     if inferred_generation > 0 and generation_tokens <= 0:
@@ -436,6 +444,7 @@ def _extract_usage_tokens(usage: Dict[str, Any]) -> Tuple[int, int, int]:
             generation_tokens = inferred
 
     return prompt_tokens, generation_tokens, total_tokens
+
 
 def call_vllm(
     base_url: str,
@@ -536,7 +545,7 @@ def call_vllm_streaming(
         if not text_line.startswith("data:"):
             continue
 
-        payload_text = text_line[len("data:"):].strip()
+        payload_text = text_line[len("data:") :].strip()
         if payload_text == "[DONE]":
             break
 
@@ -586,6 +595,7 @@ def call_vllm_streaming(
     total_time = time.time() - request_start
     return generated_text, usage, total_time, timings["eval_duration"], first_token_time
 
+
 def run_benchmark(
     model_name: str,
     context_file: Path,
@@ -604,8 +614,10 @@ def run_benchmark(
     with open(context_file, "r") as f:
         prompt = f.read()
 
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = common.make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
     metrics_before: Dict[str, float] = {}
     if use_vllm_metrics:
@@ -853,7 +865,9 @@ def main() -> int:
 
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
     print(f"Timeout: {args.timeout}s")
 
     output_dir = common.create_output_directory("vllm", args.model, args.output_dir, cold_prefill=args.cold_prefill)
@@ -887,82 +901,109 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for context_file in context_files:
-        print("\n" + "=" * 50)
-        print(f"Benchmarking {context_file.name}...")
-        print("=" * 50)
+    if args.cold_prefill:
+        for context_file in context_files:
+            print("\n" + "=" * 50)
+            print(f"Benchmarking {context_file.name}...")
+            print("=" * 50)
 
-        try:
-            result = common.run_benchmark_peak(
-                run_benchmark,
-                model_name=args.model,
-                context_file=context_file,
-                base_url=base_url,
-                api_key=api_key,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                timeout=args.timeout,
-                stream=args.stream,
-                use_vllm_metrics=args.metrics,
-                debug=args.debug,
-                cold_prefill=args.cold_prefill,
-                n_runs=args.runs,
-            )
-        except requests.exceptions.HTTPError as e:
-            message = str(e)
-            if e.response is not None and e.response.status_code == 404:
-                try:
-                    details = e.response.json()
-                    err = details.get("error", {})
-                    if isinstance(err, dict):
-                        message = err.get("message", message)
-                except Exception:
-                    pass
+            try:
+                result = common.run_benchmark_peak(
+                    run_benchmark,
+                    model_name=args.model,
+                    context_file=context_file,
+                    base_url=base_url,
+                    api_key=api_key,
+                    max_tokens=args.max_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    timeout=args.timeout,
+                    stream=args.stream,
+                    use_vllm_metrics=args.metrics,
+                    debug=args.debug,
+                    cold_prefill=args.cold_prefill,
+                    n_runs=args.runs,
+                )
+            except requests.exceptions.HTTPError as e:
+                message = str(e)
+                if e.response is not None and e.response.status_code == 404:
+                    try:
+                        details = e.response.json()
+                        err = details.get("error", {})
+                        if isinstance(err, dict):
+                            message = err.get("message", message)
+                    except Exception:
+                        pass
 
-                print(f"Request error: {message}")
-                print(f"HTTP 404 from vLLM endpoint: model '{args.model}' is not available.")
-                try:
-                    available_models = list_vllm_models(base_url, api_key=api_key)
-                    if available_models:
-                        print("Available models:")
-                        for model_name in available_models:
-                            print(f"  - {model_name}")
-                        print("Run again with one of the above model names.")
-                    else:
-                        print("No models were returned by /v1/models. Confirm your vLLM model is loaded.")
-                except Exception:
-                    print("Could not retrieve /v1/models from the endpoint.")
+                    print(f"Request error: {message}")
+                    print(f"HTTP 404 from vLLM endpoint: model '{args.model}' is not available.")
+                    try:
+                        available_models = list_vllm_models(base_url, api_key=api_key)
+                        if available_models:
+                            print("Available models:")
+                            for model_name in available_models:
+                                print(f"  - {model_name}")
+                            print("Run again with one of the above model names.")
+                        else:
+                            print("No models were returned by /v1/models. Confirm your vLLM model is loaded.")
+                    except Exception:
+                        print("Could not retrieve /v1/models from the endpoint.")
 
-                result = None
-            else:
+                    result = None
+                else:
+                    print(f"Request error: {e}")
+                    result = None
+            except requests.exceptions.RequestException as e:
                 print(f"Request error: {e}")
                 result = None
-        except requests.exceptions.RequestException as e:
-            print(f"Request error: {e}")
-            result = None
-        except Exception as exc:
-            print(f"Benchmark error: {exc}")
-            result = None
+            except Exception as exc:
+                print(f"Benchmark error: {exc}")
+                result = None
 
-        if result:
-            results.append(result)
+            if result:
+                results.append(result)
 
-            print(f"\nResults for {context_file.name}:")
-            print(f"  Prompt tokens: {result['prompt_tokens']}")
-            print(f"  Generation tokens: {result['generation_tokens']}")
-            if not math.isnan(result["prompt_eval_duration"]):
-                print(f"  Prompt eval duration: {result['prompt_eval_duration']:.2f}s")
-            if not math.isnan(result["time_to_first_token"]):
-                print(f"  Time to first token: {result['time_to_first_token']:.2f}s")
-            if not math.isnan(result['prompt_tps']):
-                print(f"  Prompt TPS: {result['prompt_tps']:.2f}")
-            else:
-                print("  Prompt TPS: n/a")
-            print(f"  Generation TPS: {result['generation_tps']:.2f}")
-            print(f"  Total time: {result['total_time']:.2f}s")
+                print(f"\nResults for {context_file.name}:")
+                print(f"  Prompt tokens: {result['prompt_tokens']}")
+                print(f"  Generation tokens: {result['generation_tokens']}")
+                if not math.isnan(result["prompt_eval_duration"]):
+                    print(f"  Prompt eval duration: {result['prompt_eval_duration']:.2f}s")
+                if not math.isnan(result["time_to_first_token"]):
+                    print(f"  Time to first token: {result['time_to_first_token']:.2f}s")
+                if not math.isnan(result["prompt_tps"]):
+                    print(f"  Prompt TPS: {result['prompt_tps']:.2f}")
+                else:
+                    print("  Prompt TPS: n/a")
+                print(f"  Generation TPS: {result['generation_tps']:.2f}")
+                print(f"  Total time: {result['total_time']:.2f}s")
 
-            if args.save_responses:
+                if args.save_responses:
+                    response_file = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(
+                        result,
+                        args.model,
+                        response_file,
+                        framework="vLLM",
+                    )
+    else:
+        results = common.run_benchmark_peak_per_run(
+            run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
+            model_name=args.model,
+            base_url=base_url,
+            api_key=api_key,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            timeout=args.timeout,
+            stream=args.stream,
+            use_vllm_metrics=args.metrics,
+            debug=args.debug,
+            cold_prefill=args.cold_prefill,
+        )
+        if args.save_responses:
+            for result in results:
                 response_file = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(
                     result,

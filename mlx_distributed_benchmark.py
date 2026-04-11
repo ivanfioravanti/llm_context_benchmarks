@@ -8,11 +8,11 @@ execution (for example with the JACCL backend).
 """
 
 import argparse
+import math
 import re
 import subprocess
 import sys
 import time
-import math
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -53,9 +53,7 @@ def resolve_sharded_script(script_arg: str) -> Optional[Path]:
     try:
         import mlx_lm
 
-        candidates.append(
-            Path(mlx_lm.__file__).resolve().parent / "examples" / "sharded_generate.py"
-        )
+        candidates.append(Path(mlx_lm.__file__).resolve().parent / "examples" / "sharded_generate.py")
     except Exception:
         pass
 
@@ -156,12 +154,8 @@ def run_benchmark(
         else:
             generated_text = output
 
-        print(
-            f"  Prompt: {prompt_match.group(1)} tokens, {prompt_match.group(2)} tokens-per-sec"
-        )
-        print(
-            f"  Generation: {gen_match.group(1)} tokens, {gen_match.group(2)} tokens-per-sec"
-        )
+        print(f"  Prompt: {prompt_match.group(1)} tokens, {prompt_match.group(2)} tokens-per-sec")
+        print(f"  Generation: {gen_match.group(1)} tokens, {gen_match.group(2)} tokens-per-sec")
         if memory_match:
             print(f"  Peak memory: {memory_match.group(1)} GB")
         print(f"  Total wall time: {total_wall_time:.2f}s")
@@ -199,9 +193,7 @@ def check_mlx_installed() -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Run distributed MLX benchmarks on context files via mlx.launch"
-    )
+    parser = argparse.ArgumentParser(description="Run distributed MLX benchmarks on context files via mlx.launch")
     parser.add_argument("model", help="MLX model path or repo")
     parser.add_argument(
         "--backend",
@@ -261,9 +253,7 @@ def main() -> int:
     resolved_script = resolve_sharded_script(args.sharded_script)
     if not resolved_script:
         print(f"Error: Cannot find sharded script from '{args.sharded_script}'.")
-        print(
-            "Provide --sharded-script /path/to/mlx_lm/examples/sharded_generate.py"
-        )
+        print("Provide --sharded-script /path/to/mlx_lm/examples/sharded_generate.py")
         return 1
 
     model_name = args.model.split("/")[-1]
@@ -331,14 +321,8 @@ def main() -> int:
             timeout=args.timeout,
             n_runs=args.runs,
         )
-        if (
-            not result
-            and args.fallback_fast_synch_off
-            and get_env_value(args.env, "MLX_METAL_FAST_SYNCH") == "1"
-        ):
-            print(
-                "Fast sync run failed; retrying this context with MLX_METAL_FAST_SYNCH=0..."
-            )
+        if not result and args.fallback_fast_synch_off and get_env_value(args.env, "MLX_METAL_FAST_SYNCH") == "1":
+            print("Fast sync run failed; retrying this context with MLX_METAL_FAST_SYNCH=0...")
             fallback_env = set_env_value(args.env, "MLX_METAL_FAST_SYNCH", "0")
             result = common.run_benchmark_peak(
                 run_benchmark,
@@ -361,9 +345,7 @@ def main() -> int:
 
             if args.save_responses:
                 output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(
-                    result, args.model, output_filename, "MLX Distributed"
-                )
+                common.save_generated_text(result, args.model, output_filename, "MLX Distributed")
 
     total_benchmark_time = time.time() - start_time
 

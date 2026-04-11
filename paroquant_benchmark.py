@@ -25,15 +25,16 @@ from typing import Dict, List, Optional, Tuple
 
 import benchmark_common as common
 
-
 # ---------------------------------------------------------------------------
 # Install check
 # ---------------------------------------------------------------------------
+
 
 def check_paroquant_installed() -> bool:
     """Check if Paroquant (with MLX extras) is installed."""
     try:
         import paroquant.inference.backends.mlx  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -42,6 +43,7 @@ def check_paroquant_installed() -> bool:
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
 
 def load_model(model_path: str) -> Tuple:
     """Load a Paroquant MLX model and processor.
@@ -68,6 +70,7 @@ def load_model(model_path: str) -> Tuple:
 # Prompt helpers
 # ---------------------------------------------------------------------------
 
+
 def prepare_prompt(
     prompt_text: str,
     tokenizer,
@@ -75,8 +78,7 @@ def prepare_prompt(
 ) -> List[int]:
     """Wrap raw text through the chat template and return token IDs."""
     has_chat_template = bool(
-        getattr(tokenizer, "has_chat_template", False)
-        or getattr(tokenizer, "chat_template", None) is not None
+        getattr(tokenizer, "has_chat_template", False) or getattr(tokenizer, "chat_template", None) is not None
     )
     if ignore_chat_template or not has_chat_template:
         return tokenizer.encode(prompt_text, add_special_tokens=False)
@@ -118,6 +120,7 @@ def _show_prefill_progress(num_tokens: int, stop_event: threading.Event) -> None
 # Context-scaling benchmark
 # ---------------------------------------------------------------------------
 
+
 def run_benchmark(
     model,
     tokenizer,
@@ -149,8 +152,10 @@ def run_benchmark(
         with open(context_file, "r") as f:
             prompt = f.read()
 
-        if cold_prefill or _run_idx is not None:
+        if cold_prefill:
             prompt = common.make_cache_buster() + prompt
+        elif _run_idx is not None:
+            prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
         prepared_prompt = prepare_prompt(prompt, tokenizer, ignore_chat_template)
 
@@ -176,7 +181,10 @@ def run_benchmark(
         last_response = None
         generated_text = ""
         for response in mlx_lm.stream_generate(
-            model, tokenizer, prompt=prepared_prompt, max_tokens=max_tokens,
+            model,
+            tokenizer,
+            prompt=prepared_prompt,
+            max_tokens=max_tokens,
         ):
             if not first_token_received:
                 first_token_received = True
@@ -185,8 +193,7 @@ def run_benchmark(
                 prefill_time = time.time() - start_time
                 pp_tps = num_prompt_tokens / prefill_time if prefill_time > 0 else 0
                 sys.stdout.write(
-                    f"\r  Prefill: {num_prompt_tokens} tokens in "
-                    f"{prefill_time:.2f}s ({pp_tps:.0f} t/s)\n"
+                    f"\r  Prefill: {num_prompt_tokens} tokens in " f"{prefill_time:.2f}s ({pp_tps:.0f} t/s)\n"
                 )
                 sys.stdout.flush()
 
@@ -194,9 +201,7 @@ def run_benchmark(
             generated_text += response.text
             token_count += 1
             pct = min(token_count * 100 // max_tokens, 100)
-            sys.stdout.write(
-                f"\r  Generating: {token_count}/{max_tokens} ({pct}%)"
-            )
+            sys.stdout.write(f"\r  Generating: {token_count}/{max_tokens} ({pct}%)")
             sys.stdout.flush()
 
         # End generation progress line
@@ -252,6 +257,7 @@ def run_benchmark(
 # Batch inference benchmark
 # ---------------------------------------------------------------------------
 
+
 def run_batch_benchmark(
     model,
     tokenizer,
@@ -297,9 +303,7 @@ def run_batch_benchmark(
             # Warmup
             print("    Warmup...")
             if bs == 1:
-                for _ in stream_generate(
-                    model, tokenizer, prompts[0], max_tokens=gen_tokens
-                ):
+                for _ in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
                     pass
             else:
                 batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
@@ -311,9 +315,7 @@ def run_batch_benchmark(
             for trial in range(num_trials):
                 if bs == 1:
                     last_response = None
-                    for response in stream_generate(
-                        model, tokenizer, prompts[0], max_tokens=gen_tokens
-                    ):
+                    for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
                         last_response = response
                     if last_response is not None:
                         trial_prompt_tps.append(last_response.prompt_tps)
@@ -323,9 +325,7 @@ def run_batch_benchmark(
                             f"tg {last_response.generation_tps:.1f} t/s"
                         )
                 else:
-                    resp = batch_generate(
-                        model, tokenizer, prompts=prompts, max_tokens=gen_tokens
-                    )
+                    resp = batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
                     trial_prompt_tps.append(resp.stats.prompt_tps)
                     trial_gen_tps.append(resp.stats.generation_tps)
                     print(
@@ -338,17 +338,16 @@ def run_batch_benchmark(
                 avg_gen_tps = statistics.mean(trial_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
 
-                print(
-                    f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
-                    f"peak mem {peak_mem:.2f} GB"
-                )
+                print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, " f"peak mem {peak_mem:.2f} GB")
 
-                batch_results.append({
-                    "batch_size": bs,
-                    "prompt_tps": round(avg_prompt_tps, 2),
-                    "generation_tps": round(avg_gen_tps, 2),
-                    "peak_memory_gb": round(peak_mem, 3),
-                })
+                batch_results.append(
+                    {
+                        "batch_size": bs,
+                        "prompt_tps": round(avg_prompt_tps, 2),
+                        "generation_tps": round(avg_gen_tps, 2),
+                        "peak_memory_gb": round(peak_mem, 3),
+                    }
+                )
     finally:
         if restored_via_private_attr:
             tokenizer._eos_token_ids = original_eos
@@ -362,11 +361,10 @@ def run_batch_benchmark(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     """Main function to run Paroquant MLX benchmarks."""
-    parser = argparse.ArgumentParser(
-        description="Run Paroquant (MLX) benchmarks on context files"
-    )
+    parser = argparse.ArgumentParser(description="Run Paroquant (MLX) benchmarks on context files")
     parser.add_argument(
         "model",
         help="Model path or HuggingFace repo (e.g., my-org/My-Model-PQ)",
@@ -427,10 +425,7 @@ def main() -> int:
 
     # Check installation
     if not check_paroquant_installed():
-        print(
-            "Paroquant (MLX) is not installed. "
-            "Install with: pip install 'paroquant[mlx]'"
-        )
+        print("Paroquant (MLX) is not installed. " "Install with: pip install 'paroquant[mlx]'")
         return 1
 
     # Extract model name
@@ -466,7 +461,9 @@ def main() -> int:
         print("Chat template: disabled (raw prompt)")
     else:
         print("Chat template: enabled when tokenizer provides one")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     # Warmup run using the smallest context file
     import mlx_lm
@@ -477,10 +474,15 @@ def main() -> int:
         with open(warmup_file, "r") as f:
             warmup_prompt = f.read()
         warmup_prepared = prepare_prompt(
-            warmup_prompt, tokenizer, args.ignore_chat_template,
+            warmup_prompt,
+            tokenizer,
+            args.ignore_chat_template,
         )
         for _ in mlx_lm.stream_generate(
-            model, tokenizer, prompt=warmup_prepared, max_tokens=1,
+            model,
+            tokenizer,
+            prompt=warmup_prepared,
+            max_tokens=1,
         ):
             pass
         print("Warmup complete (result discarded)")
@@ -497,10 +499,9 @@ def main() -> int:
     else:
         print("\nComputing perplexity...")
         try:
-            from mlx_lm.perplexity import eval_ppl, load_data
-
             import mlx.core as mx
             import numpy as np
+            from mlx_lm.perplexity import eval_ppl, load_data
 
             np.random.seed(123)
             mx.random.seed(123)
@@ -509,8 +510,10 @@ def main() -> int:
             ppl_seq_length = 512
             ppl_dataset = "allenai/tulu-3-sft-mixture"
             data = load_data(
-                tokenizer, ppl_dataset,
-                num_samples=ppl_num_samples, sequence_length=ppl_seq_length,
+                tokenizer,
+                ppl_dataset,
+                num_samples=ppl_num_samples,
+                sequence_length=ppl_seq_length,
             )
             ppl, ppl_se = eval_ppl(model, data, batch_size=8)
             perplexity = float(ppl)
@@ -561,24 +564,43 @@ def main() -> int:
     # ------------------------------------------------------------------
     start_time = time.time()
     results: List[Dict] = []
-    for file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {file.name}...")
-        print(f"{'=' * 50}")
+    if args.cold_prefill:
+        for file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {file.name}...")
+            print(f"{'=' * 50}")
 
-        result = common.run_benchmark_peak(
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                model,
+                tokenizer,
+                file,
+                args.max_tokens,
+                args.ignore_chat_template,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+            if result:
+                results.append(result)
+
+                if args.save_responses:
+                    output_filename = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, output_filename, "Paroquant")
+    else:
+        results = common.run_benchmark_peak_per_run(
             run_benchmark,
-            model, tokenizer, file, args.max_tokens, args.ignore_chat_template,
-            cold_prefill=args.cold_prefill, n_runs=args.runs,
+            context_files=context_files,
+            n_runs=args.runs,
+            model=model,
+            tokenizer=tokenizer,
+            max_tokens=args.max_tokens,
+            ignore_chat_template=args.ignore_chat_template,
+            cold_prefill=args.cold_prefill,
         )
-        if result:
-            results.append(result)
-
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(
-                    result, args.model, output_filename, "Paroquant"
-                )
+                common.save_generated_text(result, args.model, output_filename, "Paroquant")
 
     total_benchmark_time = time.time() - start_time
 
@@ -588,15 +610,28 @@ def main() -> int:
 
     # Save all outputs
     common.save_all_outputs(
-        results, output_dir, model_name, "Paroquant", hardware_info, args,
-        include_memory=True, perplexity=perplexity, perplexity_data=perplexity_data,
+        results,
+        output_dir,
+        model_name,
+        "Paroquant",
+        hardware_info,
+        args,
+        include_memory=True,
+        perplexity=perplexity,
+        perplexity_data=perplexity_data,
         batch_results=batch_results,
     )
 
     # Print summary
     common.print_benchmark_summary(
-        results, model_name, "Paroquant", hardware_info, output_dir,
-        total_benchmark_time, perplexity=perplexity, batch_results=batch_results,
+        results,
+        model_name,
+        "Paroquant",
+        hardware_info,
+        output_dir,
+        total_benchmark_time,
+        perplexity=perplexity,
+        batch_results=batch_results,
     )
 
     return 0

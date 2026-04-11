@@ -265,7 +265,9 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     print(f"Results saved to {csv_path}")
 
 
-def generate_xpost_text(results, model_name, framework, hardware_info=None, perplexity=None, batch_results=None, cached_results=None):
+def generate_xpost_text(
+    results, model_name, framework, hardware_info=None, perplexity=None, batch_results=None, cached_results=None
+):
     """Generate X post text with results.
 
     Args:
@@ -316,9 +318,7 @@ def generate_xpost_text(results, model_name, framework, hardware_info=None, perp
         parts = [f"b{r['batch_size']} {r['generation_tps']:.0f}" for r in batch_results]
         xpost += f"\nBatch TPS: {' '.join(parts)}"
         if any("kv_cache_gb" in r for r in batch_results):
-            kv_parts = [
-                f"b{r['batch_size']} {r.get('kv_cache_gb', 0):.2f}GB" for r in batch_results
-            ]
+            kv_parts = [f"b{r['batch_size']} {r.get('kv_cache_gb', 0):.2f}GB" for r in batch_results]
             xpost += f"\nBatch KV : {' '.join(kv_parts)}"
 
     if cached_results:
@@ -349,7 +349,14 @@ generate_tweet_text = generate_xpost_text
 
 
 def generate_table(
-    results, model_name, framework, hardware_info=None, include_memory=False, perplexity=None, batch_results=None, cached_results=None
+    results,
+    model_name,
+    framework,
+    hardware_info=None,
+    include_memory=False,
+    perplexity=None,
+    batch_results=None,
+    cached_results=None,
 ):
     """Generate a formatted table for posting to X/Twitter.
 
@@ -444,14 +451,8 @@ def generate_table(
         cached_has_kv = any("kv_cache_gb" in r for r in cached_results)
         table += "\n\nCached KV Cache (incremental prefill)\n"
         if cached_has_kv:
-            table += (
-                "Context | Total Tok | Delta Tok | Cached Tok | "
-                "Inc Prefill TPS | Gen TPS | KV Cache\n"
-            )
-            table += (
-                "--------|-----------|-----------|------------|"
-                "-----------------|---------|----------\n"
-            )
+            table += "Context | Total Tok | Delta Tok | Cached Tok | " "Inc Prefill TPS | Gen TPS | KV Cache\n"
+            table += "--------|-----------|-----------|------------|" "-----------------|---------|----------\n"
         else:
             table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS\n"
             table += "--------|-----------|-----------|------------|-----------------|--------\n"
@@ -1166,16 +1167,23 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def make_cache_buster() -> str:
-    """Generate a unique prefix to bust server-side KV prompt cache.
+def make_cache_buster(run_idx: Optional[int] = None) -> str:
+    """Generate a prefix to bust server-side KV prompt cache.
 
     Many inference servers (Ollama, llama.cpp, vLLM, LM Studio, etc.) reuse the
     KV cache when consecutive prompts share a prefix.  That causes
     prompt_eval_duration to report only the *uncached delta* while
     prompt_eval_count still reports the full length, inflating the derived
-    prompt tokens/sec.  Prepending a per-call UUID prefix forces a prefix
-    miss so every row is cold prefill.  ~10 tokens of overhead per prompt.
+    prompt tokens/sec.
+
+    When ``run_idx`` is provided, the buster is deterministic per run index:
+    all calls within the same run share the same prefix (so KV cache carries
+    over across context sizes), while different runs get different prefixes
+    (so runs don't interfere). When ``run_idx`` is None, a random UUID is
+    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
     """
+    if run_idx is not None:
+        return f"[run-{run_idx}]\n"
     import uuid
 
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
@@ -1217,6 +1225,60 @@ def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwarg
     # Clean up so the kwarg doesn't leak if the dict is reused
     kwargs.pop("_run_idx", None)
     return best_result
+
+
+def run_benchmark_peak_per_run(run_fn, context_files, n_runs=3, metric="generation_tps", **kwargs):
+    """Run benchmark with each run completing all context sizes sequentially.
+
+    Unlike ``run_benchmark_peak`` (which runs all runs per context size), this
+    runs all context sizes per run.  This ensures KV cache accumulates within a
+    run — e.g. run 1 processes 1k→2k→4k→…, then run 2 starts fresh at
+    1k→2k→4k→….  Each run gets a deterministic prefix (via ``_run_idx``) so
+    different runs are cache-isolated while the same run reuses cache across
+    context sizes.
+
+    For each context size, the result with the peak metric value across runs is
+    returned.
+
+    Args:
+        run_fn: Engine-specific run_benchmark function.
+        context_files: List of context file Paths to benchmark.
+        n_runs: Number of runs per context size.
+        metric: Metric to maximize when selecting the peak run.
+        **kwargs: Keyword arguments forwarded to run_fn.
+
+    Returns:
+        List of result dicts (one per context file), ordered by context file.
+    """
+    all_results = {cf.stem: [] for cf in context_files}
+
+    for run_idx in range(1, n_runs + 1):
+        for context_file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Run {run_idx}/{n_runs} — Benchmarking {context_file.name}...")
+            print(f"{'=' * 50}")
+
+            kwargs["_run_idx"] = run_idx
+            try:
+                result = run_fn(context_file=context_file, **kwargs)
+            except Exception as exc:
+                print(f"    Error: {exc}")
+                result = None
+            if result:
+                score = result.get(metric, 0)
+                print(f"    {metric}: {score:.2f}")
+                all_results[context_file.stem].append(result)
+
+    results = []
+    for context_file in context_files:
+        run_results = all_results[context_file.stem]
+        if run_results:
+            best = max(run_results, key=lambda r: r.get(metric, 0))
+            print(f"  {context_file.name}: Peak {metric}: {best.get(metric, 0):.2f}")
+            results.append(best)
+
+    kwargs.pop("_run_idx", None)
+    return results
 
 
 def save_all_outputs(
@@ -1319,7 +1381,13 @@ def save_all_outputs(
 
     # Generate and save X post
     xpost = generate_xpost_text(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
+        results,
+        model_name,
+        framework,
+        hardware_info,
+        perplexity=perplexity,
+        batch_results=batch_results,
+        cached_results=cached_results,
     )
     xpost_path = output_dir / "xpost.txt"
     with open(xpost_path, "w") as f:
@@ -1402,7 +1470,13 @@ def print_benchmark_summary(
     print("SUMMARY TABLE")
     print("=" * 50)
     table = generate_table(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
+        results,
+        model_name,
+        framework,
+        hardware_info,
+        perplexity=perplexity,
+        batch_results=batch_results,
+        cached_results=cached_results,
     )
     print(table)
 
@@ -1411,7 +1485,13 @@ def print_benchmark_summary(
     print("X POST TEXT")
     print("=" * 50)
     xpost = generate_xpost_text(
-        results, model_name, framework, hardware_info, perplexity=perplexity, batch_results=batch_results, cached_results=cached_results
+        results,
+        model_name,
+        framework,
+        hardware_info,
+        perplexity=perplexity,
+        batch_results=batch_results,
+        cached_results=cached_results,
     )
     print(xpost)
 

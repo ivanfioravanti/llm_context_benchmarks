@@ -76,8 +76,10 @@ def run_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = common.make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
     start_time = time.time()
     first_token_time: Optional[float] = None
@@ -388,7 +390,9 @@ def main() -> int:
     print(f"Model:      {model}")
     print(f"Hardware:   {hardware_str}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     context_files = common.find_context_files(args.contexts)
     if not context_files:
@@ -399,18 +403,41 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for ctx_file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {ctx_file.name} ...")
-        print(f"{'=' * 50}")
+    if args.cold_prefill:
+        for ctx_file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {ctx_file.name} ...")
+            print(f"{'=' * 50}")
 
-        result = common.run_benchmark_peak(
-            run_benchmark, client, model, ctx_file, args.max_tokens, args.timeout, cold_prefill=args.cold_prefill, n_runs=args.runs,
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                client,
+                model,
+                ctx_file,
+                args.max_tokens,
+                args.timeout,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+            if result:
+                results.append(result)
+
+                if args.save_responses:
+                    resp_path = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, model, resp_path, "OpenAI Compat")
+    else:
+        results = common.run_benchmark_peak_per_run(
+            run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
+            client=client,
+            model=model,
+            max_tokens=args.max_tokens,
+            timeout=args.timeout,
+            cold_prefill=args.cold_prefill,
         )
-        if result:
-            results.append(result)
-
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 resp_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, model, resp_path, "OpenAI Compat")
 

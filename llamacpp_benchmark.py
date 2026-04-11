@@ -32,6 +32,7 @@ from benchmark_common import (
     make_cache_buster,
     print_benchmark_summary,
     run_benchmark_peak,
+    run_benchmark_peak_per_run,
     save_all_outputs,
     save_generated_text,
     setup_common_args,
@@ -64,7 +65,11 @@ def get_server_info(server_url: str) -> Dict:
 
 
 def benchmark_llamacpp(
-    server_url: str, context_file: Path, max_tokens: int = 128, timeout: int = 3600, cold_prefill: bool = True,
+    server_url: str,
+    context_file: Path,
+    max_tokens: int = 128,
+    timeout: int = 3600,
+    cold_prefill: bool = True,
     _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark llama.cpp server with a given context file.
@@ -83,8 +88,10 @@ def benchmark_llamacpp(
     with open(context_file, "r") as f:
         prompt = f.read()
 
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = make_cache_buster(run_idx=_run_idx) + prompt
 
     # Prepare the request payload
     payload = {
@@ -106,24 +113,23 @@ def benchmark_llamacpp(
     # Make the request to the server
     try:
         import json
-        response = requests.post(
-            f"{server_url}/completion", json=payload, timeout=timeout, stream=True
-        )
+
+        response = requests.post(f"{server_url}/completion", json=payload, timeout=timeout, stream=True)
         response.raise_for_status()
-        
+
         for line in response.iter_lines():
             if line:
-                line = line.decode('utf-8')
-                if line.startswith('data: '):
+                line = line.decode("utf-8")
+                if line.startswith("data: "):
                     data_str = line[6:]
                     try:
                         chunk = json.loads(data_str)
                         # Mark first token time when we receive content
                         if first_token_time is None and chunk.get("content"):
                             first_token_time = time.time()
-                            
+
                         generated_text += chunk.get("content", "")
-                        
+
                         # Stop chunk usually contains timings
                         if chunk.get("stop"):
                             result = chunk
@@ -175,9 +181,7 @@ def benchmark_llamacpp(
 
 def main() -> int:
     """Main function to run the benchmark."""
-    parser = argparse.ArgumentParser(
-        description="Benchmark llama.cpp server across different context sizes"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark llama.cpp server across different context sizes")
     parser.add_argument(
         "model",
         help="Model name or identifier (used for display purposes)",
@@ -203,7 +207,7 @@ def main() -> int:
 
     # Add common arguments
     setup_common_args(parser)
-    
+
     args = parser.parse_args()
 
     # Construct server URL from host and port
@@ -222,9 +226,7 @@ def main() -> int:
     # Get server info
     server_info = get_server_info(server_url)
     # Use the model name from args, fallback to server info if available
-    model_name = args.model or server_info.get("default_generation_settings", {}).get(
-        "model", "llama.cpp model"
-    )
+    model_name = args.model or server_info.get("default_generation_settings", {}).get("model", "llama.cpp model")
 
     # Get hardware info
     hardware_info = get_hardware_info()
@@ -247,40 +249,58 @@ def main() -> int:
 
     # Run benchmarks
     import time
+
     start_time = time.time()
-    for context_file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {context_file.name}...")
-        print(f"{'=' * 50}")
+    if args.cold_prefill:
+        for context_file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {context_file.name}...")
+            print(f"{'=' * 50}")
 
-        result = run_benchmark_peak(
-            benchmark_llamacpp, server_url, context_file, args.max_tokens, args.timeout,
-            cold_prefill=args.cold_prefill, n_runs=args.runs
+            result = run_benchmark_peak(
+                benchmark_llamacpp,
+                server_url,
+                context_file,
+                args.max_tokens,
+                args.timeout,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+
+            if result:
+                results.append(result)
+
+                # Print results
+                print(f"\nResults for {context_file.name}:")
+                print(f"  Prompt tokens: {result['prompt_tokens']}")
+                print(f"  Generated tokens: {result['generation_tokens']}")
+                print(f"  Time to first token: {result['time_to_first_token']:.2f}s")
+                print(f"  Prompt time: {result['prompt_time']:.2f}s")
+                print(f"  Generation time: {result['eval_duration']:.2f}s")
+                print(f"  Total time: {result['total_time']:.2f}s")
+                print(f"  Prompt TPS: {result['prompt_tps']:.1f} tokens/sec")
+                print(f"  Generation TPS: {result['generation_tps']:.1f} tokens/sec")
+
+                # Save response if requested
+                if args.save_responses:
+                    response_file = output_dir / f"response_{context_file.stem}.txt"
+                    save_generated_text(result, model_name, response_file, framework="llama.cpp")
+    else:
+        results = run_benchmark_peak_per_run(
+            benchmark_llamacpp,
+            context_files=context_files,
+            n_runs=args.runs,
+            server_url=server_url,
+            max_tokens=args.max_tokens,
+            timeout=args.timeout,
+            cold_prefill=args.cold_prefill,
         )
+        if args.save_responses:
+            for result in results:
+                ctx_name = result.get("context_size", "unknown")
+                response_file = output_dir / f"response_{ctx_name}.txt"
+                save_generated_text(result, model_name, response_file, framework="llama.cpp")
 
-        if result:
-            results.append(result)
-
-            # Print results
-            print(f"\nResults for {context_file.name}:")
-            print(f"  Prompt tokens: {result['prompt_tokens']}")
-            print(f"  Generated tokens: {result['generation_tokens']}")
-            print(f"  Time to first token: {result['time_to_first_token']:.2f}s")
-            print(f"  Prompt time: {result['prompt_time']:.2f}s")
-            print(f"  Generation time: {result['eval_duration']:.2f}s")
-            print(f"  Total time: {result['total_time']:.2f}s")
-            print(f"  Prompt TPS: {result['prompt_tps']:.1f} tokens/sec")
-            print(f"  Generation TPS: {result['generation_tps']:.1f} tokens/sec")
-
-            # Save response if requested
-            if args.save_responses:
-                response_file = output_dir / f"response_{context_file.stem}.txt"
-                save_generated_text(
-                    result, model_name, response_file, framework="llama.cpp"
-                )
-        else:
-            print(f"Failed to benchmark {context_file.name}")
-    
     total_benchmark_time = time.time() - start_time
 
     if not results:
@@ -288,9 +308,7 @@ def main() -> int:
         return 1
 
     # Save all outputs using common function
-    save_all_outputs(
-        results, output_dir, model_name, "llama.cpp", hardware_info, args
-    )
+    save_all_outputs(results, output_dir, model_name, "llama.cpp", hardware_info, args)
 
     # Print summary using common function
     print_benchmark_summary(results, model_name, "llama.cpp", hardware_info, output_dir, total_benchmark_time)

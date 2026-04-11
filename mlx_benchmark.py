@@ -94,7 +94,8 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
         Tuple of (model, tokenizer, config)
     """
     import mlx_lm
-    from mlx_lm.utils import load_model as _load_model, load_tokenizer
+    from mlx_lm.utils import load_model as _load_model
+    from mlx_lm.utils import load_tokenizer
 
     model_config = {}
     tokenizer_config = {}

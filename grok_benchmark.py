@@ -63,9 +63,7 @@ def call_grok(
             {
                 "message": {
                     "content": response.choices[0].message.content or "",
-                    "reasoning_content": getattr(
-                        response.choices[0].message, "reasoning_content", ""
-                    ),
+                    "reasoning_content": getattr(response.choices[0].message, "reasoning_content", ""),
                 }
             }
         ],
@@ -170,8 +168,10 @@ def run_benchmark(
     with open(context_file, "r") as handle:
         prompt = handle.read()
 
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = common.make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
     try:
         if stream:
@@ -232,12 +232,8 @@ def run_benchmark(
     generation_duration = max(total_time - prompt_eval_duration, 0.0)
     eval_duration = generation_duration if generation_duration > 0 else total_time
 
-    prompt_tps = (
-        prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 else 0.0
-    )
-    generation_tps = (
-        generation_tokens / generation_duration if generation_duration > 0 else 0.0
-    )
+    prompt_tps = prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 else 0.0
+    generation_tps = generation_tokens / generation_duration if generation_duration > 0 else 0.0
 
     print(f"  Prompt tokens: {prompt_tokens}")
     print(f"  Generation tokens: {generation_tokens}")
@@ -389,7 +385,9 @@ def main() -> int:
     if use_azure:
         print(f"API version: {args.api_version or '2024-05-01-preview'}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     output_dir = common.create_output_directory("grok", args.model, cold_prefill=args.cold_prefill)
 
@@ -418,15 +416,38 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for context_file in context_files:
-        print("\n" + "=" * 50)
-        print(f"Benchmarking {context_file.name}...")
-        print("=" * 50)
+    if args.cold_prefill:
+        for context_file in context_files:
+            print("\n" + "=" * 50)
+            print(f"Benchmarking {context_file.name}...")
+            print("=" * 50)
 
-        result = common.run_benchmark_peak(
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                model_name=args.model,
+                context_file=context_file,
+                client=client,
+                request_model=request_model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                timeout=args.timeout,
+                stream=args.stream,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+
+            if result:
+                results.append(result)
+                if args.save_responses:
+                    response_path = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, response_path, "Grok API")
+    else:
+        results = common.run_benchmark_peak_per_run(
             run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
             model_name=args.model,
-            context_file=context_file,
             client=client,
             request_model=request_model,
             max_tokens=args.max_tokens,
@@ -435,12 +456,9 @@ def main() -> int:
             timeout=args.timeout,
             stream=args.stream,
             cold_prefill=args.cold_prefill,
-            n_runs=args.runs,
         )
-
-        if result:
-            results.append(result)
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 response_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, response_path, "Grok API")
 

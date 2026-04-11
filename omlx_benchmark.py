@@ -276,9 +276,7 @@ def run_benchmark(
     if server_prompt_tps > 0:
         prompt_tps = server_prompt_tps
     else:
-        prompt_tps = (
-            prompt_tokens / prompt_eval_duration if prompt_eval_duration and prompt_eval_duration > 0 else 0.0
-        )
+        prompt_tps = prompt_tokens / prompt_eval_duration if prompt_eval_duration and prompt_eval_duration > 0 else 0.0
     if server_gen_tps > 0:
         generation_tps = server_gen_tps
     else:
@@ -408,7 +406,7 @@ def run_batch_benchmark(
                 for line in resp.iter_lines():
                     if not line or not line.startswith("data: "):
                         continue
-                    payload = line[len("data: "):]
+                    payload = line[len("data: ") :]
                     if payload.strip() == "[DONE]":
                         break
                     try:
@@ -456,8 +454,7 @@ def run_batch_benchmark(
 
     for bs in batch_sizes:
         print(
-            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, "
-            f"{gen_tokens} gen tokens)..."
+            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, " f"{gen_tokens} gen tokens)..."
         )
 
         # Warmup at this batch size so the server has allocated all slots and
@@ -618,7 +615,9 @@ def main() -> int:
     api_key = args.api_key or os.getenv("OMLX_API_KEY")
     if not api_key:
         api_key = "local"
-        print("No API key provided; using placeholder key. Set --api-key or OMLX_API_KEY if the server requires authentication.")
+        print(
+            "No API key provided; using placeholder key. Set --api-key or OMLX_API_KEY if the server requires authentication."
+        )
 
     base_url = ensure_endpoint(args.base_url)
     request_model = args.request_model or args.model
@@ -649,7 +648,9 @@ def main() -> int:
     if request_model != args.model:
         print(f"Request model: {request_model}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
     output_dir = common.create_output_directory("omlx", args.model, cold_prefill=args.cold_prefill)
 
     # Warmup run
@@ -677,15 +678,38 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for context_file in context_files:
-        print("\n" + "=" * 50)
-        print(f"Benchmarking {context_file.name}...")
-        print("=" * 50)
+    if args.cold_prefill:
+        for context_file in context_files:
+            print("\n" + "=" * 50)
+            print(f"Benchmarking {context_file.name}...")
+            print("=" * 50)
 
-        result = common.run_benchmark_peak(
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                model_name=args.model,
+                context_file=context_file,
+                client=client,
+                request_model=request_model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                timeout=args.timeout,
+                stream=args.stream,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+
+            if result:
+                results.append(result)
+                if args.save_responses:
+                    response_path = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, response_path, "oMLX API")
+    else:
+        results = common.run_benchmark_peak_per_run(
             run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
             model_name=args.model,
-            context_file=context_file,
             client=client,
             request_model=request_model,
             max_tokens=args.max_tokens,
@@ -694,12 +718,9 @@ def main() -> int:
             timeout=args.timeout,
             stream=args.stream,
             cold_prefill=args.cold_prefill,
-            n_runs=args.runs,
         )
-
-        if result:
-            results.append(result)
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 response_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, response_path, "oMLX API")
 

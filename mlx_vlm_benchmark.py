@@ -131,8 +131,15 @@ def run_benchmark(
         with open(context_file, "r") as f:
             prompt = f.read()
 
+        # Bust KV cache by prepending a unique marker.
+        # - cold_prefill: random UUID per call → every row is fully cold prefill
+        # - _run_idx (no cold_prefill): deterministic per run index → same run
+        #   shares a prefix (KV cache carries over), different runs are isolated
+        # - neither: no buster → raw KV cache behavior
         if cold_prefill:
             prompt = common.make_cache_buster() + prompt
+        elif _run_idx is not None:
+            prompt = f"[run-{_run_idx}]\n" + prompt
 
         formatted_prompt = prepare_prompt(prompt, processor, model.config, ignore_chat_template)
 
@@ -634,41 +641,76 @@ def main() -> int:
     start_time = time.time()
     results = []
 
-    # When cold_prefill is disabled, use PromptCacheState to carry the KV cache
-    # across context sizes.  stream_generate handles token-level prefix matching
-    # and cache trimming automatically (generate.py:667-698).  Larger context
-    # sizes reuse the cached prefix from smaller sizes, measuring warm-prefill.
-    prompt_cache_state = None
-    if not args.cold_prefill:
+    if args.cold_prefill:
+        for file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {file.name}...")
+            print(f"{'=' * 50}")
+
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                model,
+                processor,
+                file,
+                kv_bits=args.kv_bits,
+                kv_quant_scheme=args.kv_quant_scheme,
+                max_tokens=args.max_tokens,
+                max_kv_size=args.max_kv_size,
+                ignore_chat_template=args.ignore_chat_template,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+            if result:
+                results.append(result)
+
+                if args.save_responses:
+                    output_filename = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, output_filename, "MLX-VLM")
+    else:
+        # Warm/cached: each run gets its own PromptCacheState and completes all
+        # context sizes before the next run starts, so KV cache accumulates
+        # within a run.  stream_generate handles token-level prefix matching
+        # and cache trimming automatically.
+        from collections import defaultdict
+
         from mlx_vlm.generate import PromptCacheState
 
-        prompt_cache_state = PromptCacheState()
+        all_run_results = defaultdict(list)
+        for run_idx in range(1, args.runs + 1):
+            prompt_cache_state = PromptCacheState()
+            for file in context_files:
+                print(f"\n{'=' * 50}")
+                print(f"Run {run_idx}/{args.runs} — Benchmarking {file.name}...")
+                print(f"{'=' * 50}")
 
-    for file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {file.name}...")
-        print(f"{'=' * 50}")
+                result = run_benchmark(
+                    model,
+                    processor,
+                    file,
+                    kv_bits=args.kv_bits,
+                    kv_quant_scheme=args.kv_quant_scheme,
+                    max_tokens=args.max_tokens,
+                    max_kv_size=args.max_kv_size,
+                    ignore_chat_template=args.ignore_chat_template,
+                    cold_prefill=args.cold_prefill,
+                    _run_idx=run_idx,
+                    prompt_cache_state=prompt_cache_state,
+                )
+                if result:
+                    score = result.get("generation_tps", 0)
+                    print(f"    generation_tps: {score:.2f}")
+                    all_run_results[file.stem].append(result)
 
-        result = common.run_benchmark_peak(
-            run_benchmark,
-            model,
-            processor,
-            file,
-            kv_bits=args.kv_bits,
-            kv_quant_scheme=args.kv_quant_scheme,
-            max_tokens=args.max_tokens,
-            max_kv_size=args.max_kv_size,
-            ignore_chat_template=args.ignore_chat_template,
-            cold_prefill=args.cold_prefill,
-            n_runs=args.runs,
-            prompt_cache_state=prompt_cache_state,
-        )
-        if result:
-            results.append(result)
-
-            if args.save_responses:
-                output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(result, args.model, output_filename, "MLX-VLM")
+        # Pick peak per context size
+        for file in context_files:
+            run_results = all_run_results.get(file.stem, [])
+            if run_results:
+                best = max(run_results, key=lambda r: r.get("generation_tps", 0))
+                print(f"  {file.name}: Peak generation_tps: {best['generation_tps']:.2f}")
+                results.append(best)
+                if args.save_responses:
+                    output_filename = output_dir / f"response_{best['context_size']}.txt"
+                    common.save_generated_text(best, args.model, output_filename, "MLX-VLM")
 
     total_benchmark_time = time.time() - start_time
 

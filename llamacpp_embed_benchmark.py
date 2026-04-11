@@ -127,9 +127,7 @@ def run_benchmark(
 
 def main() -> int:
     """Main function to run embedded llama.cpp benchmarks."""
-    parser = argparse.ArgumentParser(
-        description="Benchmark llama.cpp embedded runtime across different context sizes"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark llama.cpp embedded runtime across different context sizes")
     parser.add_argument(
         "model",
         help="Path to local GGUF model file",
@@ -226,7 +224,9 @@ def main() -> int:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")
         print(f"{'=' * 50}")
-        run_benchmark(llm=llm, context_file=warmup_file, max_tokens=args.max_tokens, timeout=args.timeout, seed=args.seed)
+        run_benchmark(
+            llm=llm, context_file=warmup_file, max_tokens=args.max_tokens, timeout=args.timeout, seed=args.seed
+        )
         print("Warmup complete.")
     else:
         print("Warning: 0.5k.txt not found, skipping warmup.")

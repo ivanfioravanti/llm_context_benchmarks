@@ -33,16 +33,20 @@ def _derive_num_ctx(context_file: Path, max_tokens: int) -> tuple[int, int]:
     return num_ctx, expected_prompt_tokens
 
 
-def _make_cache_buster() -> str:
-    """Generate a unique prefix to bust Ollama's prompt cache.
+def _make_cache_buster(run_idx: Optional[int] = None) -> str:
+    """Generate a prefix to bust Ollama's prompt cache.
 
     Ollama/llama.cpp automatically reuses the KV cache whenever a new prompt
-    shares a prefix with the previous request in the same slot. That makes
-    prompt_eval_duration report only the *uncached delta* while
-    prompt_eval_count still reports the full prompt length, inflating the
-    derived prompt t/s. Prepending a per-call UUID prefix forces a prefix
-    miss so every row is cold prefill. ~10 tokens of overhead per prompt.
+    shares a prefix with the previous request in the same slot.
+
+    When ``run_idx`` is provided, the buster is deterministic per run index:
+    all calls within the same run share the same prefix (so KV cache carries
+    over across context sizes), while different runs get different prefixes
+    (so runs don't interfere). When ``run_idx`` is None, a random UUID is
+    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
     """
+    if run_idx is not None:
+        return f"[run-{run_idx}]\n"
     import uuid
 
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
@@ -75,8 +79,10 @@ def run_benchmark(
     # the KV cache from a previous warmup or benchmark row that shares a
     # prefix will be reused, inflating prompt_tps (prompt_eval_count covers
     # the full prompt but prompt_eval_duration covers only the uncached delta).
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = _make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = _make_cache_buster(run_idx=_run_idx) + prompt
 
     # Size the KV cache to fit this context file (plus generation headroom).
     # Without this, Ollama silently caps num_ctx at its default (2048), which
@@ -140,18 +146,12 @@ def run_benchmark(
             )
 
         # Calculate tokens per second
-        prompt_tps = (
-            prompt_eval_count / prompt_eval_duration if prompt_eval_duration > 0 else 0
-        )
+        prompt_tps = prompt_eval_count / prompt_eval_duration if prompt_eval_duration > 0 else 0
         generation_tps = generation_tokens / eval_duration if eval_duration > 0 else 0
 
         # Debug logging
-        print(
-            f"  Prompt: {prompt_eval_count} tokens in {prompt_eval_duration:.2f}s = {prompt_tps:.1f} t/s"
-        )
-        print(
-            f"  Generation: {generation_tokens} tokens in {eval_duration:.2f}s = {generation_tps:.1f} t/s"
-        )
+        print(f"  Prompt: {prompt_eval_count} tokens in {prompt_eval_duration:.2f}s = {prompt_tps:.1f} t/s")
+        print(f"  Generation: {generation_tokens} tokens in {eval_duration:.2f}s = {generation_tps:.1f} t/s")
         if prompt_eval_duration > 0:
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total time: {total_time:.2f}s (num_ctx={num_ctx})")
@@ -178,10 +178,10 @@ def run_benchmark(
 
 def check_model_available(model_name: str) -> bool:
     """Check if the model is available in Ollama.
-    
+
     Args:
         model_name: Name of the model to check
-        
+
     Returns:
         True if model is available, False otherwise
     """
@@ -213,10 +213,7 @@ def check_model_available(model_name: str) -> bool:
 
         # Also check without considering digest (for models like "gpt-oss:20b")
         for available_model in model_names:
-            if (
-                available_model == model_name
-                or available_model.split(":")[0] == model_name.split(":")[0]
-            ):
+            if available_model == model_name or available_model.split(":")[0] == model_name.split(":")[0]:
                 print(f"Found model: {available_model}")
                 return True
 
@@ -310,8 +307,7 @@ def run_batch_benchmark(
 
     for bs in batch_sizes:
         print(
-            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, "
-            f"{gen_tokens} gen tokens)..."
+            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, " f"{gen_tokens} gen tokens)..."
         )
 
         # Warmup at this batch size so the server has allocated all slots and
@@ -387,12 +383,8 @@ def run_batch_benchmark(
 
 def main() -> int:
     """Main function to run Ollama API benchmarks."""
-    parser = argparse.ArgumentParser(
-        description="Run Ollama benchmarks using Python API"
-    )
-    parser.add_argument(
-        "model", help="Ollama model name (e.g., llama3.2, mistral)"
-    )
+    parser = argparse.ArgumentParser(description="Run Ollama benchmarks using Python API")
+    parser.add_argument("model", help="Ollama model name (e.g., llama3.2, mistral)")
 
     parser.add_argument(
         "--cold-prefill",
@@ -457,7 +449,9 @@ def main() -> int:
     print(f"Hardware: {hardware_str}")
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     # Warmup run — max_tokens=1 is enough to load weights and hit the code
     # path; mirrors mlx_benchmark's warmup (see mlx_benchmark.py:749).
@@ -474,22 +468,36 @@ def main() -> int:
     # Run benchmarks
     start_time = time.time()
     results = []
-    for file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {file.name}...")
-        print(f"{'=' * 50}")
+    if args.cold_prefill:
+        for file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {file.name}...")
+            print(f"{'=' * 50}")
 
-        result = common.run_benchmark_peak(run_benchmark, args.model, file, args.max_tokens, cold_prefill=args.cold_prefill, n_runs=args.runs)
-        if result:
-            results.append(result)
+            result = common.run_benchmark_peak(
+                run_benchmark, args.model, file, args.max_tokens, cold_prefill=args.cold_prefill, n_runs=args.runs
+            )
+            if result:
+                results.append(result)
 
-            # Save the generated text if requested
-            if args.save_responses:
+                # Save the generated text if requested
+                if args.save_responses:
+                    output_filename = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, output_filename, "Ollama API")
+    else:
+        results = common.run_benchmark_peak_per_run(
+            run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
+            model_name=args.model,
+            max_tokens=args.max_tokens,
+            cold_prefill=args.cold_prefill,
+        )
+        if args.save_responses:
+            for result in results:
                 output_filename = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(
-                    result, args.model, output_filename, "Ollama API"
-                )
-    
+                common.save_generated_text(result, args.model, output_filename, "Ollama API")
+
     total_benchmark_time = time.time() - start_time
 
     if not results:

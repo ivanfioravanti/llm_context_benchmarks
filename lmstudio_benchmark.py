@@ -55,15 +55,19 @@ DEFAULT_API_VERSION = "v0"
 SUPPORTED_API_VERSIONS = ("v0", "v1")
 
 
-def _make_cache_buster() -> str:
-    """Generate a unique prefix to bust LM Studio's prompt cache.
+def _make_cache_buster(run_idx: Optional[int] = None) -> str:
+    """Generate a prefix to bust LM Studio's prompt cache.
 
     LM Studio caches KV state across requests when prompts share a prefix.
-    For fair cold-prefill benchmarking (apples-to-apples with mlx-vlm direct,
-    which cold-prefills every file), prepend a per-call UUID so no two
-    prompts share a prefix. ~10 tokens of overhead, negligible for large
-    contexts.
+
+    When ``run_idx`` is provided, the buster is deterministic per run index:
+    all calls within the same run share the same prefix (so KV cache carries
+    over across context sizes), while different runs get different prefixes
+    (so runs don't interfere). When ``run_idx`` is None, a random UUID is
+    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
     """
+    if run_idx is not None:
+        return f"[run-{run_idx}]\n"
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
@@ -153,8 +157,10 @@ def run_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    if cold_prefill or _run_idx is not None:
+    if cold_prefill:
         prompt = _make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = _make_cache_buster(run_idx=_run_idx) + prompt
 
     start_time = time.time()
     result = _send_request(base_url, model, prompt, max_tokens, timeout, api_version)
@@ -176,16 +182,9 @@ def run_benchmark(
     # Extract usage (prompt_tokens / completion_tokens). Try multiple field
     # names — LM Studio versions vary on what they populate.
     usage = result.get("usage") or {}
-    prompt_tokens = (
-        usage.get("prompt_tokens")
-        or usage.get("input_tokens")
-        or 0
-    )
+    prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
     generation_tokens = (
-        usage.get("completion_tokens")
-        or usage.get("output_tokens")
-        or usage.get("generation_tokens")
-        or 0
+        usage.get("completion_tokens") or usage.get("output_tokens") or usage.get("generation_tokens") or 0
     )
 
     # Extract LM Studio native stats. Try multiple possible field locations
@@ -279,20 +278,12 @@ def run_benchmark(
     if server_generation_tps > 0:
         generation_tps = server_generation_tps
     else:
-        decode_time = (
-            server_generation_time
-            if server_generation_time > 0
-            else max(total_time - ttft, 0.0)
-        )
+        decode_time = server_generation_time if server_generation_time > 0 else max(total_time - ttft, 0.0)
         generation_tps = generation_tokens / decode_time if decode_time > 0 else 0.0
 
     # Pure decode duration (eval_duration field in the result dict).
     # Same note: server_generation_time is already decode-only.
-    eval_duration = (
-        server_generation_time
-        if server_generation_time > 0
-        else max(total_time - ttft, 0.0)
-    )
+    eval_duration = server_generation_time if server_generation_time > 0 else max(total_time - ttft, 0.0)
 
     print(f"  Prompt: {prompt_tokens} tokens in {prompt_eval_duration:.2f}s = {prompt_tps:.1f} t/s")
     print(f"  Generation: {generation_tokens} tokens in {eval_duration:.2f}s = {generation_tps:.1f} t/s")
@@ -415,8 +406,7 @@ def run_batch_benchmark(
 
     for bs in batch_sizes:
         print(
-            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, "
-            f"{gen_tokens} gen tokens)..."
+            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, " f"{gen_tokens} gen tokens)..."
         )
 
         # Per-batch-size warmup so the model has allocated all parallel
@@ -492,9 +482,7 @@ def run_batch_benchmark(
 
 def main() -> int:
     """Main function to run LM Studio benchmarks."""
-    parser = argparse.ArgumentParser(
-        description="Benchmark LM Studio local server via its native /api/v0 endpoint"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark LM Studio local server via its native /api/v0 endpoint")
     parser.add_argument(
         "model",
         nargs="?",
@@ -616,7 +604,9 @@ def main() -> int:
     print(f"Hardware: {hardware_str}")
     print(f"Model: {model_id}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
     print(f"API version: /api/{args.api_version}/")
 
     # Find context files
@@ -653,26 +643,43 @@ def main() -> int:
     # Context sweep
     start_time = time.time()
     results = []
-    for file in context_files:
-        print(f"\n{'=' * 50}")
-        print(f"Benchmarking {file.name}...")
-        print(f"{'=' * 50}")
+    if args.cold_prefill:
+        for file in context_files:
+            print(f"\n{'=' * 50}")
+            print(f"Benchmarking {file.name}...")
+            print(f"{'=' * 50}")
 
-        result = common.run_benchmark_peak(
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                base_url,
+                model_id,
+                file,
+                max_tokens=args.max_tokens,
+                cold_prefill=args.cold_prefill,
+                timeout=args.timeout,
+                api_version=args.api_version,
+                n_runs=args.runs,
+            )
+            if result:
+                results.append(result)
+
+                if args.save_responses:
+                    resp_path = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, model_id, resp_path, "LM Studio")
+    else:
+        results = common.run_benchmark_peak_per_run(
             run_benchmark,
-            base_url,
-            model_id,
-            file,
+            context_files=context_files,
+            n_runs=args.runs,
+            base_url=base_url,
+            model=model_id,
             max_tokens=args.max_tokens,
             cold_prefill=args.cold_prefill,
             timeout=args.timeout,
             api_version=args.api_version,
-            n_runs=args.runs,
         )
-        if result:
-            results.append(result)
-
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 resp_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, model_id, resp_path, "LM Studio")
 

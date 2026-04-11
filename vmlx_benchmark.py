@@ -17,15 +17,22 @@ import benchmark_common as common
 VMLX_API_URL = "http://127.0.0.1:8001/v1"
 
 
-def _make_cache_buster() -> str:
-    """Generate a unique prefix to bust vMLX's prefix KV cache.
+def _make_cache_buster(run_idx: Optional[int] = None) -> str:
+    """Generate a prefix to bust vMLX's prefix KV cache.
 
     vMLX uses a tiered prefix cache. When a new prompt shares a prefix with a
     previous request, cached tokens are reused, making prompt_eval_duration
     cover only the uncached delta while prompt_tokens reports the full length —
-    inflating derived prompt t/s.  Prepending a per-call UUID forces a prefix
-    miss so every row is cold prefill.  ~10 tokens of overhead per prompt.
+    inflating derived prompt t/s.
+
+    When ``run_idx`` is provided, the buster is deterministic per run index:
+    all calls within the same run share the same prefix (so KV cache carries
+    over across context sizes), while different runs get different prefixes
+    (so runs don't interfere). When ``run_idx`` is None, a random UUID is
+    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
     """
+    if run_idx is not None:
+        return f"[run-{run_idx}]\n"
     import uuid
 
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
@@ -188,11 +195,15 @@ def run_benchmark(
     with open(context_file, "r") as handle:
         prompt = handle.read()
 
-    # Bust vMLX's prefix KV cache by prepending a unique marker. Without this,
-    # the tiered cache from a previous warmup or benchmark row that shares a
-    # prefix will be reused, inflating prompt_tps.
-    if cold_prefill or _run_idx is not None:
+    # Bust vMLX's KV cache by prepending a unique marker.
+    # - cold_prefill: random UUID per call → every row is fully cold prefill
+    # - _run_idx (no cold_prefill): deterministic per run index → same run
+    #   shares a prefix (KV cache carries over), different runs are isolated
+    # - neither: no buster → raw server KV cache behavior
+    if cold_prefill:
         prompt = _make_cache_buster() + prompt
+    elif _run_idx is not None:
+        prompt = _make_cache_buster(run_idx=_run_idx) + prompt
 
     try:
         cached_tokens = 0
@@ -665,15 +676,43 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for context_file in context_files:
-        print("\n" + "=" * 50)
-        print(f"Benchmarking {context_file.name}...")
-        print("=" * 50)
+    if args.cold_prefill:
+        # Cold prefill: cache buster per-call, order doesn't matter.
+        for context_file in context_files:
+            print("\n" + "=" * 50)
+            print(f"Benchmarking {context_file.name}...")
+            print("=" * 50)
 
-        result = common.run_benchmark_peak(
+            result = common.run_benchmark_peak(
+                run_benchmark,
+                model_name=args.model,
+                context_file=context_file,
+                client=client,
+                request_model=request_model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                timeout=args.timeout,
+                stream=args.stream,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+            )
+
+            if result:
+                results.append(result)
+                if args.save_responses:
+                    response_path = output_dir / f"response_{result['context_size']}.txt"
+                    common.save_generated_text(result, args.model, response_path, "vMLX API")
+    else:
+        # Warm/cached: each run completes all context sizes before the next
+        # starts, so KV cache accumulates within a run (run 1: 1k→2k→4k→…,
+        # then run 2: 1k→2k→4k→…, etc.).  Deterministic per-run prefixes
+        # keep runs cache-isolated.
+        results = common.run_benchmark_peak_per_run(
             run_benchmark,
+            context_files=context_files,
+            n_runs=args.runs,
             model_name=args.model,
-            context_file=context_file,
             client=client,
             request_model=request_model,
             max_tokens=args.max_tokens,
@@ -682,12 +721,9 @@ def main() -> int:
             timeout=args.timeout,
             stream=args.stream,
             cold_prefill=args.cold_prefill,
-            n_runs=args.runs,
         )
-
-        if result:
-            results.append(result)
-            if args.save_responses:
+        if args.save_responses:
+            for result in results:
                 response_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, response_path, "vMLX API")
 

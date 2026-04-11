@@ -102,9 +102,7 @@ def call_exo(
             {
                 "message": {
                     "content": response.choices[0].message.content or "",
-                    "reasoning_content": getattr(
-                        response.choices[0].message, "reasoning_content", ""
-                    ),
+                    "reasoning_content": getattr(response.choices[0].message, "reasoning_content", ""),
                 }
             }
         ],
@@ -118,6 +116,7 @@ def count_tokens_tiktoken(text: str, model: str = "gpt-3.5-turbo") -> int:
         return 0
     try:
         import tiktoken
+
         try:
             encoding = tiktoken.encoding_for_model(model)
         except KeyError:
@@ -210,9 +209,7 @@ def call_exo_streaming(
     # If API didn't provide usage, calculate client-side.
     if not usage or usage.get("completion_tokens", 0) == 0:
         prompt_tokens = count_tokens_tiktoken(prompt, request_model)
-        completion_tokens = count_tokens_tiktoken(
-            generated_text + reasoning_text, request_model
-        )
+        completion_tokens = count_tokens_tiktoken(generated_text + reasoning_text, request_model)
         if completion_tokens == 0 and token_count > 0:
             # Fall back to chunk count when tokenizer isn't available.
             completion_tokens = token_count
@@ -388,12 +385,8 @@ def run_benchmark(
     )
     # When streaming, the first output token is generated during the TTFT window,
     # so subtract it from the count used for generation throughput to avoid double-counting.
-    tps_generation_tokens = (
-        max(generation_tokens - 1, 0) if stream and prompt_eval_duration > 0 else generation_tokens
-    )
-    generation_tps = (
-        tps_generation_tokens / eval_duration if eval_duration and eval_duration > 0 else 0.0
-    )
+    tps_generation_tokens = max(generation_tokens - 1, 0) if stream and prompt_eval_duration > 0 else generation_tokens
+    generation_tps = tps_generation_tokens / eval_duration if eval_duration and eval_duration > 0 else 0.0
 
     print(f"  Prompt tokens: {prompt_tokens}")
     if cached_tokens > 0:
@@ -483,7 +476,7 @@ def main() -> int:
         action="store_true",
         default=True,
         help="Use exo's /bench/chat/completions endpoint which disables prefix caching "
-             "for accurate prompt throughput measurement (default: on)",
+        "for accurate prompt throughput measurement (default: on)",
     )
     parser.add_argument(
         "--no-bench-mode",
