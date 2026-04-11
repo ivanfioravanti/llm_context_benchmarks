@@ -434,7 +434,7 @@ def generate_table(
         for r in batch_results:
             row = (
                 f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | "
-                f"{r['generation_tps']:>7.1f} | {r['peak_memory_gb']:>6.1f} GB"
+                f"{r['generation_tps']:>7.1f} | {r.get('peak_memory_gb', 0):>6.1f} GB"
             )
             if batch_has_kv:
                 row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
@@ -671,7 +671,7 @@ def create_chart_mlx(
         context_sizes.append(r["context_size"])
         prompt_tps.append(r["prompt_tps"])
         gen_tps.append(r["generation_tps"])
-        peak_memory.append(r["peak_memory_gb"])
+        peak_memory.append(r.get("peak_memory_gb", 0))
         kv_cache.append(r.get("kv_cache_gb", 0))
         generation_tokens.append(r["generation_tokens"])
         total_times.append(r.get("total_time", 0))
@@ -1371,7 +1371,7 @@ def print_benchmark_summary(
         for r in batch_results:
             line = (
                 f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} "
-                f"tg {r['generation_tps']:.1f} t/s, mem {r['peak_memory_gb']:.2f} GB"
+                f"tg {r['generation_tps']:.1f} t/s, mem {r.get('peak_memory_gb', 0):.2f} GB"
             )
             if "kv_cache_gb" in r:
                 line += f", kv {r['kv_cache_gb']:.2f} GB"

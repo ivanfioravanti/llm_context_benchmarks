@@ -55,12 +55,13 @@ KNOWN_ENGINES = (
 )
 
 
-def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str]:
-    """Extract (engine, model) from a benchmark folder name.
+def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str, str]:
+    """Extract (engine, model, cache_mode) from a benchmark folder name.
 
-    Folder format: ``benchmark_{framework}_{model}_{machine}_{YYYYMMDD}_{HHMMSS}``
+    Folder format: ``benchmark_{framework}_{model}[_{cache_mode}]_{machine}_{YYYYMMDD}_{HHMMSS}``
     where ``{framework}`` may itself contain underscores (e.g. ``ollama_api``,
     ``mlx_vlm``) and ``{machine}`` is omitted in older folders.
+    ``{cache_mode}`` is ``cache`` or ``nocache`` when present.
     """
     body = folder_name
     if body.startswith("benchmark_"):
@@ -79,7 +80,7 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
     if engine is None:
         first_underscore = body.find("_")
         if first_underscore == -1:
-            return body or "unknown", "unknown"
+            return body or "unknown", "unknown", ""
         engine = body[:first_underscore]
         body = body[first_underscore + 1 :]
 
@@ -94,7 +95,14 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
         elif re.match(r"^M\d[A-Za-z0-9]*$", tail):
             body = head
 
-    return engine, body or "unknown"
+    # Detect cache mode suffix (cache / nocache)
+    cache_mode = ""
+    cache_match = re.search(r"_(nocache|cache)$", body)
+    if cache_match:
+        cache_mode = cache_match.group(1)
+        body = body[: -len(cache_match.group(0))]
+
+    return engine, body or "unknown", cache_mode
 
 
 def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
@@ -177,7 +185,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
 
     # Extract engine and model from folder name
     folder_name = folder_path.name
-    engine, model = _parse_folder_metadata(folder_name, hardware_info)
+    engine, model, cache_mode = _parse_folder_metadata(folder_name, hardware_info)
 
     # Read perplexity data if available
     perplexity_file = folder_path / "perplexity.json"
@@ -202,13 +210,15 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         cached_results = [r for r in cached_data.get("results", []) if r.get("cached_tokens", 0) > 0]
 
     # Create display name
-    display_name = f"{engine}: {model}"
+    cache_label = " (cached)" if cache_mode == "cache" else " (no cache)" if cache_mode == "nocache" else ""
+    display_name = f"{engine}: {model}{cache_label}"
 
     return {
         "results": results,
         "hardware_info": hardware_info,
         "engine": engine,
         "model": model,
+        "cache_mode": cache_mode,
         "folder_name": folder_name,
         "display_name": display_name,
         "perplexity_data": perplexity_data,
@@ -234,19 +244,31 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     has_batch_data = any(data.get("batch_data") is not None for data in benchmark_data)
 
     # Check if any benchmark has KV cache reported on its batch rows
-    has_batch_kv_data = any(
-        any("kv_cache_gb" in r for r in (data.get("batch_data") or [])) for data in benchmark_data
-    )
+    has_batch_kv_data = any(any("kv_cache_gb" in r for r in (data.get("batch_data") or [])) for data in benchmark_data)
 
-    # Check if any benchmark has cached KV results
+    # Check if any benchmark has cached KV results (from all_results_cached.json)
     has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
+
+    # Detect cache modes from folder names
+    cache_modes = {d.get("cache_mode", "") for d in benchmark_data}
+    split_by_cache = "cache" in cache_modes and "nocache" in cache_modes
 
     # Set up the plot style
     plt.style.use("default")
 
     # Build list of subplot specs: each is (key, title, ylabel, is_bar)
-    subplot_specs = [
-        ("prompt_tps", "Prompt Processing Speed", "Tokens/sec"),
+    if split_by_cache:
+        subplot_specs = [
+            ("prompt_tps_nocache", "Prefill TPS (No Cache)", "Tokens/sec"),
+            ("prompt_tps_cache", "Prefill TPS (Cached)", "Tokens/sec"),
+        ]
+    else:
+        subplot_specs = [
+            ("prompt_tps", "Prompt Processing Speed", "Tokens/sec"),
+        ]
+    if has_cached_data:
+        subplot_specs.append(("inc_prompt_tps", "Incremental Prompt TPS (Cached KV)", "Tokens/sec"))
+    subplot_specs += [
         ("generation_tps", "Text Generation Speed", "Tokens/sec"),
         ("ttft", "Time to First Token (TTFT)", "Time (seconds)"),
     ]
@@ -254,8 +276,6 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
     if has_kv_cache_data:
         subplot_specs.append(("kv_cache", "KV Cache Size", "KV Cache (GB)"))
-    if has_cached_data:
-        subplot_specs.append(("inc_prompt_tps", "Incremental Prompt TPS (Cached KV)", "Tokens/sec"))
     if has_perplexity_data:
         subplot_specs.append(("perplexity", "Perplexity (lower is better)", "Perplexity"))
     if has_batch_data:
@@ -323,7 +343,16 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
             context_nums.append(float(ctx[:-1]) * 1000 if ctx.endswith("k") else int(ctx))
 
         sorted_data = sorted(
-            zip(context_nums, context_sizes, prompt_tps, generation_tps, total_times, ttft_times, peak_memory, kv_cache_gb)
+            zip(
+                context_nums,
+                context_sizes,
+                prompt_tps,
+                generation_tps,
+                total_times,
+                ttft_times,
+                peak_memory,
+                kv_cache_gb,
+            )
         )
         cn, cs, pp, gn, tt, tf, pm, kv = zip(*sorted_data)
         all_series.append(
@@ -410,41 +439,6 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                     )
             continue
 
-        if key == "inc_prompt_tps":
-            # Incremental prompt TPS from cached KV benchmark
-            for i, data in enumerate(benchmark_data):
-                cached = data.get("cached_results", [])
-                if not cached:
-                    continue
-                sorted_cached = sorted(cached, key=lambda r: float(r["context_size"].replace("k", "")))
-                x_vals = [r["context_size"] for r in sorted_cached]
-                y_vals = [r.get("incremental_prompt_tps", 0) for r in sorted_cached]
-                marker = markers[i % len(markers)]
-                ax.plot(
-                    x_vals,
-                    y_vals,
-                    "--",
-                    marker=marker,
-                    linewidth=2,
-                    label=clean_names[i],
-                    color=colors[i],
-                    markersize=6,
-                )
-                for x, y in zip(x_vals, y_vals):
-                    ax.annotate(
-                        f"{y:.1f}",
-                        (x, y),
-                        textcoords="offset points",
-                        xytext=(0, 8),
-                        ha="center",
-                        fontsize=7,
-                        color=colors[i],
-                    )
-            ax.set_xlabel("Context Size")
-            ax.tick_params(axis="x", rotation=45)
-            ax.legend(fontsize=9)
-            continue
-
         if key in ("batch_prompt", "batch_gen", "batch_kv"):
             # Batch prompt/generation TPS or KV cache vs batch size
             if key == "batch_prompt":
@@ -490,8 +484,15 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         for i, series in enumerate(all_series):
             if series is None:
                 continue
+            # Filter by cache mode for cache-separated subplots
+            if key == "prompt_tps_nocache" and benchmark_data[i].get("cache_mode") == "cache":
+                continue
+            if key == "prompt_tps_cache" and benchmark_data[i].get("cache_mode") != "cache":
+                continue
+            # Map cache-separated keys to the actual data key
+            data_key = "prompt_tps" if key in ("prompt_tps_nocache", "prompt_tps_cache") else key
             x_vals = series["context_labels"]
-            y_vals = series[key]
+            y_vals = series[data_key]
             marker = markers[i % len(markers)]
             ax.plot(x_vals, y_vals, marker=marker, linewidth=2, label=clean_names[i], color=colors[i], markersize=6)
             # Add value annotations
@@ -508,6 +509,37 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                             color=colors[i],
                         )
                 else:
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
+
+        if key == "inc_prompt_tps":
+            ax.set_xlabel("Context Size")
+            ax.tick_params(axis="x", rotation=45)
+            for i, data in enumerate(benchmark_data):
+                cached = data.get("cached_results", [])
+                if not cached:
+                    continue
+                sorted_cached = sorted(cached, key=lambda r: float(r["context_size"].replace("k", "")))
+                x_vals = [r["context_size"] for r in sorted_cached]
+                y_vals = [r.get("incremental_prompt_tps", 0) for r in sorted_cached]
+                marker = markers[i % len(markers)]
+                ax.plot(
+                    x_vals,
+                    y_vals,
+                    marker=marker,
+                    linewidth=2,
+                    label=clean_names[i],
+                    color=colors[i],
+                    markersize=6,
+                )
+                for x, y in zip(x_vals, y_vals):
                     ax.annotate(
                         f"{y:.1f}",
                         (x, y),
@@ -568,6 +600,11 @@ def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
 
     markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
     clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
+
+    # Detect cache modes from folder names
+    cache_modes = {d.get("cache_mode", "") for d in benchmark_data}
+    split_by_cache = "cache" in cache_modes and "nocache" in cache_modes
 
     # Pre-extract and sort series per benchmark
     all_series = []
@@ -585,11 +622,19 @@ def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
         cn, cs, pp, gn = zip(*sorted(zip(context_nums, context_sizes, prompt_tps, generation_tps)))
         all_series.append({"context_labels": cs, "prompt_tps": pp, "generation_tps": gn})
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
-    specs = [
-        ("prompt_tps", "Prompt Processing Speed"),
-        ("generation_tps", "Text Generation Speed"),
-    ]
+    # Build subplot specs: separate nocache/cache panels when folder names indicate it
+    specs = []
+    if split_by_cache:
+        specs.append(("prompt_tps_nocache", "Prefill TPS (No Cache)"))
+        specs.append(("prompt_tps_cache", "Prefill TPS (Cached)"))
+    else:
+        specs.append(("prompt_tps", "Prompt Processing Speed"))
+    if has_cached_data:
+        specs.append(("inc_prompt_tps", "Incremental Prompt TPS (Cached KV)"))
+    specs.append(("generation_tps", "Text Generation Speed"))
+
+    n_cols_speed = len(specs)
+    fig, axes = plt.subplots(1, n_cols_speed, figsize=(8 * n_cols_speed, 5.5))
 
     for ax, (key, title) in zip(axes, specs):
         ax.set_title(title, fontweight="bold", fontsize=13)
@@ -598,30 +643,65 @@ def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
         ax.grid(True, alpha=0.3)
         ax.tick_params(axis="x", rotation=45)
 
-        for i, series in enumerate(all_series):
-            if series is None:
-                continue
-            x_vals = series["context_labels"]
-            y_vals = series[key]
-            ax.plot(
-                x_vals,
-                y_vals,
-                marker=markers[i % len(markers)],
-                linewidth=2,
-                label=clean_names[i],
-                color=colors[i],
-                markersize=6,
-            )
-            for x, y in zip(x_vals, y_vals):
-                ax.annotate(
-                    f"{y:.1f}",
-                    (x, y),
-                    textcoords="offset points",
-                    xytext=(0, 8),
-                    ha="center",
-                    fontsize=7,
+        if key == "inc_prompt_tps":
+            for i, data in enumerate(benchmark_data):
+                cached = data.get("cached_results", [])
+                if not cached:
+                    continue
+                sorted_cached = sorted(cached, key=lambda r: float(r["context_size"].replace("k", "")))
+                x_vals = [r["context_size"] for r in sorted_cached]
+                y_vals = [r.get("incremental_prompt_tps", 0) for r in sorted_cached]
+                marker = markers[i % len(markers)]
+                ax.plot(
+                    x_vals,
+                    y_vals,
+                    marker=marker,
+                    linewidth=2,
+                    label=clean_names[i],
                     color=colors[i],
+                    markersize=6,
                 )
+                for x, y in zip(x_vals, y_vals):
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
+        else:
+            for i, series in enumerate(all_series):
+                if series is None:
+                    continue
+                # Filter by cache mode for cache-separated panels
+                if key == "prompt_tps_nocache" and benchmark_data[i].get("cache_mode") == "cache":
+                    continue
+                if key == "prompt_tps_cache" and benchmark_data[i].get("cache_mode") != "cache":
+                    continue
+                data_key = "prompt_tps" if key in ("prompt_tps_nocache", "prompt_tps_cache") else key
+                x_vals = series["context_labels"]
+                y_vals = series[data_key]
+                ax.plot(
+                    x_vals,
+                    y_vals,
+                    marker=markers[i % len(markers)],
+                    linewidth=2,
+                    label=clean_names[i],
+                    color=colors[i],
+                    markersize=6,
+                )
+                for x, y in zip(x_vals, y_vals):
+                    ax.annotate(
+                        f"{y:.1f}",
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        fontsize=7,
+                        color=colors[i],
+                    )
 
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
@@ -858,6 +938,13 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
             lookup[r["context_size"]] = r
         lookups.append(lookup)
 
+    cached_lookups = []
+    for data in benchmark_data:
+        lookup = {}
+        for r in data.get("cached_results", []):
+            lookup[r["context_size"]] = r
+        cached_lookups.append(lookup)
+
     clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
     # Only show the memory / KV-cache columns if every benchmark in the
     # comparison reports them — otherwise we end up with a half-empty column
@@ -867,6 +954,12 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     n_benchmarks = len(benchmark_data)
     aliases = [chr(ord("A") + i) for i in range(n_benchmarks)]
 
+    # Detect cache modes from folder names
+    cache_modes = {d.get("cache_mode", "") for d in benchmark_data}
+    split_by_cache = "cache" in cache_modes and "nocache" in cache_modes
+    cache_indices = {i for i, d in enumerate(benchmark_data) if d.get("cache_mode") == "cache"}
+    nocache_indices = {i for i, d in enumerate(benchmark_data) if d.get("cache_mode") != "cache"}
+
     # Build column structure and track which columns belong to which metric group.
     # A "group" is a set of columns (one per benchmark) that should be compared
     # against each other to find the best value per row.
@@ -875,15 +968,45 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     # groups: list of (start_col, end_col_exclusive, higher_is_better)
     groups = []
 
-    start = len(col_labels)
-    for alias in aliases:
-        col_labels.append(f"Prefill\n{alias}")
-    groups.append((start, start + n_benchmarks, True))
+    sep_indices = set()
 
-    start = len(col_labels)
-    for alias in aliases:
-        col_labels.append(f"Decode\n{alias}")
-    groups.append((start, start + n_benchmarks, True))
+    if split_by_cache:
+        # ---- No-cache side: Prefill + Decode ----
+        start = len(col_labels)
+        for i in nocache_indices:
+            col_labels.append(f"No-Cache\nPrefill\n{aliases[i]}")
+        groups.append((start, start + len(nocache_indices), True))
+
+        start = len(col_labels)
+        for i in nocache_indices:
+            col_labels.append(f"No-Cache\nDecode\n{aliases[i]}")
+        groups.append((start, start + len(nocache_indices), True))
+
+        # Separator between no-cache and cached sides
+        sep_indices.add(len(col_labels))
+        col_labels.append("")
+
+        # ---- Cached side: Prefill + Decode ----
+        start = len(col_labels)
+        for i in cache_indices:
+            col_labels.append(f"Cached\nPrefill\n{aliases[i]}")
+        groups.append((start, start + len(cache_indices), True))
+
+        start = len(col_labels)
+        for i in cache_indices:
+            col_labels.append(f"Cached\nDecode\n{aliases[i]}")
+        groups.append((start, start + len(cache_indices), True))
+    else:
+        # All benchmarks in a single group
+        start = len(col_labels)
+        for alias in aliases:
+            col_labels.append(f"Prefill\n{alias}")
+        groups.append((start, start + n_benchmarks, True))
+
+        start = len(col_labels)
+        for alias in aliases:
+            col_labels.append(f"Decode\n{alias}")
+        groups.append((start, start + n_benchmarks, True))
 
     if has_memory:
         start = len(col_labels)
@@ -908,17 +1031,44 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         raw_row = [0.0]  # context column placeholder
         results = [lookups[i].get(ctx) for i in range(n_benchmarks)]
 
-        # Prefill TPS
-        prefill_vals = [r.get("prompt_tps", 0) if r else 0 for r in results]
-        for v in prefill_vals:
-            row.append(f"{v:.1f}" if v > 0 else "\u2014")
-            raw_row.append(v)
-
-        # Decode TPS
-        decode_vals = [r.get("generation_tps", 0) if r else 0 for r in results]
-        for v in decode_vals:
-            row.append(f"{v:.1f}" if v > 0 else "\u2014")
-            raw_row.append(v)
+        # Prefill + Decode TPS
+        if split_by_cache:
+            # No-cache prefill
+            for i in nocache_indices:
+                r = results[i]
+                v = r.get("prompt_tps", 0) if r else 0
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+            # No-cache decode
+            for i in nocache_indices:
+                r = results[i]
+                v = r.get("generation_tps", 0) if r else 0
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+            # Separator
+            row.append("")
+            raw_row.append(0)
+            # Cached prefill
+            for i in cache_indices:
+                r = results[i]
+                v = r.get("prompt_tps", 0) if r else 0
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+            # Cached decode
+            for i in cache_indices:
+                r = results[i]
+                v = r.get("generation_tps", 0) if r else 0
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+        else:
+            prefill_vals = [r.get("prompt_tps", 0) if r else 0 for r in results]
+            for v in prefill_vals:
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
+            decode_vals = [r.get("generation_tps", 0) if r else 0 for r in results]
+            for v in decode_vals:
+                row.append(f"{v:.1f}" if v > 0 else "\u2014")
+                raw_row.append(v)
 
         # Memory
         if has_memory:
@@ -968,10 +1118,17 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     # Style header
     for col_idx in range(n_cols):
         cell = table[0, col_idx]
-        cell.set_facecolor(header_bg)
-        cell.set_text_props(color=header_text, fontweight="bold", fontsize=9)
-        cell.set_edgecolor("#2d3436")
-        cell.set_linewidth(0.5)
+        if col_idx in sep_indices:
+            cell.set_facecolor(bg_color)
+            cell.set_text_props(color=bg_color, fontsize=1)
+            cell.set_edgecolor("#444444")
+            cell.set_linewidth(0.5)
+            cell.set_width(0.08)
+        else:
+            cell.set_facecolor(header_bg)
+            cell.set_text_props(color=header_text, fontweight="bold", fontsize=9)
+            cell.set_edgecolor("#2d3436")
+            cell.set_linewidth(0.5)
 
     # Style data rows with best-value highlighting
     for row_idx in range(len(rows)):
@@ -990,6 +1147,13 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
 
         for col_idx in range(n_cols):
             cell = table[row_idx + 1, col_idx]
+            if col_idx in sep_indices:
+                cell.set_facecolor(bg_color)
+                cell.set_text_props(color=bg_color, fontsize=1)
+                cell.set_edgecolor("#444444")
+                cell.set_linewidth(0.5)
+                cell.set_width(0.08)
+                continue
             cell.set_facecolor(bg)
             cell.set_text_props(color=text_color, fontsize=10)
             cell.set_edgecolor("#2d3436")
@@ -1074,9 +1238,10 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
 
 
 def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
-    """Create a performance heatmap with a separate section per quantization level.
+    """Create a performance heatmap with a separate section per quantization level
+    and cache mode.
 
-    Each section normalises independently: 100% = best within that quantization group.
+    Each section normalises independently: 100% = best within that group.
     Columns = Avg Prompt TPS, Avg Gen TPS, Peak Batch Prompt TPS, Peak Batch Gen TPS.
     Title uses the model name when all runs share the same base model; otherwise the model
     name is included in each row label.
@@ -1102,6 +1267,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         chip_short = hardware_info.get("chip", "Unknown").replace("Apple ", "")
         quant = _extract_quantization(data["model"])
         base_model = _extract_base_model(data["model"], hardware_info, quant)
+        cache_mode = data.get("cache_mode", "")
 
         avg_prompt_tps = float(np.mean([r.get("prompt_tps", 0) for r in results]))
         avg_gen_tps = float(np.mean([r.get("generation_tps", 0) for r in results]))
@@ -1120,6 +1286,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
                 "engine": data.get("engine", ""),
                 "quant": quant,
                 "quant_group": _quant_group_key(quant),
+                "cache_mode": cache_mode,
                 "chip_short": chip_short,
                 "base_model": base_model,
                 "avg_prompt_tps": avg_prompt_tps,
@@ -1134,17 +1301,31 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         print("No data available for heatmap.")
         return None
 
-    # Group by quantization level (TBQ is folded into bf16 — see _quant_group_key)
-    quant_groups: dict = defaultdict(list)
-    for row in rows:
-        quant_groups[row["quant_group"]].append(row)
-    ordered_quants = sorted(quant_groups.keys())
-    n_groups = len(ordered_quants)
+    # Detect cache modes to decide grouping strategy
+    cache_modes = {r["cache_mode"] for r in rows}
+    split_by_cache = "cache" in cache_modes and "nocache" in cache_modes
+
+    # Group by (cache_mode, quantization) when both modes present, otherwise just quantization
+    if split_by_cache:
+        sections: dict = defaultdict(list)
+        for row in rows:
+            cache_label = "Cached" if row["cache_mode"] == "cache" else "No Cache"
+            section_key = f"{cache_label} · {_quant_group_key(row['quant'])}"
+            sections[section_key].append(row)
+        # Order: no-cache sections first, then cached
+        ordered_sections = sorted(sections.keys(), key=lambda k: (0 if "No Cache" in k else 1, k))
+    else:
+        sections: dict = defaultdict(list)
+        for row in rows:
+            sections[_quant_group_key(row["quant"])].append(row)
+        ordered_sections = sorted(sections.keys())
+
+    n_groups = len(ordered_sections)
 
     # Filter out columns where ALL values are NaN across ALL groups
     active_col_indices = []
     for col_idx, key in enumerate(metric_keys):
-        has_data = any(not np.isnan(row[key]) for group_rows in quant_groups.values() for row in group_rows)
+        has_data = any(not np.isnan(row[key]) for group_rows in sections.values() for row in group_rows)
         if has_data:
             active_col_indices.append(col_idx)
 
@@ -1164,8 +1345,8 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     cmap = plt.cm.RdYlGn.copy()
     cmap.set_bad(color="#cccccc")
 
-    total_data_rows = sum(len(quant_groups[q]) for q in ordered_quants)
-    height_ratios = [max(1, len(quant_groups[q])) for q in ordered_quants]
+    total_data_rows = sum(len(sections[s]) for s in ordered_sections)
+    height_ratios = [max(1, len(sections[s])) for s in ordered_sections]
     fig_w = max(10, n_cols * 3.5)
     fig_h = max(5, total_data_rows * 2.0 + n_groups * 1.5)
 
@@ -1178,8 +1359,8 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     if n_groups == 1:
         axes = [axes]
 
-    for ax_idx, (ax, quant) in enumerate(zip(axes, ordered_quants)):
-        group_rows = quant_groups[quant]
+    for ax_idx, (ax, section_key) in enumerate(zip(axes, ordered_sections)):
+        group_rows = sections[section_key]
         n_group_rows = len(group_rows)
 
         raw_matrix = np.array([[r[k] for k in metric_keys] for r in group_rows], dtype=float)
@@ -1205,21 +1386,13 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             ax.set_xticklabels([""] * n_cols)
             ax.tick_params(axis="x", length=0)
 
-        # Row labels: include the engine when there is more than one engine in
-        # the group, otherwise rows for the same model on the same machine would
-        # collapse to identical labels (e.g. three "M5Max" rows). When the
-        # group folds multiple quants together (e.g. bf16 + TBQ), tag rows
-        # whose underlying quant differs from the group key so the section
-        # stays self-explanatory.
+        # Row labels: include the engine and cache mode when there is
+        # more than one engine or cache mode in the group.
         engines_in_group = {r.get("engine", "") for r in group_rows}
         multi_engine = len(engines_in_group) > 1
-        quants_in_group = {r.get("quant", "") for r in group_rows}
-        mixed_quants = len(quants_in_group) > 1
 
         def _row_label(r):
             parts = []
-            if mixed_quants and r.get("quant", "") != quant:
-                parts.append(r["quant"])
             if multi_engine:
                 parts.append(r["engine"])
             if not single_model:
@@ -1231,8 +1404,8 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
         ax.set_yticks(range(n_group_rows))
         ax.set_yticklabels(row_labels, fontsize=10)
 
-        # Quantization level as the subplot title (left-aligned)
-        ax.set_title(f"◆ {quant}", loc="left", fontsize=12, fontweight="bold", pad=6, color="#333333")
+        # Section title (left-aligned)
+        ax.set_title(f"◆ {section_key}", loc="left", fontsize=12, fontweight="bold", pad=6, color="#333333")
 
         # Cell annotations
         for i in range(n_group_rows):
@@ -1331,7 +1504,6 @@ Examples:
             "generation_tps",
             "ttft",
             "memory",
-            "inc_prompt_tps",
             "perplexity",
             "batch_prompt",
             "batch_gen",

@@ -101,6 +101,7 @@ def run_benchmark(
     ignore_chat_template: bool = False,
     cold_prefill: bool = True,
     _run_idx: Optional[int] = None,
+    prompt_cache_state=None,
 ) -> Optional[Dict]:
     """Run MLX-VLM benchmark for a given context file.
 
@@ -114,13 +115,15 @@ def run_benchmark(
         max_kv_size: Maximum KV cache size in tokens (optional)
         ignore_chat_template: If true, skip chat template wrapping
         cold_prefill: Prepend UUID prefix to bust any framework-level caching (default: True)
+        prompt_cache_state: PromptCacheState for KV cache reuse across calls;
+            when provided, stream_generate handles prefix matching and trimming
+            automatically (default: None)
 
     Returns:
         Dictionary with benchmark results or None if failed
     """
     import mlx.core as mx
     import mlx_vlm
-    from mlx_vlm.models.cache import make_prompt_cache
 
     print(f"Running benchmark for {context_file}...")
 
@@ -128,7 +131,7 @@ def run_benchmark(
         with open(context_file, "r") as f:
             prompt = f.read()
 
-        if cold_prefill or _run_idx is not None:
+        if cold_prefill:
             prompt = common.make_cache_buster() + prompt
 
         formatted_prompt = prepare_prompt(prompt, processor, model.config, ignore_chat_template)
@@ -141,13 +144,22 @@ def run_benchmark(
         if max_kv_size is not None:
             kwargs["max_kv_size"] = max_kv_size
 
-        # Build the cache externally so we can read its size after generation.
-        # mlx_vlm.stream_generate would otherwise build one internally via
-        # generate_step (mlx_vlm/generate.py:467) and we'd never see it.
-        # Behaviour is identical either way — see stream_generate's branch at
-        # mlx_vlm/generate.py:717-723 which honours an externally-supplied cache.
-        prompt_cache = make_prompt_cache(model.language_model, max_kv_size=max_kv_size)
-        kwargs["prompt_cache"] = prompt_cache
+        # When prompt_cache_state is provided (--no-cold-prefill), delegate KV
+        # cache lifecycle to stream_generate which handles token-level prefix
+        # matching, trimming, and reuse via PromptCacheState (generate.py:667-698).
+        # Otherwise create an external prompt_cache so we can measure its size.
+        prompt_cache = None
+        if prompt_cache_state is not None:
+            kwargs["prompt_cache_state"] = prompt_cache_state
+            # Save previous token IDs so we can compute cached_tokens after
+            # generation (stream_generate updates the state internally).
+            prev_token_ids = list(prompt_cache_state.token_ids) if prompt_cache_state.token_ids else None
+        else:
+            from mlx_vlm.models.cache import make_prompt_cache
+
+            prompt_cache = make_prompt_cache(model.language_model, max_kv_size=max_kv_size)
+            kwargs["prompt_cache"] = prompt_cache
+            prev_token_ids = None
 
         # Reset peak memory before each run
         mx.reset_peak_memory()
@@ -207,20 +219,64 @@ def run_benchmark(
         generation_tps = last_response.generation_tps
         peak_memory_gb = last_response.peak_memory
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
-        kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
 
-        print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
+        # Use kv_cache_bytes from GenerationResult when available (set by
+        # stream_generate via PromptCacheState), otherwise fall back to the
+        # external prompt_cache measurement.
+        kv_cache_bytes_val = getattr(last_response, "kv_cache_bytes", 0) or 0
+        if kv_cache_bytes_val:
+            kv_cache_gb = kv_cache_bytes_val / 1e9
+        elif prompt_cache is not None:
+            kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
+        else:
+            kv_cache_gb = 0.0
+
+        # Compute cached vs fresh prompt tokens by comparing the token
+        # prefix between the previous and current PromptCacheState sequences.
+        # Mirrors vmlx_benchmark.py's cached_tokens / fresh_prompt_tokens.
+        cached_tokens = 0
+        if prev_token_ids is not None and prompt_cache_state is not None and prompt_cache_state.token_ids:
+            new_prompt_ids = prompt_cache_state.token_ids[:prompt_tokens]
+            common_len = min(len(prev_token_ids), len(new_prompt_ids))
+            for i in range(common_len):
+                if prev_token_ids[i] == new_prompt_ids[i]:
+                    cached_tokens += 1
+                else:
+                    break
+            # stream_generate only reuses cache when prefix_len < prompt_len
+            # (generate.py:674: prefix_len > 0 and prefix_len < input_ids.shape[1]).
+            # When the full prompt matches (same file repeated in multi-run),
+            # reuse is skipped and a fresh cache is created — so cached_tokens = 0.
+            if cached_tokens >= prompt_tokens:
+                cached_tokens = 0
+        fresh_prompt_tokens = prompt_tokens - cached_tokens
+
+        # Compute fresh-only prompt TPS (excludes cached tokens, matching
+        # vmlx's "Prompt throughput: X tokens/sec (fresh tokens only)").
+        fresh_prompt_tps = 0.0
+        if prompt_eval_duration > 0 and fresh_prompt_tokens > 0:
+            fresh_prompt_tps = fresh_prompt_tokens / prompt_eval_duration
+
+        print(f"  Prompt tokens: {prompt_tokens}")
+        if cached_tokens > 0:
+            print(f"  Cached tokens: {cached_tokens} (excluded from prompt throughput)")
+            print(f"  Fresh prompt tokens: {fresh_prompt_tokens}")
+        if prompt_eval_duration > 0:
+            print(f"  Time to first token: {prompt_eval_duration:.2f}s")
+            if fresh_prompt_tokens > 0:
+                print(f"  Prompt throughput: {fresh_prompt_tps:.2f} tokens/sec (fresh tokens only)")
         print(f"  Generation: {generation_tokens} tokens, {generation_tps:.3f} tokens-per-sec")
         print(f"  Peak memory: {peak_memory_gb:.3f} GB")
         print(f"  KV cache: {kv_cache_gb:.3f} GB")
-        if prompt_eval_duration > 0:
-            print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
         return {
             "context_size": Path(context_file).stem,
             "prompt_tokens": prompt_tokens,
             "prompt_tps": prompt_tps,
+            "cached_tokens": cached_tokens,
+            "fresh_prompt_tokens": fresh_prompt_tokens,
+            "fresh_prompt_tps": fresh_prompt_tps,
             "generation_tokens": generation_tokens,
             "generation_tps": generation_tps,
             "peak_memory_gb": peak_memory_gb,
@@ -324,14 +380,10 @@ def run_batch_benchmark(
             print("    Warmup...")
             try:
                 if bs == 1:
-                    for _ in mlx_vlm.stream_generate(
-                        model, processor, prompt=prompts[0], max_tokens=gen_tokens
-                    ):
+                    for _ in mlx_vlm.stream_generate(model, processor, prompt=prompts[0], max_tokens=gen_tokens):
                         pass
                 else:
-                    mlx_vlm.batch_generate(
-                        model, processor, prompts=prompts, max_tokens=gen_tokens, verbose=False
-                    )
+                    mlx_vlm.batch_generate(model, processor, prompts=prompts, max_tokens=gen_tokens, verbose=False)
             except Exception as e:
                 print(f"    Warmup failed for batch size {bs}: {e} — skipping")
                 continue
@@ -393,8 +445,7 @@ def run_batch_benchmark(
 
                 print(
                     f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
-                    f"peak mem {peak_mem:.2f} GB"
-                    + (f", kv cache {avg_kv_gb:.2f} GB" if avg_kv_gb > 0 else "")
+                    f"peak mem {peak_mem:.2f} GB" + (f", kv cache {avg_kv_gb:.2f} GB" if avg_kv_gb > 0 else "")
                 )
 
                 row = {
@@ -553,7 +604,9 @@ def main() -> int:
         print("Chat template: disabled (raw prompt)")
     else:
         print("Chat template: enabled when processor provides one")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     # Warmup run using the smallest context file
     warmup_file = context_files[0]
@@ -580,6 +633,17 @@ def main() -> int:
     # Run benchmarks
     start_time = time.time()
     results = []
+
+    # When cold_prefill is disabled, use PromptCacheState to carry the KV cache
+    # across context sizes.  stream_generate handles token-level prefix matching
+    # and cache trimming automatically (generate.py:667-698).  Larger context
+    # sizes reuse the cached prefix from smaller sizes, measuring warm-prefill.
+    prompt_cache_state = None
+    if not args.cold_prefill:
+        from mlx_vlm.generate import PromptCacheState
+
+        prompt_cache_state = PromptCacheState()
+
     for file in context_files:
         print(f"\n{'=' * 50}")
         print(f"Benchmarking {file.name}...")
@@ -597,6 +661,7 @@ def main() -> int:
             ignore_chat_template=args.ignore_chat_template,
             cold_prefill=args.cold_prefill,
             n_runs=args.runs,
+            prompt_cache_state=prompt_cache_state,
         )
         if result:
             results.append(result)

@@ -268,9 +268,7 @@ def run_benchmark(
     prompt_tps = (
         fresh_prompt_tokens / prompt_eval_duration if prompt_eval_duration > 0 and fresh_prompt_tokens > 0 else 0.0
     )
-    generation_tps = (
-        generation_tokens / generation_duration if generation_duration and generation_duration > 0 else 0.0
-    )
+    generation_tps = generation_tokens / generation_duration if generation_duration and generation_duration > 0 else 0.0
 
     print(f"  Prompt tokens: {prompt_tokens}")
     if cached_tokens > 0:
@@ -309,6 +307,210 @@ def run_benchmark(
         result["reasoning_text"] = reasoning_text
 
     return result
+
+
+def run_batch_benchmark(
+    base_url: str,
+    api_key: str,
+    model: str,
+    batch_sizes: list,
+    prompt_tokens: int = 2048,
+    gen_tokens: int = 128,
+    num_trials: int = 3,
+    timeout: int = 3600,
+) -> list:
+    """Run batch benchmark by sending concurrent requests to test continuous batching.
+
+    vMLX supports continuous batching via mlx-lm's BatchGenerator. This measures
+    aggregate throughput under N concurrent clients — the server analog of
+    mlx_lm.batch_generate.
+
+    Args:
+        base_url: vMLX server base URL (ending in /v1)
+        api_key: API key for authentication
+        model: Model name
+        batch_sizes: Concurrency levels to test
+        prompt_tokens: Approximate prompt tokens per request
+        gen_tokens: Tokens to generate per request
+        num_trials: Trials per batch size (averaged)
+        timeout: Per-request timeout
+
+    Returns:
+        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
+    """
+    import concurrent.futures
+    import json
+    import statistics
+
+    import httpx
+
+    # Build a synthetic prompt of approximately prompt_tokens length. Same
+    # tiktoken cl100k_base encoding as the other batch benchmarks for
+    # cross-provider comparability.
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        base_text = "The quick brown fox jumps over the lazy dog. "
+        base_tokens = enc.encode(base_text)
+        repeats = max(1, prompt_tokens // len(base_tokens))
+        prompt_text = base_text * repeats
+        tokens = enc.encode(prompt_text)[:prompt_tokens]
+        prompt_text = enc.decode(tokens)
+    except Exception:
+        # Fallback: approximate ~4 chars per token
+        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+
+    def single_request() -> dict:
+        """Send one streaming request and return usage info and per-phase timing.
+
+        Extracts cached_tokens from vMLX's prompt_tokens_details and computes
+        fresh prompt tokens for accurate throughput measurement.
+        """
+        start = time.time()
+        first_token_time = None
+
+        # Prepend a cache buster so each concurrent request gets cold prefill.
+        cache_buster = _make_cache_buster()
+
+        with httpx.Client(timeout=timeout) as http:
+            with http.stream(
+                "POST",
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": cache_buster + prompt_text}],
+                    "max_tokens": gen_tokens,
+                    "temperature": 0.7,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as resp:
+                resp.raise_for_status()
+                usage = {}
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    payload = line[len("data: ") :]
+                    if payload.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except Exception:
+                        continue
+
+                    choices = chunk.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+                        if content and first_token_time is None:
+                            first_token_time = time.time()
+
+                    chunk_usage = chunk.get("usage")
+                    if chunk_usage:
+                        usage = chunk_usage
+
+        total_time = time.time() - start
+        ttft = (first_token_time - start) if first_token_time else 0.0
+        decode_time = max(total_time - ttft, 0.0)
+
+        # Extract cached tokens from vMLX's prompt_tokens_details.
+        prompt_details = usage.get("prompt_tokens_details") or {}
+        if isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens", 0) or 0
+        else:
+            cached_tokens = getattr(prompt_details, "cached_tokens", 0) or 0
+
+        return {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "cached_tokens": cached_tokens,
+            "generation_tokens": usage.get("completion_tokens", 0),
+            "ttft": ttft,
+            "decode_time": decode_time,
+        }
+
+    batch_results = []
+
+    for bs in batch_sizes:
+        print(
+            f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, " f"{gen_tokens} gen tokens)..."
+        )
+
+        # Warmup at this batch size so the server has allocated all slots and
+        # any one-time per-slot overhead is paid before we start timing.
+        print("    Warmup...")
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                list(pool.map(lambda _: single_request(), range(bs)))
+        except Exception as e:
+            print(f"    Warmup failed for batch size {bs}: {e} — skipping")
+            continue
+
+        trial_prompt_tps = []
+        trial_gen_tps = []
+
+        for trial in range(num_trials):
+            try:
+                start = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                    futures = [pool.submit(single_request) for _ in range(bs)]
+                    responses = [f.result() for f in futures]
+                wall_time = time.time() - start
+            except Exception as e:
+                print(f"    Trial {trial + 1} failed: {e}")
+                continue
+
+            total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
+            total_cached_tok = sum(r["cached_tokens"] for r in responses)
+            total_fresh_tok = total_prompt_tok - total_cached_tok
+            total_gen_tok = sum(r["generation_tokens"] for r in responses)
+            # Split wall_time into prefill and decode portions using per-request
+            # phase ratios. This gives correct aggregate throughput for both
+            # serial and concurrent execution:
+            #   Serial:  wall=N*req_time → split phase ≈ N*phase → tps ≈ per-req tps
+            #   Concurrent: wall≈req_time → split phase ≈ phase → tps = batched tps
+            sum_prefill = sum(r["ttft"] for r in responses)
+            sum_decode = sum(r["decode_time"] for r in responses)
+            sum_total = sum_prefill + sum_decode
+            if sum_total > 0:
+                prefill_wall = wall_time * (sum_prefill / sum_total)
+                decode_wall = wall_time * (sum_decode / sum_total)
+            else:
+                prefill_wall = wall_time
+                decode_wall = wall_time
+            # Guard against zero from rounding
+            prefill_wall = max(prefill_wall, 0.001)
+            decode_wall = max(decode_wall, 0.001)
+            # Prompt throughput uses fresh (non-cached) tokens only, matching
+            # how run_benchmark() calculates it.
+            agg_prompt_tps = total_fresh_tok / prefill_wall if total_fresh_tok > 0 else total_prompt_tok / prefill_wall
+            agg_gen_tps = total_gen_tok / decode_wall
+
+            trial_prompt_tps.append(agg_prompt_tps)
+            trial_gen_tps.append(agg_gen_tps)
+
+            cached_pct = (total_cached_tok / total_prompt_tok * 100) if total_prompt_tok > 0 else 0.0
+            print(
+                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s "
+                f"(wall {wall_time:.1f}s, prefill {prefill_wall:.1f}s, decode {decode_wall:.1f}s"
+                f"{f', cached {total_cached_tok} ({cached_pct:.0f}%)' if total_cached_tok > 0 else ''})"
+            )
+
+        if trial_prompt_tps:
+            avg_prompt = statistics.mean(trial_prompt_tps)
+            avg_gen = statistics.mean(trial_gen_tps)
+            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            batch_results.append(
+                {
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt, 2),
+                    "generation_tps": round(avg_gen, 2),
+                    "peak_memory_gb": 0.0,
+                }
+            )
+
+    return batch_results
 
 
 def main() -> int:
@@ -365,12 +567,43 @@ def main() -> int:
         "use --no-cold-prefill for cached/warm-reuse numbers)",
     )
 
+    parser.add_argument(
+        "--batch-sizes",
+        default="1,2,4,8",
+        help="Comma-separated batch sizes for concurrent-request benchmark (default: 1,2,4,8)",
+    )
+    parser.add_argument(
+        "--batch-prompt-tokens",
+        type=int,
+        default=2048,
+        help="Approximate prompt tokens per request in batch benchmark (default: 2048)",
+    )
+    parser.add_argument(
+        "--batch-gen-tokens",
+        type=int,
+        default=128,
+        help="Tokens to generate per request in batch benchmark (default: 128)",
+    )
+    parser.add_argument(
+        "--batch-trials",
+        type=int,
+        default=3,
+        help="Number of trials per batch size (default: 3)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Skip batch benchmark",
+    )
+
     args = parser.parse_args()
 
     api_key = args.api_key or os.getenv("VMLX_API_KEY")
     if not api_key:
         api_key = "local"
-        print("No API key provided; using placeholder key. Set --api-key or VMLX_API_KEY if the server requires authentication.")
+        print(
+            "No API key provided; using placeholder key. Set --api-key or VMLX_API_KEY if the server requires authentication."
+        )
 
     base_url = ensure_endpoint(args.base_url)
     request_model = args.request_model or args.model
@@ -401,7 +634,9 @@ def main() -> int:
     if request_model != args.model:
         print(f"Request model: {request_model}")
     print(f"Max tokens: {args.max_tokens}")
-    print(f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
+    print(
+        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+    )
 
     output_dir = common.create_output_directory("vmlx", args.model, cold_prefill=args.cold_prefill)
 
@@ -462,7 +697,39 @@ def main() -> int:
 
     total_benchmark_time = time.time() - benchmark_start
 
-    common.save_all_outputs(results, output_dir, args.model, "vMLX API", hardware_info, args)
+    # Run batch benchmark (concurrent requests to test continuous batching)
+    batch_results = None
+    if not args.no_batch:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
+        print(f"\nRunning batch benchmark (concurrent requests: {batch_sizes})...")
+        try:
+            batch_results = run_batch_benchmark(
+                base_url,
+                api_key,
+                request_model,
+                batch_sizes,
+                prompt_tokens=args.batch_prompt_tokens,
+                gen_tokens=args.batch_gen_tokens,
+                num_trials=args.batch_trials,
+                timeout=args.timeout,
+            )
+            if batch_results:
+                print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
+            else:
+                print("\nBatch benchmark produced no results")
+        except Exception as e:
+            print(f"\nBatch benchmark failed (continuing): {e}")
+
+    common.save_all_outputs(
+        results,
+        output_dir,
+        args.model,
+        "vMLX API",
+        hardware_info,
+        args,
+        include_memory=True,
+        batch_results=batch_results,
+    )
     common.print_benchmark_summary(
         results,
         args.model,
@@ -470,6 +737,7 @@ def main() -> int:
         hardware_info,
         output_dir,
         total_benchmark_time,
+        batch_results=batch_results,
     )
 
     print("\nDone.")
