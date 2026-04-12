@@ -92,10 +92,6 @@ requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.uv.sources]
-# Local editable install of the patched mlx-vlm fork (adds
-# BatchStats.kv_cache_bytes / GenerationResult.kv_cache_bytes). Remove or
-# pin to a registry version before publishing.
-mlx-vlm = { path = "../mlx-vlm", editable = true }
 
 [tool.setuptools]
 packages = []
