@@ -634,7 +634,9 @@ def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
     specs.append(("generation_tps", "Text Generation Speed"))
 
     n_cols_speed = len(specs)
-    fig, axes = plt.subplots(1, n_cols_speed, figsize=(8 * n_cols_speed, 5.5))
+    n_benchmarks = len(benchmark_data)
+    fig_height = max(5.5, 3.0 + n_benchmarks * 0.8)
+    fig, axes = plt.subplots(1, n_cols_speed, figsize=(8 * n_cols_speed, fig_height))
 
     for ax, (key, title) in zip(axes, specs):
         ax.set_title(title, fontweight="bold", fontsize=13)
