@@ -1508,6 +1508,20 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
                 prompt_matrix[i, j] = r.get("prompt_tps", np.nan)
                 gen_matrix[i, j] = r.get("generation_tps", np.nan)
 
+    # Sort rows by combined average percentage (best first / top row)
+    prompt_col_max = np.nanmax(prompt_matrix, axis=0)
+    prompt_col_max = np.where(prompt_col_max == 0, 1, prompt_col_max)
+    gen_col_max = np.nanmax(gen_matrix, axis=0)
+    gen_col_max = np.where(gen_col_max == 0, 1, gen_col_max)
+    prompt_pct = prompt_matrix / prompt_col_max * 100
+    gen_pct = gen_matrix / gen_col_max * 100
+    avg_pct = np.array([np.nanmean(np.concatenate([prompt_pct[i], gen_pct[i]])) for i in range(n_rows)])
+    sort_order = np.argsort(-avg_pct)  # descending: best overall at top
+
+    row_labels = [row_labels[i] for i in sort_order]
+    prompt_matrix = prompt_matrix[sort_order]
+    gen_matrix = gen_matrix[sort_order]
+
     # Create figure with two side-by-side heatmaps
     fig_height = max(5, n_rows * 1.2 + 2)
     fig_width = max(12, n_cols * 1.8 + 4)
