@@ -1446,6 +1446,123 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     return heatmap_path
 
 
+def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
+    """Create side-by-side heatmaps: Prompt TPS and Gen TPS vs context sizes.
+
+    Rows = benchmark runs (model/quantization), Columns = context sizes.
+    Cells show raw tokens/sec, colored green=fast, red=slow.
+    """
+    if len(benchmark_data) < 2:
+        print("Need at least 2 benchmarks for speed heatmap.")
+        return None
+
+    # Collect all context sizes and build per-run lookup
+    all_context_sizes = set()
+    run_data = []
+    for data in benchmark_data:
+        results = data["results"]
+        if not results:
+            continue
+
+        # Build context_size -> result mapping
+        ctx_map = {}
+        for r in results:
+            ctx = r.get("context_size", "")
+            all_context_sizes.add(ctx)
+            ctx_map[ctx] = r
+
+        hardware_info = data["hardware_info"]
+        chip_short = hardware_info.get("chip", "Unknown").replace("Apple ", "")
+        cache_mode = data.get("cache_mode", "")
+        cache_label = " (cached)" if cache_mode == "cache" else ""
+
+        # Use full model name (includes quant variant) for the speed heatmap
+        label = f"{data['model']} / {chip_short}{cache_label}"
+
+        run_data.append({"label": label, "ctx_map": ctx_map, "engine": data.get("engine", "")})
+
+    if len(run_data) < 2:
+        print("Need at least 2 benchmarks with data for speed heatmap.")
+        return None
+
+    # Sort context sizes numerically (strip the 'k' suffix)
+    context_sizes = sorted(all_context_sizes, key=lambda s: float(s.rstrip("k")))
+
+    # Check if multiple engines
+    engines = {rd["engine"] for rd in run_data}
+    multi_engine = len(engines) > 1
+    if multi_engine:
+        for rd in run_data:
+            rd["label"] = f"{rd['engine']}: {rd['label']}"
+
+    row_labels = [rd["label"] for rd in run_data]
+    n_rows = len(run_data)
+    n_cols = len(context_sizes)
+
+    # Build prompt_tps and gen_tps matrices
+    prompt_matrix = np.full((n_rows, n_cols), np.nan)
+    gen_matrix = np.full((n_rows, n_cols), np.nan)
+
+    for i, rd in enumerate(run_data):
+        for j, ctx in enumerate(context_sizes):
+            r = rd["ctx_map"].get(ctx)
+            if r:
+                prompt_matrix[i, j] = r.get("prompt_tps", np.nan)
+                gen_matrix[i, j] = r.get("generation_tps", np.nan)
+
+    # Create figure with two side-by-side heatmaps
+    fig_height = max(5, n_rows * 1.2 + 2)
+    fig_width = max(12, n_cols * 1.8 + 4)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height), gridspec_kw={"wspace": 0.35})
+
+    def _draw_heatmap(ax, matrix, title):
+        # Normalize per-column for coloring
+        col_max = np.nanmax(matrix, axis=0)
+        col_max = np.where(col_max == 0, 1, col_max)
+        normalized = matrix / col_max * 100
+
+        masked = np.ma.array(normalized, mask=np.isnan(matrix))
+        cmap = plt.cm.RdYlGn.copy()
+        cmap.set_bad(color="#cccccc")
+
+        im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
+
+        # Annotate cells
+        for i in range(n_rows):
+            for j in range(n_cols):
+                val = matrix[i, j]
+                if np.isnan(val):
+                    ax.text(j, i, "N/A", ha="center", va="center", fontsize=9, color="#555555")
+                else:
+                    pct = normalized[i, j]
+                    text_color = "white" if pct < 25 else "black"
+                    ax.text(j, i, f"{val:.1f}", ha="center", va="center", fontsize=9, fontweight="bold", color=text_color)
+
+        ax.set_xticks(range(n_cols))
+        ax.set_xticklabels(context_sizes, fontsize=10)
+        ax.set_yticks(range(n_rows))
+        ax.set_yticklabels(row_labels, fontsize=10)
+        ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
+
+        # Grid lines
+        ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=2)
+        ax.tick_params(which="minor", length=0)
+
+        return im
+
+    _draw_heatmap(ax1, prompt_matrix, "Prompt Processing Speed (tokens/sec)")
+    _draw_heatmap(ax2, gen_matrix, "Generation Speed (tokens/sec)")
+
+    plt.tight_layout()
+    heatmap_path = output_dir / "comparison_speed_heatmap.png"
+    plt.savefig(heatmap_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Speed heatmap saved to: {heatmap_path}")
+    return heatmap_path
+
+
 def find_benchmark_folders(search_paths: List[str] = None) -> List[Path]:
     """Find all benchmark folders to compare."""
 
@@ -1550,6 +1667,7 @@ Examples:
     create_comparison_table(benchmark_data, output_dir)
     create_comparison_table_image(benchmark_data, output_dir)
     create_heatmap(benchmark_data, output_dir)
+    create_speed_heatmap(benchmark_data, output_dir)
 
     print(f"\n✅ Comparison complete! Results saved to: {output_dir}/")
 
