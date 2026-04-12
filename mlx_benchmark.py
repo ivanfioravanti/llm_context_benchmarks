@@ -153,6 +153,7 @@ def run_benchmark(
     max_kv_size: Optional[int] = None,
     ignore_chat_template: bool = False,
     chat_template_config: Optional[str] = None,
+    _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Run MLX benchmark for a given context file.
 
