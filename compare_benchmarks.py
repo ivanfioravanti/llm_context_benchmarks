@@ -1471,13 +1471,11 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
             all_context_sizes.add(ctx)
             ctx_map[ctx] = r
 
-        hardware_info = data["hardware_info"]
-        chip_short = hardware_info.get("chip", "Unknown").replace("Apple ", "")
         cache_mode = data.get("cache_mode", "")
         cache_label = " (cached)" if cache_mode == "cache" else ""
 
-        # Use full model name (includes quant variant) for the speed heatmap
-        label = f"{data['model']} / {chip_short}{cache_label}"
+        # Use full model name (includes quant variant), skip chip to avoid overlap
+        label = f"{data['model']}{cache_label}"
 
         run_data.append({"label": label, "ctx_map": ctx_map, "engine": data.get("engine", "")})
 
@@ -1527,7 +1525,7 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
         im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
 
-        # Annotate cells
+        # Annotate cells with percentage and raw value
         for i in range(n_rows):
             for j in range(n_cols):
                 val = matrix[i, j]
@@ -1536,7 +1534,10 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
                 else:
                     pct = normalized[i, j]
                     text_color = "white" if pct < 25 else "black"
-                    ax.text(j, i, f"{val:.1f}", ha="center", va="center", fontsize=9, fontweight="bold", color=text_color)
+                    ax.text(
+                        j, i, f"{pct:.0f}%\n({val:.1f})",
+                        ha="center", va="center", fontsize=8, fontweight="bold", color=text_color,
+                    )
 
         ax.set_xticks(range(n_cols))
         ax.set_xticklabels(context_sizes, fontsize=10)
