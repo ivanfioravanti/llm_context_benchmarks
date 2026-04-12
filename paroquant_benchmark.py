@@ -429,7 +429,7 @@ def main() -> int:
         return 1
 
     # Extract model name
-    model_name = args.model.split("/")[-1]
+    model_name = args.model.rstrip("/").split("/")[-1]
 
     # Create output directory
     output_dir = common.create_output_directory("paroquant", model_name, cold_prefill=args.cold_prefill)

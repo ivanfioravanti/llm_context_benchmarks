@@ -565,7 +565,7 @@ def main() -> int:
         return 1
 
     # Extract model name from URL
-    model_name = args.model.split("/")[-1]
+    model_name = args.model.rstrip("/").split("/")[-1]
 
     # Tag the output directory with _TBQ when TurboQuant KV quantization is
     # used so it's easy to spot which runs are turboquant'd from a glance.

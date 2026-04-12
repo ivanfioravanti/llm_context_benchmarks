@@ -256,7 +256,7 @@ def main() -> int:
         print("Provide --sharded-script /path/to/mlx_lm/examples/sharded_generate.py")
         return 1
 
-    model_name = args.model.split("/")[-1]
+    model_name = args.model.rstrip("/").split("/")[-1]
     output_dir = common.create_output_directory("mlx-distributed", model_name, args.output_dir, cold_prefill=True)
 
     context_files = common.find_context_files(args.contexts, args.context_dir)

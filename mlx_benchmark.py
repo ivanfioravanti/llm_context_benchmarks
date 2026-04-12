@@ -730,7 +730,7 @@ def main() -> int:
         return 1
 
     # Extract model name from URL
-    model_name = args.model.split("/")[-1]
+    model_name = args.model.rstrip("/").split("/")[-1]
 
     # Create output directory using common function
     output_dir = common.create_output_directory("mlx", model_name, cold_prefill=True)
