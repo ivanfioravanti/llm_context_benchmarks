@@ -1527,7 +1527,7 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
     # Create figure with two side-by-side heatmaps
     fig_height = max(5, n_rows * 1.2 + 2)
     fig_width = max(12, n_cols * 1.8 + 4)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height), gridspec_kw={"wspace": 0.35})
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height), gridspec_kw={"wspace": 0.6})
 
     def _draw_heatmap(ax, matrix, title):
         # Normalize per-column for coloring
@@ -1571,6 +1571,7 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
     _draw_heatmap(ax1, prompt_matrix, "Prompt Processing Speed (tokens/sec)")
     _draw_heatmap(ax2, gen_matrix, "Generation Speed (tokens/sec)")
+    ax2.set_yticklabels([])
 
     plt.tight_layout()
     heatmap_path = output_dir / "comparison_speed_heatmap.png"
