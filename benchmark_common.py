@@ -1193,7 +1193,8 @@ def _is_degenerate_generation(result: Dict) -> bool:
     """Return True if the generation phase was too short for a reliable TPS measurement."""
     if result.get("generation_tokens", 0) < 2:
         return True
-    if result.get("eval_duration", 0) < 0.01:
+    eval_duration = result.get("eval_duration", 0)
+    if eval_duration > 0 and eval_duration < 0.01:
         return True
     return False
 
