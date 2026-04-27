@@ -541,13 +541,6 @@ def main() -> int:
         action="store_true",
         help="Skip batch benchmark",
     )
-    parser.add_argument(
-        "--runs",
-        type=int,
-        default=3,
-        help="Number of runs per context size; peak score is kept (default: 3)",
-    )
-
     common.setup_common_args(parser)
     args = parser.parse_args()
 

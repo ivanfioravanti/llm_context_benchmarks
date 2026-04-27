@@ -1189,6 +1189,15 @@ def make_cache_buster(run_idx: Optional[int] = None) -> str:
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
+def _is_degenerate_generation(result: Dict) -> bool:
+    """Return True if the generation phase was too short for a reliable TPS measurement."""
+    if result.get("generation_tokens", 0) < 2:
+        return True
+    if result.get("eval_duration", 0) < 0.01:
+        return True
+    return False
+
+
 def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwargs):
     """Run benchmark N times and return the result with peak generation_tps.
 
@@ -1197,6 +1206,9 @@ def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwarg
     Engines that accept ``_run_idx`` should use it to vary the prompt prefix
     (e.g. ``common.make_cache_buster()`` already includes a UUID; the run
     index is an additional differentiator).
+
+    Degenerate runs (near-zero generation time or <2 tokens generated) are
+    discarded so they don't inflate the peak score.
 
     Args:
         run_fn: Engine-specific run_benchmark function.
@@ -1215,6 +1227,13 @@ def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwarg
         kwargs["_run_idx"] = run_idx
         result = run_fn(*args, **kwargs)
         if result:
+            if _is_degenerate_generation(result):
+                print(
+                    f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
+                    f"in {result.get('eval_duration', 0):.6f}s "
+                    f"(tps={result.get('generation_tps', 0):.0f})"
+                )
+                continue
             score = result.get(metric, 0)
             print(f"    {metric}: {score:.2f}")
             if score > best_score:
@@ -1265,6 +1284,13 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=3, metric="generati
                 print(f"    Error: {exc}")
                 result = None
             if result:
+                if _is_degenerate_generation(result):
+                    print(
+                        f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
+                        f"in {result.get('eval_duration', 0):.6f}s "
+                        f"(tps={result.get('generation_tps', 0):.0f})"
+                    )
+                    continue
                 score = result.get(metric, 0)
                 print(f"    {metric}: {score:.2f}")
                 all_results[context_file.stem].append(result)

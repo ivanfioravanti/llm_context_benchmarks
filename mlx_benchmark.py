@@ -97,6 +97,12 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
     from mlx_lm.utils import load_model as _load_model
     from mlx_lm.utils import load_tokenizer
 
+    # Ensure PreTrainedConfig exposes max_position_embeddings for model types
+    # not yet registered in transformers (e.g. deepseek_v4)
+    from transformers import PreTrainedConfig
+    if not hasattr(PreTrainedConfig, "max_position_embeddings"):
+        PreTrainedConfig.max_position_embeddings = None
+
     model_config = {}
     tokenizer_config = {}
     if trust_remote_code:
