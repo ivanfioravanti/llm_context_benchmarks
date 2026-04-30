@@ -92,9 +92,6 @@ regen-charts = "regen_charts:main"
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv.sources]
-mlx-lm = { path = "../mlx-lm", editable = true }
-
 [tool.setuptools]
 packages = []
 py-modules = [

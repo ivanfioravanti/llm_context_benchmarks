@@ -961,7 +961,7 @@ requires-dist = [
     { name = "markupsafe", specifier = ">=3.0.3" },
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "mlx", specifier = ">=0.30.6" },
-    { name = "mlx-lm", editable = "../mlx-lm" },
+    { name = "mlx-lm", specifier = ">=0.30.7" },
     { name = "mlx-metal", specifier = ">=0.30.6" },
     { name = "mlx-vlm", specifier = ">=0.4.4" },
     { name = "nodeenv", specifier = ">=1.9.1" },
@@ -1228,7 +1228,7 @@ wheels = [
 [[package]]
 name = "mlx-lm"
 version = "0.31.3"
-source = { editable = "../mlx-lm" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
     { name = "mlx", version = "0.31.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
@@ -1238,27 +1238,10 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "transformers" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "datasets", marker = "extra == 'test'" },
-    { name = "datasets", marker = "extra == 'train'" },
-    { name = "jinja2" },
-    { name = "lm-eval", marker = "extra == 'evaluate'" },
-    { name = "lm-eval", marker = "extra == 'test'" },
-    { name = "mlx", marker = "sys_platform == 'darwin'", specifier = ">=0.31.2" },
-    { name = "mlx", extras = ["cpu"], marker = "extra == 'cpu'", specifier = ">=0.31.2" },
-    { name = "mlx", extras = ["cuda12"], marker = "extra == 'cuda12'", specifier = ">=0.31.2" },
-    { name = "mlx", extras = ["cuda13"], marker = "extra == 'cuda13'", specifier = ">=0.31.2" },
-    { name = "numpy" },
-    { name = "protobuf" },
-    { name = "pyyaml" },
-    { name = "sentencepiece" },
-    { name = "tqdm", marker = "extra == 'evaluate'" },
-    { name = "tqdm", marker = "extra == 'train'" },
-    { name = "transformers", specifier = ">=5.0.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/84/94/9a38d6b0c6fcca995b9136c94eb7da1e9c5165652edf228b96b29960fa7a/mlx_lm-0.31.3.tar.gz", hash = "sha256:61eb0e3ba09444f77f874aff295401d7ccd20b39495cbbce0c782a15474ce733", size = 304318, upload-time = "2026-04-22T07:37:27.922Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/02/9a67b8e4f87e3e2e5cd7b1ad79304b93c09a0db6af34bee75e6551c06c60/mlx_lm-0.31.3-py3-none-any.whl", hash = "sha256:758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8", size = 408890, upload-time = "2026-04-22T07:37:25.965Z" },
 ]
-provides-extras = ["test", "train", "evaluate", "cuda13", "cuda12", "cpu"]
 
 [[package]]
 name = "mlx-metal"
