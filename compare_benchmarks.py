@@ -1759,6 +1759,82 @@ def create_kl_comparison(
     print(f"KL chart saved to: {chart_path}")
 
 
+def create_quality_chart(benchmark_data: List[Dict], output_dir: Path) -> None:
+    """Render a focused chart with only Perplexity and KL Divergence panels.
+
+    Saved as ``comparison_quality.png``. Generated when either signal is
+    present in benchmark_data; KL is only present when ``--kl-baseline`` was
+    used to populate it.
+    """
+    has_ppl = any(d.get("perplexity_data") is not None for d in benchmark_data)
+    has_kl = any(d.get("kl_mean") is not None for d in benchmark_data)
+    if not (has_ppl or has_kl):
+        return
+
+    readable_colors = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    ]
+    colors = readable_colors[: len(benchmark_data)]
+    if len(benchmark_data) > len(readable_colors):
+        colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
+    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+
+    n_panels = int(has_ppl) + int(has_kl)
+    fig, axes = plt.subplots(1, n_panels, figsize=(8 * n_panels, 6), squeeze=False)
+    axes = axes[0]
+    panel_idx = 0
+
+    if has_ppl:
+        ax = axes[panel_idx]
+        names, values, errors, bar_colors = [], [], [], []
+        for i, d in enumerate(benchmark_data):
+            ppl = d.get("perplexity_data")
+            if ppl is None:
+                continue
+            names.append(clean_names[i])
+            values.append(ppl["perplexity"])
+            errors.append(ppl.get("std_error", 0))
+            bar_colors.append(colors[i])
+        bars = ax.bar(range(len(values)), values, yerr=errors, color=bar_colors, alpha=0.8, capsize=5, width=0.6)
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names, rotation=30, ha="right", fontsize=9)
+        ax.set_ylabel("Perplexity")
+        ax.set_title("Perplexity (lower is better)", fontweight="bold", fontsize=13)
+        ax.grid(True, axis="y", alpha=0.3)
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{val:.2f}",
+                    ha="center", va="bottom", fontsize=10, fontweight="bold")
+        panel_idx += 1
+
+    if has_kl:
+        ax = axes[panel_idx]
+        names, values, bar_colors = [], [], []
+        for i, d in enumerate(benchmark_data):
+            kl = d.get("kl_mean")
+            if kl is None:
+                continue
+            label = clean_names[i] + (" (baseline)" if d.get("is_kl_baseline") else "")
+            names.append(label)
+            values.append(kl)
+            bar_colors.append(colors[i])
+        bars = ax.bar(range(len(values)), values, color=bar_colors, alpha=0.8, width=0.6)
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names, rotation=30, ha="right", fontsize=9)
+        ax.set_ylabel("KL (nats)")
+        ax.set_title("KL Divergence vs Baseline (lower is better)", fontweight="bold", fontsize=13)
+        ax.grid(True, axis="y", alpha=0.3)
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=10, fontweight="bold")
+
+    plt.tight_layout()
+    out_path = output_dir / "comparison_quality.png"
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Quality chart saved to: {out_path}")
+
+
 def find_benchmark_folders(search_paths: List[str] = None) -> List[Path]:
     """Find all benchmark folders to compare."""
 
@@ -1900,6 +1976,7 @@ Examples:
     create_comparison_table_image(benchmark_data, output_dir)
     create_heatmap(benchmark_data, output_dir)
     create_speed_heatmap(benchmark_data, output_dir)
+    create_quality_chart(benchmark_data, output_dir)
 
     if args.kl_baseline:
         baseline_path = Path(args.kl_baseline)
