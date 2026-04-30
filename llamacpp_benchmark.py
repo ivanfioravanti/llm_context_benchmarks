@@ -204,6 +204,11 @@ def main() -> int:
         help="Prevent server-side KV cache reuse for cold-prefill numbers (default: enabled; "
         "use --no-cold-prefill for cached/warm-reuse numbers)",
     )
+    parser.add_argument(
+        "--no-kl-capture",
+        action="store_true",
+        help="Skip top-K logprob capture used by compare_benchmarks --kl-baseline",
+    )
 
     # Add common arguments
     setup_common_args(parser)
@@ -244,6 +249,27 @@ def main() -> int:
 
     # Create output directory using common function
     output_dir = create_output_directory("llamacpp", args.model, cold_prefill=args.cold_prefill)
+
+    # Capture top-K logprobs on a fixed reference text for later KL comparison
+    if not args.no_kl_capture:
+        from kl_capture import DEFAULT_REF_FILE, capture_logprobs_llamacpp, save_logprobs
+
+        ref_path = Path(DEFAULT_REF_FILE)
+        if not ref_path.exists():
+            print(f"\nKL capture skipped: reference file {DEFAULT_REF_FILE} not found")
+        else:
+            print(f"\nCapturing top-K logprobs from {DEFAULT_REF_FILE} for KL comparison...")
+            try:
+                kl_data = capture_logprobs_llamacpp(server_url, ref_path, timeout=args.timeout)
+                kl_data["engine"] = "llamacpp"
+                kl_data["model"] = args.model
+                save_logprobs(kl_data, output_dir / "logprobs.json")
+                print(
+                    f"  Captured {kl_data['num_positions']} positions × top-{kl_data['top_k']} "
+                    f"→ {output_dir / 'logprobs.json'}"
+                )
+            except Exception as e:
+                print(f"  KL capture failed (continuing): {e}")
 
     results = []
 

@@ -724,6 +724,11 @@ def main() -> int:
         action="store_true",
         help="Run cached KV cache benchmark (incremental prefill) after cold benchmarks",
     )
+    parser.add_argument(
+        "--no-kl-capture",
+        action="store_true",
+        help="Skip top-K logprob capture used by compare_benchmarks --kl-baseline",
+    )
 
     # Add common arguments
     common.setup_common_args(parser)
@@ -798,6 +803,27 @@ def main() -> int:
         print("Warmup complete (result discarded)")
     except Exception as e:
         print(f"Warmup failed (continuing anyway): {e}")
+
+    # Capture top-K logprobs on a fixed reference text for later KL comparison
+    if not args.no_kl_capture:
+        from kl_capture import DEFAULT_REF_FILE, capture_logprobs_mlx, save_logprobs
+
+        ref_path = Path(DEFAULT_REF_FILE)
+        if not ref_path.exists():
+            print(f"\nKL capture skipped: reference file {DEFAULT_REF_FILE} not found")
+        else:
+            print(f"\nCapturing top-K logprobs from {DEFAULT_REF_FILE} for KL comparison...")
+            try:
+                kl_data = capture_logprobs_mlx(model, tokenizer, ref_path)
+                kl_data["engine"] = "mlx"
+                kl_data["model"] = args.model
+                save_logprobs(kl_data, output_dir / "logprobs.json")
+                print(
+                    f"  Captured {kl_data['num_positions']} positions × top-{kl_data['top_k']} "
+                    f"→ {output_dir / 'logprobs.json'}"
+                )
+            except Exception as e:
+                print(f"  KL capture failed (continuing): {e}")
 
     perplexity = None
     perplexity_data = None

@@ -240,6 +240,9 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     # Check if any benchmark has perplexity data
     has_perplexity_data = any(data.get("perplexity_data") is not None for data in benchmark_data)
 
+    # Check if any benchmark carries a precomputed KL value (set by main when --kl-baseline is used)
+    has_kl_data = any(data.get("kl_mean") is not None for data in benchmark_data)
+
     # Check if any benchmark has batch data
     has_batch_data = any(data.get("batch_data") is not None for data in benchmark_data)
 
@@ -278,6 +281,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         subplot_specs.append(("kv_cache", "KV Cache Size", "KV Cache (GB)"))
     if has_perplexity_data:
         subplot_specs.append(("perplexity", "Perplexity (lower is better)", "Perplexity"))
+    if has_kl_data:
+        subplot_specs.append(("kl", "KL Divergence vs Baseline (lower is better)", "KL (nats)"))
     if has_batch_data:
         subplot_specs.append(("batch_prompt", "Batch Prompt TPS", "Tokens/sec"))
         subplot_specs.append(("batch_gen", "Batch Generation TPS", "Tokens/sec"))
@@ -286,6 +291,20 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
 
     if charts:
         subplot_specs = [spec for spec in subplot_specs if spec[0] in charts]
+
+    # Keep perplexity and KL on the same row when both are present.
+    spec_keys = [s[0] for s in subplot_specs]
+    if "perplexity" in spec_keys and "kl" in spec_keys:
+        ppl_spec = next(s for s in subplot_specs if s[0] == "perplexity")
+        kl_spec = next(s for s in subplot_specs if s[0] == "kl")
+        others = [s for s in subplot_specs if s[0] not in ("perplexity", "kl")]
+        # If `others` has odd length, move its last entry past the pair so
+        # perplexity ends up at an even index (left column).
+        if len(others) % 2 == 1:
+            tail = [others.pop()]
+        else:
+            tail = []
+        subplot_specs = others + [ppl_spec, kl_spec] + tail
 
     num_plots = len(subplot_specs)
     if num_plots == 0:
@@ -432,6 +451,38 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                         bar.get_x() + bar.get_width() / 2.0,
                         bar.get_height(),
                         f"{val:.2f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=10,
+                        fontweight="bold",
+                    )
+            continue
+
+        if key == "kl":
+            kl_names, kl_values, kl_colors = [], [], []
+            for i, data in enumerate(benchmark_data):
+                kl = data.get("kl_mean")
+                if kl is None:
+                    continue
+                label = clean_names[i] + (" (baseline)" if data.get("is_kl_baseline") else "")
+                kl_names.append(label)
+                kl_values.append(kl)
+                kl_colors.append(colors[i])
+            if kl_values:
+                bars = ax.bar(
+                    range(len(kl_values)),
+                    kl_values,
+                    color=kl_colors,
+                    alpha=0.8,
+                    width=0.6,
+                )
+                ax.set_xticks(range(len(kl_names)))
+                ax.set_xticklabels(kl_names, rotation=30, ha="right", fontsize=9)
+                for bar, val in zip(bars, kl_values):
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        bar.get_height(),
+                        f"{val:.3f}",
                         ha="center",
                         va="bottom",
                         fontsize=10,
@@ -1581,6 +1632,96 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
     return heatmap_path
 
 
+def create_kl_comparison(
+    baseline_folder: Path,
+    target_folders: List[Path],
+    output_dir: Path,
+) -> None:
+    """Compute KL(baseline || target) for each target folder and write CSV + chart."""
+    from kl_capture import compute_kl_divergence, load_logprobs
+
+    baseline_path = baseline_folder / "logprobs.json"
+    baseline = load_logprobs(baseline_path)
+    if baseline is None:
+        print(f"KL skipped: no logprobs.json in baseline {baseline_folder}")
+        return
+
+    rows = []
+    per_pos_series = {}
+    for tf in target_folders:
+        if tf.resolve() == baseline_folder.resolve():
+            continue
+        target = load_logprobs(tf / "logprobs.json")
+        if target is None:
+            print(f"  KL: {tf.name} has no logprobs.json — skipping")
+            continue
+        result = compute_kl_divergence(baseline, target)
+        label = _clean_display_name(tf.name)
+        rows.append(
+            {
+                "target": label,
+                "mean_kl": result["mean_kl"],
+                "num_positions": result["num_positions"],
+                "warnings": "; ".join(result["warnings"]),
+            }
+        )
+        per_pos_series[label] = result["per_position_kl"]
+        if result["warnings"]:
+            for w in result["warnings"]:
+                print(f"  KL ({label}): {w}")
+        print(f"  KL ({label}): mean = {result['mean_kl']:.4f} over {result['num_positions']} positions")
+
+    if not rows:
+        print("KL skipped: no targets with logprobs.json")
+        return
+
+    csv_path = output_dir / "kl_divergence.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["target", "mean_kl", "num_positions", "warnings"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    print(f"KL CSV saved to: {csv_path}")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+    labels = [r["target"] for r in rows]
+    mean_kls = [r["mean_kl"] for r in rows]
+    bars = ax1.bar(range(len(labels)), mean_kls, color="#1f77b4")
+    ax1.set_xticks(range(len(labels)))
+    ax1.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax1.set_ylabel("Mean KL divergence (nats)")
+    ax1.set_title(
+        f"Mean KL(baseline || target)\nbaseline: {_clean_display_name(baseline_folder.name)}",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax1.grid(axis="y", linestyle="--", alpha=0.4)
+    for bar, val in zip(bars, mean_kls):
+        ax1.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{val:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    for label, series in per_pos_series.items():
+        ax2.plot(range(len(series)), series, label=label, alpha=0.8)
+    ax2.set_xlabel("Position")
+    ax2.set_ylabel("KL divergence (nats)")
+    ax2.set_title("Per-position KL divergence", fontsize=11, fontweight="bold")
+    ax2.legend(fontsize=8, loc="best")
+    ax2.grid(linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    chart_path = output_dir / "kl_divergence.png"
+    plt.savefig(chart_path, dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"KL chart saved to: {chart_path}")
+
+
 def find_benchmark_folders(search_paths: List[str] = None) -> List[Path]:
     """Find all benchmark folders to compare."""
 
@@ -1632,6 +1773,16 @@ Examples:
     )
 
     parser.add_argument(
+        "--kl-baseline",
+        default=None,
+        help=(
+            "Folder to use as the KL-divergence baseline (must contain logprobs.json). "
+            "When set, KL(baseline || target) is computed for every other folder and "
+            "saved to kl_divergence.csv + kl_divergence.png in the comparison output dir."
+        ),
+    )
+
+    parser.add_argument(
         "--charts",
         nargs="+",
         choices=[
@@ -1679,6 +1830,32 @@ Examples:
     output_dir = Path(args.output)
     output_dir.mkdir(exist_ok=True)
 
+    # Annotate benchmark_data with KL divergence so the comparison chart can include it
+    if args.kl_baseline:
+        baseline_path = Path(args.kl_baseline)
+        if baseline_path.is_dir():
+            from kl_capture import compute_kl_divergence, load_logprobs
+
+            baseline_lp = load_logprobs(baseline_path / "logprobs.json")
+            if baseline_lp is None:
+                print(f"\nKL panel skipped: no logprobs.json in baseline {baseline_path}")
+            else:
+                folder_by_name = {f.name: f for f in benchmark_folders}
+                for data in benchmark_data:
+                    folder = folder_by_name.get(data["folder_name"])
+                    if folder is None:
+                        continue
+                    if folder.resolve() == baseline_path.resolve():
+                        data["kl_mean"] = 0.0
+                        data["is_kl_baseline"] = True
+                        continue
+                    target_lp = load_logprobs(folder / "logprobs.json")
+                    if target_lp is None:
+                        continue
+                    kl = compute_kl_divergence(baseline_lp, target_lp)
+                    data["kl_mean"] = kl["mean_kl"]
+                    data["is_kl_baseline"] = False
+
     # Create comparison charts and tables
     create_comparison_charts(benchmark_data, output_dir, charts=args.charts)
     create_speed_chart(benchmark_data, output_dir)
@@ -1686,6 +1863,14 @@ Examples:
     create_comparison_table_image(benchmark_data, output_dir)
     create_heatmap(benchmark_data, output_dir)
     create_speed_heatmap(benchmark_data, output_dir)
+
+    if args.kl_baseline:
+        baseline_path = Path(args.kl_baseline)
+        if not baseline_path.is_dir():
+            print(f"\nKL baseline folder not found: {baseline_path}")
+        else:
+            print(f"\nComputing KL divergence (baseline: {baseline_path.name})...")
+            create_kl_comparison(baseline_path, benchmark_folders, output_dir)
 
     print(f"\n✅ Comparison complete! Results saved to: {output_dir}/")
 

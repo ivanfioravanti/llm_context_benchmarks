@@ -105,6 +105,7 @@ py-modules = [
   "exo_benchmark",
   "generate_context_files",
   "grok_benchmark",
+  "kl_capture",
   "llamacpp_benchmark",
   "lmstudio_benchmark",
   "mlx_benchmark",
