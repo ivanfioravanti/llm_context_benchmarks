@@ -35,6 +35,37 @@ def _clean_display_name(name: str) -> str:
     return re.sub(r"_\d{8,}$", "", name)
 
 
+def _folder_label(folder_name: str) -> str:
+    """Clean ``benchmark_<engine>_<model>...<timestamp>`` into ``<engine>: <model>-<machine>``.
+
+    Drops ``benchmark_`` prefix, trailing ``_YYYYMMDD_HHMMSS`` (or ``_YYYYMMDD``),
+    and ``_cache`` / ``_nocache`` markers (anywhere). Keeps the machine token
+    so different hardware can be distinguished in chart labels.
+    """
+    body = folder_name
+    if body.startswith("benchmark_"):
+        body = body[len("benchmark_") :]
+
+    # Strip trailing _YYYYMMDD_HHMMSS or _YYYYMMDD timestamp
+    body = re.sub(r"_\d{8}_\d{6}$", "", body)
+    body = re.sub(r"_\d{8,}$", "", body)
+
+    # Drop any _cache / _nocache marker (anywhere it ended up)
+    body = re.sub(r"_(?:nocache|cache)(?=_|$)", "", body)
+    # Collapse any double-underscore left behind
+    body = re.sub(r"__+", "_", body).strip("_")
+
+    # Split engine from the rest using the same longest-prefix match
+    for known in KNOWN_ENGINES:
+        if body == known or body.startswith(known + "_"):
+            rest = body[len(known) :].lstrip("_")
+            return f"{known}: {rest}" if rest else known
+    first = body.find("_")
+    if first == -1:
+        return body
+    return f"{body[:first]}: {body[first + 1 :]}"
+
+
 # Known engine names used in output folder prefixes. Multi-word names are listed
 # first so longest-prefix matching picks e.g. "mlx_vlm" before "mlx".
 KNOWN_ENGINES = (
@@ -1662,7 +1693,7 @@ def create_kl_comparison(
             print(f"  KL: {tf.name} has no logprobs.json — skipping")
             continue
         result = compute_kl_divergence(baseline, target)
-        label = _clean_display_name(tf.name)
+        label = _folder_label(tf.name)
         rows.append(
             {
                 "target": label,
@@ -1698,7 +1729,7 @@ def create_kl_comparison(
     ax1.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
     ax1.set_ylabel("Mean KL divergence (nats)")
     ax1.set_title(
-        f"Mean KL(baseline || target)\nbaseline: {_clean_display_name(baseline_folder.name)}",
+        f"Mean KL(baseline || target)\nbaseline: {_folder_label(baseline_folder.name)}",
         fontsize=11,
         fontweight="bold",
     )
