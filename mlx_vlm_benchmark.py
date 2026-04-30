@@ -520,8 +520,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--batch-sizes",
-        default="1,2,4,8,16,32",
-        help="Comma-separated batch sizes for batch benchmark (default: 1,2,4,8,16,32)",
+        default="1,2,4,8,16",
+        help="Comma-separated batch sizes for batch benchmark (default: 1,2,4,8,16)",
     )
     parser.add_argument(
         "--batch-prompt-tokens",
