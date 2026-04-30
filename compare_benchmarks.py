@@ -58,10 +58,10 @@ KNOWN_ENGINES = (
 def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str, str]:
     """Extract (engine, model, cache_mode) from a benchmark folder name.
 
-    Folder format: ``benchmark_{framework}_{model}[_{cache_mode}]_{machine}_{YYYYMMDD}_{HHMMSS}``
-    where ``{framework}`` may itself contain underscores (e.g. ``ollama_api``,
-    ``mlx_vlm``) and ``{machine}`` is omitted in older folders.
-    ``{cache_mode}`` is ``cache`` or ``nocache`` when present.
+    Current format:  ``benchmark_{framework}_{model}-{machine}_{cache_mode}_{YYYYMMDD}_{HHMMSS}``
+    Legacy format:   ``benchmark_{framework}_{model}_{cache_mode}_{machine}_{YYYYMMDD}_{HHMMSS}``
+    Older formats may omit ``{machine}`` and/or ``{cache_mode}``.
+    ``{framework}`` may itself contain underscores (e.g. ``ollama_api``).
     """
     body = folder_name
     if body.startswith("benchmark_"):
@@ -84,23 +84,29 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
         engine = body[:first_underscore]
         body = body[first_underscore + 1 :]
 
-    # body is now "{model}" or "{model}_{machine}". Strip a trailing machine
-    # token if it matches the chip recorded in hardware_info or the Apple
-    # Silicon naming convention (e.g. M1, M2Max, M5Ultra).
-    chip_compact = re.sub(r"\s+", "", (hardware_info or {}).get("chip", "").replace("Apple ", ""))
-    if "_" in body:
-        head, tail = body.rsplit("_", 1)
-        if chip_compact and tail == chip_compact:
-            body = head
-        elif re.match(r"^M\d[A-Za-z0-9]*$", tail):
-            body = head
-
-    # Detect cache mode suffix (cache / nocache)
+    # Detect and strip cache mode. In the current format it's a trailing
+    # ``_cache`` / ``_nocache``; in the legacy format it sits in the middle
+    # between the model and the machine token.
     cache_mode = ""
-    cache_match = re.search(r"_(nocache|cache)$", body)
-    if cache_match:
-        cache_mode = cache_match.group(1)
-        body = body[: -len(cache_match.group(0))]
+    trailing = re.search(r"_(nocache|cache)$", body)
+    if trailing:
+        cache_mode = trailing.group(1)
+        body = body[: -len(trailing.group(0))]
+    else:
+        middle = re.search(r"_(nocache|cache)_", body)
+        if middle:
+            cache_mode = middle.group(1)
+            body = body[: middle.start()] + body[middle.end() - 1 :]
+
+    # Body is now "{model}", "{model}-{machine}", or "{model}_{machine}".
+    # Strip a trailing machine token (separator may be "-" or "_") if it
+    # matches the recorded chip or the Apple Silicon naming convention.
+    chip_compact = re.sub(r"\s+", "", (hardware_info or {}).get("chip", "").replace("Apple ", ""))
+    machine_match = re.search(r"[-_]([^-_]+)$", body)
+    if machine_match:
+        tail = machine_match.group(1)
+        if (chip_compact and tail == chip_compact) or re.match(r"^M\d[A-Za-z0-9]*$", tail):
+            body = body[: machine_match.start()]
 
     return engine, body or "unknown", cache_mode
 

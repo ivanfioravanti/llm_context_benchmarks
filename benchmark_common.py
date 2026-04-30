@@ -1115,7 +1115,7 @@ def create_output_directory(
     machine_name = _get_machine_name()
 
     cache_tag = "_nocache" if cold_prefill else "_cache"
-    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}{cache_tag}_{machine_name}_{timestamp}"
+    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}-{machine_name}{cache_tag}_{timestamp}"
     output_dir.mkdir(exist_ok=True)
 
     return output_dir
