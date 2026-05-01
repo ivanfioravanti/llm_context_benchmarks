@@ -15,27 +15,23 @@ import math
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Cap how much of the reference file we read, to keep tokenization/forward-pass
-# cheap. 4000 chars comfortably yields >512 tokens for any common tokenizer.
+# Fixed contract: every capture is exactly 512 positions × top-64 logprobs over
+# the first ~4000 characters of the reference file (yielding >512 tokens for any
+# common tokenizer). These values are intentionally non-configurable so that
+# logprobs.json files are always directly comparable across runs and engines.
+NUM_POSITIONS = 512
+TOP_K = 64
 REF_MAX_CHARS = 4000
-DEFAULT_NUM_POSITIONS = 512
-DEFAULT_TOP_K = 64
 DEFAULT_REF_FILE = "2k.txt"
 
 
-def _read_ref_text(ref_file: Path, max_chars: int = REF_MAX_CHARS) -> str:
+def _read_ref_text(ref_file: Path) -> str:
     with open(ref_file) as f:
-        return f.read()[:max_chars]
+        return f.read()[:REF_MAX_CHARS]
 
 
-def capture_logprobs_mlx(
-    model,
-    tokenizer,
-    ref_file: Path,
-    num_positions: int = DEFAULT_NUM_POSITIONS,
-    top_k: int = DEFAULT_TOP_K,
-) -> Dict:
-    """Run one forward pass and record top-K logprobs at each position.
+def capture_logprobs_mlx(model, tokenizer, ref_file: Path) -> Dict:
+    """Run one forward pass and record top-K logprobs at each of 512 positions.
 
     The model's per-position output distribution depends only on the prefix, so
     a single ``model(input_ids)`` call gives us all positions at once.
@@ -45,24 +41,23 @@ def capture_logprobs_mlx(
 
     text = _read_ref_text(ref_file)
     token_ids = tokenizer.encode(text, add_special_tokens=False)
-    if len(token_ids) < num_positions + 1:
-        num_positions = max(1, len(token_ids) - 1)
-    token_ids = token_ids[: num_positions + 1]
+    n = min(NUM_POSITIONS, max(1, len(token_ids) - 1))
+    token_ids = token_ids[: n + 1]
 
     arr = mx.array(token_ids)[None, :]
     logits = model(arr)[0].astype(mx.float32)
     logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
     mx.eval(logprobs)
-    lp = np.array(logprobs)[:num_positions]
+    lp = np.array(logprobs)[:n]
 
-    idx = np.argpartition(-lp, top_k - 1, axis=-1)[:, :top_k]
+    idx = np.argpartition(-lp, TOP_K - 1, axis=-1)[:, :TOP_K]
     vals = np.take_along_axis(lp, idx, axis=-1)
     order = np.argsort(-vals, axis=-1)
     idx = np.take_along_axis(idx, order, axis=-1)
     vals = np.take_along_axis(vals, order, axis=-1)
 
     positions = []
-    for i in range(num_positions):
+    for i in range(n):
         top_strs = [tokenizer.decode([int(t)]) for t in idx[i]]
         positions.append(
             {
@@ -73,21 +68,15 @@ def capture_logprobs_mlx(
 
     return {
         "ref_file": Path(ref_file).name,
-        "num_positions": num_positions,
-        "top_k": top_k,
+        "num_positions": n,
+        "top_k": TOP_K,
         "vocab_size": int(lp.shape[-1]),
-        "input_tokens": [tokenizer.decode([int(t)]) for t in token_ids[:num_positions]],
+        "input_tokens": [tokenizer.decode([int(t)]) for t in token_ids[:n]],
         "positions": positions,
     }
 
 
-def capture_logprobs_llamacpp(
-    server_url: str,
-    ref_file: Path,
-    num_positions: int = DEFAULT_NUM_POSITIONS,
-    top_k: int = DEFAULT_TOP_K,
-    timeout: int = 600,
-) -> Dict:
+def capture_logprobs_llamacpp(server_url: str, ref_file: Path, timeout: int = 600) -> Dict:
     """Capture top-K logprobs via the OpenAI-compatible /v1/completions endpoint.
 
     Uses ``echo: true`` + ``logprobs: K`` + ``max_tokens: 0`` to get per-token
@@ -102,7 +91,7 @@ def capture_logprobs_llamacpp(
         "prompt": text,
         "max_tokens": 0,
         "echo": True,
-        "logprobs": top_k,
+        "logprobs": TOP_K,
         "temperature": 0,
     }
 
@@ -120,7 +109,7 @@ def capture_logprobs_llamacpp(
         )
 
     tokens_field = lp.get("tokens", [])
-    cap = min(num_positions, len(top_field))
+    cap = min(NUM_POSITIONS, len(top_field))
     top_field = top_field[:cap]
     tokens_field = tokens_field[:cap]
 
@@ -137,7 +126,7 @@ def capture_logprobs_llamacpp(
     return {
         "ref_file": Path(ref_file).name,
         "num_positions": cap,
-        "top_k": top_k,
+        "top_k": TOP_K,
         "vocab_size": None,
         "input_tokens": tokens_field,
         "positions": positions,
