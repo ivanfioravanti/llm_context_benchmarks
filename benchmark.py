@@ -21,7 +21,7 @@ from pathlib import Path
 # Engines whose benchmark script can auto-detect the model from the server
 # when no model is explicitly provided. For these, the dispatcher may invoke
 # the script without a leading positional model argument.
-AUTO_MODEL_ENGINES = {"lmstudio"}
+AUTO_MODEL_ENGINES = {"lmstudio", "mtplx"}
 
 
 def get_available_engines():
@@ -71,6 +71,11 @@ def get_available_engines():
             "script": "omlx_benchmark.py",
             "description": "oMLX inference server (Apple Silicon, OpenAI-compatible)",
             "example": "gemma-4-26b-a4b-it-4bit",
+        },
+        "mtplx": {
+            "script": "mtplx_benchmark.py",
+            "description": "MTPLX inference server (Apple Silicon, OpenAI-compatible)",
+            "example": "mtplx-qwen36-27b-optimized-speed",
         },
         "paroquant": {
             "script": "paroquant_benchmark.py",
