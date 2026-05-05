@@ -387,7 +387,8 @@ def main() -> int:
         f"{', server cache cleared per row)' if (args.cold_prefill and args.clear_cache) else ')'}"
     )
 
-    output_dir = common.create_output_directory("mtplx", model, cold_prefill=args.cold_prefill)
+    gen_mode_tag = f"-{args.generation_mode}" if args.generation_mode else f"-{health.get('generation_mode', 'mtp')}"
+    output_dir = common.create_output_directory("mtplx", f"{model}{gen_mode_tag}", cold_prefill=args.cold_prefill)
 
     # Warmup
     warmup_file = common.find_warmup_file()
