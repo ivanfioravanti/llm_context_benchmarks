@@ -81,6 +81,7 @@ def call_mtplx(
     temperature: float,
     top_p: float,
     timeout: int,
+    generation_mode: Optional[str] = None,
 ) -> Dict:
     """Send a non-streaming chat completion and return the parsed JSON."""
     headers = {"Content-Type": "application/json"}
@@ -95,6 +96,8 @@ def call_mtplx(
         "top_p": top_p,
         "stream": False,
     }
+    if generation_mode:
+        payload["generation_mode"] = generation_mode
 
     resp = httpx.post(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -116,6 +119,7 @@ def run_benchmark(
     temperature: float,
     top_p: float,
     timeout: int,
+    generation_mode: Optional[str] = None,
     cold_prefill: bool = True,
     clear_cache: bool = True,
     _run_idx: Optional[int] = None,
@@ -144,6 +148,7 @@ def run_benchmark(
             temperature=temperature,
             top_p=top_p,
             timeout=timeout,
+            generation_mode=generation_mode,
         )
     except Exception as exc:
         print(f"Error contacting MTPLX API: {exc}")
@@ -288,6 +293,14 @@ def main() -> int:
         help="Model identifier sent to the API (defaults to the positional model)",
     )
     parser.add_argument(
+        "--generation-mode",
+        choices=["mtp", "ar"],
+        default=None,
+        help="Generation mode: 'mtp' (multi-token prediction, default on server) "
+        "or 'ar' (autoregressive / no speculation). When omitted, the server's "
+        "default is used.",
+    )
+    parser.add_argument(
         "--temperature",
         type=float,
         default=0.6,
@@ -357,6 +370,8 @@ def main() -> int:
         hardware_info["api_request_model"] = request_model
     if health.get("generation_mode"):
         hardware_info["mtplx_generation_mode"] = health.get("generation_mode")
+    if args.generation_mode:
+        hardware_info["mtplx_forced_generation_mode"] = args.generation_mode
     if (health.get("profile") or {}).get("name"):
         hardware_info["mtplx_profile"] = health["profile"]["name"]
 
@@ -366,6 +381,7 @@ def main() -> int:
     if request_model != model:
         print(f"Request model: {request_model}")
     print(f"Max tokens:  {args.max_tokens}")
+    print(f"Gen mode:    {args.generation_mode or 'server default'}")
     print(
         f"Cold prefill: {'enabled (cache busted per prompt' if args.cold_prefill else 'disabled (cache reuse allowed'}"
         f"{', server cache cleared per row)' if (args.cold_prefill and args.clear_cache) else ')'}"
@@ -389,6 +405,7 @@ def main() -> int:
             temperature=args.temperature,
             top_p=args.top_p,
             timeout=args.timeout,
+            generation_mode=args.generation_mode,
             cold_prefill=args.cold_prefill,
             clear_cache=args.clear_cache,
         )
@@ -416,6 +433,7 @@ def main() -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 timeout=args.timeout,
+                generation_mode=args.generation_mode,
                 cold_prefill=args.cold_prefill,
                 clear_cache=args.clear_cache,
                 n_runs=args.runs,
@@ -438,6 +456,7 @@ def main() -> int:
             temperature=args.temperature,
             top_p=args.top_p,
             timeout=args.timeout,
+            generation_mode=args.generation_mode,
             cold_prefill=args.cold_prefill,
             clear_cache=args.clear_cache,
         )
