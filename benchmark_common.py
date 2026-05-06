@@ -1156,8 +1156,8 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--runs",
         type=int,
-        default=3,
-        help="Number of runs per context size; peak score is kept (default: 3)",
+        default=2,
+        help="Number of runs per context size; peak score is kept (default: 2)",
     )
     parser.add_argument(
         "--timeout",
@@ -1199,7 +1199,7 @@ def _is_degenerate_generation(result: Dict) -> bool:
     return False
 
 
-def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwargs):
+def run_benchmark_peak(run_fn, *args, n_runs=2, metric="generation_tps", **kwargs):
     """Run benchmark N times and return the result with peak generation_tps.
 
     Each run gets a unique ``_run_idx`` keyword argument so the engine can
@@ -1247,7 +1247,7 @@ def run_benchmark_peak(run_fn, *args, n_runs=3, metric="generation_tps", **kwarg
     return best_result
 
 
-def run_benchmark_peak_per_run(run_fn, context_files, n_runs=3, metric="generation_tps", **kwargs):
+def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generation_tps", **kwargs):
     """Run benchmark with each run completing all context sizes sequentially.
 
     Unlike ``run_benchmark_peak`` (which runs all runs per context size), this
