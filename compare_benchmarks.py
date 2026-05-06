@@ -35,6 +35,18 @@ def _clean_display_name(name: str) -> str:
     return re.sub(r"_\d{8,}$", "", name)
 
 
+def _run_display_names(benchmark_data: List[Dict]) -> List[str]:
+    """Build legend-ready run labels, appending the chip identifier whenever the
+    set of runs spans more than one machine — otherwise the same-named runs
+    would collide in legends (e.g. two `mtplx-qwen36-27b` entries)."""
+    base = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    chips = [d.get("hardware_info", {}).get("chip", "").replace("Apple ", "").strip() for d in benchmark_data]
+    distinct_chips = {c for c in chips if c}
+    if len(distinct_chips) <= 1:
+        return base
+    return [f"{name} [{chip}]" if chip else name for name, chip in zip(base, chips)]
+
+
 def _folder_label(folder_name: str) -> str:
     """Clean ``benchmark_<engine>_<model>...<timestamp>`` into ``<engine>: <model>-<machine>``.
 
@@ -375,8 +387,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     if len(benchmark_data) > len(readable_colors):
         colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
 
-    # Clean display names (strip timestamps)
-    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    # Clean display names (strip timestamps; append chip when runs span machines)
+    clean_names = _run_display_names(benchmark_data)
 
     # Pre-extract and sort data per benchmark
     all_series = []
@@ -687,7 +699,7 @@ def create_speed_chart(benchmark_data: List[Dict], output_dir: Path):
         colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
 
     markers = ["o", "s", "^", "d", "p", "h", "v", "<", ">", "D"]
-    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    clean_names = _run_display_names(benchmark_data)
     has_cached_data = any(bool(data.get("cached_results")) for data in benchmark_data)
 
     # Detect cache modes from folder names
@@ -1035,7 +1047,7 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
             lookup[r["context_size"]] = r
         cached_lookups.append(lookup)
 
-    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    clean_names = _run_display_names(benchmark_data)
     # Only show the memory / KV-cache columns if every benchmark in the
     # comparison reports them — otherwise we end up with a half-empty column
     # dominated by N/A cells from providers that don't measure them.
@@ -1276,14 +1288,21 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
                             cell.set_text_props(color="#b0b0b0", fontsize=9)
                     break
 
-    # Title with hardware info
-    hw = benchmark_data[0].get("hardware_info", {})
-    chip = hw.get("chip", "Unknown").replace("Apple ", "")
-    mem_gb = hw.get("memory_gb", "")
-    title_parts = [chip]
-    if mem_gb:
-        title_parts.append(f"{mem_gb} GB")
-    title = " \u00b7 ".join(title_parts)
+    # Title with hardware info \u2014 list every distinct (chip, RAM) pair so multi-machine
+    # comparisons aren't mislabelled with just the first run's hardware.
+    hw_descriptors = []
+    seen_hw = set()
+    per_run_hw = []
+    for data in benchmark_data:
+        hw = data.get("hardware_info", {})
+        chip = hw.get("chip", "Unknown").replace("Apple ", "")
+        mem_gb = hw.get("memory_gb", "")
+        descriptor = f"{chip} \u00b7 {mem_gb} GB" if mem_gb else chip
+        per_run_hw.append({"chip": chip, "descriptor": descriptor})
+        if descriptor not in seen_hw:
+            seen_hw.add(descriptor)
+            hw_descriptors.append(descriptor)
+    title = "  vs  ".join(hw_descriptors)
 
     fig.text(
         0.5,
@@ -1298,7 +1317,8 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
         transform=fig.transFigure,
     )
 
-    # Legend mapping aliases to benchmark names
+    # Legend mapping aliases to benchmark names. clean_names already carries the
+    # chip suffix when runs span multiple machines (see _run_display_names).
     legend_lines = [f"{aliases[i]} = {clean_names[i]}" for i in range(n_benchmarks)]
     legend_text = "    ".join(legend_lines)
     # Wrap long legends
@@ -1438,7 +1458,9 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
     total_data_rows = sum(len(sections[s]) for s in ordered_sections)
     height_ratios = [max(1, len(sections[s])) for s in ordered_sections]
     fig_w = max(10, n_cols * 3.5)
-    fig_h = max(5, total_data_rows * 2.0 + n_groups * 1.5)
+    # Extra +1.2 reserves room at the top for the 2-line suptitle so it doesn't
+    # collide with the 2-line column headers rendered above the first subplot.
+    fig_h = max(6, total_data_rows * 2.0 + n_groups * 1.5 + 1.2)
 
     fig, axes = plt.subplots(
         n_groups,
@@ -1518,17 +1540,20 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             f"Performance Heatmap — {model_title}\n(% of best per quantization group)",
             fontweight="bold",
             fontsize=14,
-            y=1.01,
+            y=0.995,
         )
     else:
         fig.suptitle(
             "Performance Heatmap (% of best per quantization group)",
             fontweight="bold",
             fontsize=14,
-            y=1.01,
+            y=0.995,
         )
 
-    plt.tight_layout()
+    # Reserve the top of the figure for the suptitle so it doesn't overlap the
+    # column headers (which sit above the first subplot via xaxis.tick_top()).
+    top_reserve = 0.88 if model_title else 0.91
+    plt.tight_layout(rect=[0, 0, 1, top_reserve])
     heatmap_path = output_dir / "comparison_heatmap.png"
     plt.savefig(heatmap_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -1564,8 +1589,9 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
         cache_mode = data.get("cache_mode", "")
         cache_label = " (cached)" if cache_mode == "cache" else ""
 
-        # Use full model name (includes quant variant), skip chip to avoid overlap
-        label = f"{data['model']}{cache_label}"
+        # Include chip so rows for the same model on different hardware are distinguishable.
+        chip_short = data["hardware_info"].get("chip", "Unknown").replace("Apple ", "")
+        label = f"{data['model']} — {chip_short}{cache_label}"
 
         run_data.append({"label": label, "ctx_map": ctx_map, "engine": data.get("engine", "")})
 
@@ -1778,7 +1804,7 @@ def create_quality_chart(benchmark_data: List[Dict], output_dir: Path) -> None:
     colors = readable_colors[: len(benchmark_data)]
     if len(benchmark_data) > len(readable_colors):
         colors = plt.cm.tab10(np.linspace(0, 1, len(benchmark_data)))
-    clean_names = [_clean_display_name(d["display_name"]) for d in benchmark_data]
+    clean_names = _run_display_names(benchmark_data)
 
     n_panels = int(has_ppl) + int(has_kl)
     fig, axes = plt.subplots(1, n_panels, figsize=(8 * n_panels, 6), squeeze=False)

@@ -246,8 +246,8 @@ Examples:
     parser.add_argument(
         "--runs",
         type=int,
-        default=3,
-        help="Number of runs per context size; peak score is kept (default: 3)",
+        default=2,
+        help="Number of runs per context size; peak score is kept (default: 2)",
     )
 
     # Engine-specific options
