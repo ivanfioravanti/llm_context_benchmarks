@@ -86,6 +86,7 @@ grok-benchmark = "grok_benchmark:main"
 openai-benchmark = "openai_benchmark:main"
 omlx-benchmark = "omlx_benchmark:main"
 mtplx-benchmark = "mtplx_benchmark:main"
+dflash-mlx-benchmark = "dflash_benchmark:main"
 vmlx-benchmark = "vmlx_benchmark:main"
 regen-charts = "regen_charts:main"
 
@@ -114,6 +115,7 @@ py-modules = [
   "openai_benchmark",
   "omlx_benchmark",
   "mtplx_benchmark",
+  "dflash_benchmark",
   "vmlx_benchmark",
   "regen_charts",
   "paroquant_benchmark",
