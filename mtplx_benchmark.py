@@ -267,6 +267,131 @@ def run_benchmark(
     return result
 
 
+def run_batch_benchmark(
+    base_url: str,
+    api_key: Optional[str],
+    request_model: str,
+    batch_sizes: List[int],
+    prompt_tokens: int = 2048,
+    gen_tokens: int = 128,
+    num_trials: int = 3,
+    generation_mode: Optional[str] = None,
+    cold_prefill: bool = True,
+    clear_cache: bool = True,
+) -> List[Dict]:
+    """Run batch benchmark by sending concurrent requests to test continuous batching.
+
+    Args:
+        base_url: MTPLX API base URL
+        api_key: Optional API key
+        request_model: Model identifier sent to the API
+        batch_sizes: List of batch sizes to test (concurrent requests)
+        prompt_tokens: Approximate prompt tokens per request
+        gen_tokens: Tokens to generate per request
+        num_trials: Number of trials per batch size
+        generation_mode: 'mtp' or 'ar' (None = server default)
+        cold_prefill: Prepend cache buster to each request
+        clear_cache: Clear server cache between batch sizes
+
+    Returns:
+        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb.
+    """
+    import concurrent.futures
+    import statistics
+
+    import tiktoken
+
+    # Generate a fixed prompt of approximately prompt_tokens length
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+        base_text = "The quick brown fox jumps over the lazy dog. "
+        base_tokens = enc.encode(base_text)
+        repeats = max(1, prompt_tokens // len(base_tokens))
+        prompt_text = base_text * repeats
+        tokens = enc.encode(prompt_text)[:prompt_tokens]
+        prompt_text = enc.decode(tokens)
+    except Exception:
+        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+
+    def single_request() -> Dict:
+        """Send one non-streaming request and return token counts and timings."""
+        body = (common.make_cache_buster() + prompt_text) if cold_prefill else prompt_text
+        data = call_mtplx(
+            base_url=base_url,
+            api_key=api_key,
+            request_model=request_model,
+            prompt=body,
+            max_tokens=gen_tokens,
+            temperature=0.6,
+            top_p=0.95,
+            timeout=600,
+            generation_mode=generation_mode,
+        )
+        usage = data.get("usage", {}) or {}
+        stats = data.get("mtplx_stats", {}) or {}
+
+        prompt_tok = stats.get("prompt_tokens") or usage.get("prompt_tokens", 0) or 0
+        gen_tok = stats.get("completion_tokens") or usage.get("completion_tokens", 0) or 0
+        peak_memory_bytes = stats.get("peak_memory_bytes", 0) or 0
+
+        return {
+            "prompt_tokens": prompt_tok,
+            "generation_tokens": gen_tok,
+            "peak_memory": peak_memory_bytes / (1024**3) if peak_memory_bytes else 0.0,
+        }
+
+    batch_results: List[Dict] = []
+
+    for bs in batch_sizes:
+        print(f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
+
+        if clear_cache and cold_prefill:
+            clear_server_cache(base_url)
+
+        # Warmup
+        print("    Warmup...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+            list(pool.map(lambda _: single_request(), range(bs)))
+
+        trial_prompt_tps: List[float] = []
+        trial_gen_tps: List[float] = []
+        trial_peak_mem: List[float] = []
+
+        for trial in range(num_trials):
+            start = time.time()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                futures = [pool.submit(single_request) for _ in range(bs)]
+                responses = [f.result() for f in futures]
+            wall_time = time.time() - start
+
+            total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
+            total_gen_tok = sum(r["generation_tokens"] for r in responses)
+            agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0
+            agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0
+            peak_mem = max((r["peak_memory"] for r in responses), default=0)
+
+            trial_prompt_tps.append(agg_prompt_tps)
+            trial_gen_tps.append(agg_gen_tps)
+            if peak_mem > 0:
+                trial_peak_mem.append(peak_mem)
+
+            print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
+
+        if trial_prompt_tps:
+            avg_prompt = statistics.mean(trial_prompt_tps)
+            avg_gen = statistics.mean(trial_gen_tps)
+            result = {
+                "batch_size": bs,
+                "prompt_tps": round(avg_prompt, 2),
+                "generation_tps": round(avg_gen, 2),
+                "peak_memory_gb": round(max(trial_peak_mem), 3) if trial_peak_mem else 0.0,
+            }
+            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            batch_results.append(result)
+
+    return batch_results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run MTPLX benchmarks using the OpenAI-compatible API")
     parser.add_argument(
@@ -326,6 +451,34 @@ def main() -> int:
         default=True,
         help="POST /admin/cache/clear before each cold-prefill row (default: enabled). "
         "Has no effect when --no-cold-prefill is set.",
+    )
+    parser.add_argument(
+        "--batch-sizes",
+        default="1,2,4,8",
+        help="Comma-separated batch sizes for concurrent-request benchmark (default: 1,2,4,8)",
+    )
+    parser.add_argument(
+        "--batch-prompt-tokens",
+        type=int,
+        default=2048,
+        help="Approximate prompt tokens per request in batch benchmark (default: 2048)",
+    )
+    parser.add_argument(
+        "--batch-gen-tokens",
+        type=int,
+        default=128,
+        help="Tokens to generate per request in batch benchmark (default: 128)",
+    )
+    parser.add_argument(
+        "--batch-trials",
+        type=int,
+        default=3,
+        help="Number of trials per batch size (default: 3)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Skip batch benchmark",
     )
 
     args = parser.parse_args()
@@ -472,6 +625,27 @@ def main() -> int:
 
     total_benchmark_time = time.time() - benchmark_start
 
+    # Run batch benchmark
+    batch_results = None
+    if not args.no_batch:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",")]
+        print(f"\n{'=' * 50}")
+        print("BATCH BENCHMARK (concurrent requests)")
+        print(f"{'=' * 50}")
+        batch_results = run_batch_benchmark(
+            base_url=base_url,
+            api_key=args.api_key,
+            request_model=request_model,
+            batch_sizes=batch_sizes,
+            prompt_tokens=args.batch_prompt_tokens,
+            gen_tokens=args.batch_gen_tokens,
+            num_trials=args.batch_trials,
+            generation_mode=args.generation_mode,
+            cold_prefill=args.cold_prefill,
+            clear_cache=args.clear_cache,
+        )
+        total_benchmark_time = time.time() - benchmark_start
+
     has_memory = any(r.get("peak_memory_gb", 0) > 0 for r in results)
     common.save_all_outputs(
         results,
@@ -481,6 +655,7 @@ def main() -> int:
         hardware_info,
         args,
         include_memory=has_memory,
+        batch_results=batch_results,
     )
     common.print_benchmark_summary(
         results,
@@ -489,6 +664,7 @@ def main() -> int:
         hardware_info,
         output_dir,
         total_benchmark_time,
+        batch_results=batch_results,
     )
 
     print("\nDone.")
