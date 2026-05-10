@@ -21,7 +21,7 @@ from pathlib import Path
 # Engines whose benchmark script can auto-detect the model from the server
 # when no model is explicitly provided. For these, the dispatcher may invoke
 # the script without a leading positional model argument.
-AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx"}
+AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai"}
 
 
 def get_available_engines():
@@ -62,9 +62,19 @@ def get_available_engines():
             "description": "Exo OpenAI-compatible endpoint",
             "example": "local-model",
         },
+        "openai": {
+            "script": "openai_benchmark.py",
+            "description": "Generic OpenAI-compatible endpoint (vLLM, llama.cpp, etc.)",
+            "example": "local-model --base-url http://127.0.0.1:8000/v1",
+        },
         "mlx-vlm": {
             "script": "mlx_vlm_benchmark.py",
             "description": "MLX-VLM vision-language models (Apple Silicon)",
+            "example": "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+        },
+        "mlx-vlm-server": {
+            "script": "mlx_vlm_server_benchmark.py",
+            "description": "mlx-vlm HTTP server (Apple Silicon, OpenAI-compatible)",
             "example": "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
         },
         "omlx": {
@@ -286,6 +296,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--base-url",
+        help="Base URL for OpenAI-compatible engines (e.g., http://127.0.0.1:8000/v1)",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="API key for OpenAI-compatible engines (default: $OPENAI_API_KEY or 'no-key')",
+    )
+
+    parser.add_argument(
         "--backend",
         default="jaccl",
         help="Backend for mlx-distributed launch (default: jaccl)",
@@ -393,6 +412,11 @@ Examples:
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
+    if args.engine == "openai":
+        if args.base_url:
+            pass_through_args.extend(["--base-url", args.base_url])
+        if args.api_key:
+            pass_through_args.extend(["--api-key", args.api_key])
     if args.engine == "mlx-distributed":
         if not args.hostfile:
             print("Error: --hostfile is required for engine 'mlx-distributed'.")

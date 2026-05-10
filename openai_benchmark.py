@@ -83,11 +83,15 @@ def run_benchmark(
 
     start_time = time.time()
     first_token_time: Optional[float] = None
+    last_token_time: Optional[float] = None
     generated_text = ""
+    reasoning_text = ""
     prompt_tokens = 0
     completion_tokens = 0
     server_prompt_tps = 0.0
     server_generation_tps = 0.0
+    server_prompt_eval = 0.0
+    server_gen_duration = 0.0
     peak_memory_gb = 0.0
 
     try:
@@ -102,30 +106,59 @@ def run_benchmark(
         )
 
         for chunk in stream:
-            # Capture first token time
-            if first_token_time is None and chunk.choices and chunk.choices[0].delta.content:
-                first_token_time = time.time()
-
-            # Accumulate generated text
             if chunk.choices:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    generated_text += delta
+                delta = chunk.choices[0].delta
+                # Reasoning models (DeepSeek, etc.) stream thinking tokens via
+                # `reasoning_content` — count them too so TTFT/decode windows
+                # are anchored at the first generated token, not the first
+                # post-thinking answer token.
+                content_piece = getattr(delta, "content", None)
+                reasoning_piece = getattr(delta, "reasoning_content", None)
+
+                if (content_piece or reasoning_piece) and first_token_time is None:
+                    first_token_time = time.time()
+                if content_piece or reasoning_piece:
+                    last_token_time = time.time()
+
+                if content_piece:
+                    generated_text += content_piece
+                if reasoning_piece:
+                    reasoning_text += reasoning_piece
 
             # Final chunk may carry usage stats
             if chunk.usage:
                 prompt_tokens = chunk.usage.prompt_tokens or 0
                 completion_tokens = chunk.usage.completion_tokens or 0
 
-                # Extract server-reported stats (mlx-vlm, etc.)
+                # Extract server-reported stats; key names vary by server.
                 usage_extra = chunk.usage.model_dump() if hasattr(chunk.usage, "model_dump") else {}
-                # Some servers use input_tokens/output_tokens instead
                 if prompt_tokens == 0:
                     prompt_tokens = usage_extra.get("input_tokens", 0) or 0
                 if completion_tokens == 0:
                     completion_tokens = usage_extra.get("output_tokens", 0) or 0
-                server_prompt_tps = usage_extra.get("prompt_tps", 0.0) or 0.0
-                server_generation_tps = usage_extra.get("generation_tps", 0.0) or 0.0
+                # TPS keys: mlx-vlm uses *_tps, oMLX uses *_tokens_per_second,
+                # mtplx uses prefill_tps/decode_tps.
+                server_prompt_tps = (
+                    usage_extra.get("prompt_tps")
+                    or usage_extra.get("prompt_tokens_per_second")
+                    or usage_extra.get("prefill_tps")
+                    or 0.0
+                )
+                server_generation_tps = (
+                    usage_extra.get("generation_tps")
+                    or usage_extra.get("generation_tokens_per_second")
+                    or usage_extra.get("decode_tps")
+                    or 0.0
+                )
+                server_prompt_eval = (
+                    usage_extra.get("prompt_eval_duration")
+                    or usage_extra.get("prefill_time_s")
+                    or usage_extra.get("ttft_s")
+                    or 0.0
+                )
+                server_gen_duration = (
+                    usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
+                )
                 peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
 
     except Exception as e:
@@ -135,32 +168,51 @@ def run_benchmark(
     end_time = time.time()
     total_time = end_time - start_time
 
-    ttft = (first_token_time - start_time) if first_token_time else 0.0
-    generation_time = (end_time - first_token_time) if first_token_time else total_time
+    ttft = server_prompt_eval if server_prompt_eval > 0 else (
+        (first_token_time - start_time) if first_token_time else 0.0
+    )
+
+    # Decode window: prefer server-reported duration, then time between first
+    # and last streamed token, then total - ttft as a last resort.
+    if server_gen_duration > 0:
+        generation_time = server_gen_duration
+    elif first_token_time and last_token_time and last_token_time > first_token_time:
+        generation_time = last_token_time - first_token_time
+    elif first_token_time:
+        generation_time = max(end_time - first_token_time, 0.0)
+    else:
+        generation_time = total_time
 
     # Fallback: approximate prompt token count from word count
     if prompt_tokens == 0:
         prompt_tokens = len(prompt.split())
 
-    # Fallback: approximate completion tokens from generated text
+    # Fallback: approximate completion tokens from generated text + reasoning
     if completion_tokens == 0:
-        completion_tokens = len(generated_text.split())
+        completion_tokens = len(generated_text.split()) + len(reasoning_text.split())
 
-    # Prefer server-reported TPS when available, fall back to client-side calculation
+    # Prefer server-reported TPS when available; otherwise compute client-side.
+    # For decode TPS, use (N - 1) tokens since the first token's generation is
+    # already captured in TTFT, leaving N-1 inter-token intervals.
     prompt_tps = server_prompt_tps if server_prompt_tps > 0 else (prompt_tokens / ttft if ttft > 0 else 0.0)
-    generation_tps = (
-        server_generation_tps
-        if server_generation_tps > 0
-        else (completion_tokens / generation_time if generation_time > 0 else 0.0)
-    )
+    if server_generation_tps > 0:
+        generation_tps = server_generation_tps
+    elif generation_time > 0 and completion_tokens > 1:
+        generation_tps = (completion_tokens - 1) / generation_time
+    else:
+        generation_tps = 0.0
+
+    tps_source = "server" if server_generation_tps > 0 else "client"
 
     print(f"  Prompt tokens:      {prompt_tokens}")
     print(f"  Completion tokens:  {completion_tokens}")
+    if reasoning_text:
+        print(f"  Reasoning chars:    {len(reasoning_text)} (counted toward decode window)")
     print(f"  TTFT:               {ttft:.3f}s")
     print(f"  Generation time:    {generation_time:.2f}s")
     print(f"  Total time:         {total_time:.2f}s")
-    print(f"  Prompt TPS:         {prompt_tps:.1f} t/s")
-    print(f"  Generation TPS:     {generation_tps:.1f} t/s")
+    print(f"  Prompt TPS:         {prompt_tps:.1f} t/s ({tps_source}-side)")
+    print(f"  Generation TPS:     {generation_tps:.1f} t/s ({tps_source}-side)")
     if peak_memory_gb > 0:
         print(f"  Peak memory:        {peak_memory_gb:.2f} GB")
 
@@ -170,11 +222,14 @@ def run_benchmark(
         "generation_tokens": completion_tokens,
         "time_to_first_token": ttft,
         "eval_duration": generation_time,
+        "prompt_eval_duration": ttft,
         "total_time": total_time,
         "prompt_tps": prompt_tps,
         "generation_tps": generation_tps,
         "generated_text": generated_text,
     }
+    if reasoning_text:
+        result["reasoning_text"] = reasoning_text
     if peak_memory_gb > 0:
         result["peak_memory_gb"] = peak_memory_gb
 
@@ -308,9 +363,16 @@ def main() -> int:
         description="Benchmark any OpenAI-compatible API endpoint across different context sizes"
     )
     parser.add_argument(
-        "--model",
+        "model",
+        nargs="?",
         default=None,
         help="Model name/ID to use (auto-detected from server if omitted)",
+    )
+    parser.add_argument(
+        "--model",
+        dest="model_flag",
+        default=None,
+        help="Model name/ID (alternative to positional; takes precedence if both set)",
     )
     parser.add_argument(
         "--base-url",
@@ -373,8 +435,8 @@ def main() -> int:
         return 1
     print("Connected successfully.")
 
-    # Resolve model name
-    model = args.model
+    # Resolve model name (--model flag wins over positional, then auto-detect)
+    model = args.model_flag or args.model
     if not model:
         model = get_available_model(client)
         if not model:

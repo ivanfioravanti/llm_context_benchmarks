@@ -77,6 +77,7 @@ ollama-api-benchmark = "ollama_api_benchmark:main"
 ollama-cli-benchmark = "ollama_cli_benchmark:main"
 mlx-benchmark = "mlx_benchmark:main"
 mlx-vlm-benchmark = "mlx_vlm_benchmark:main"
+mlx-vlm-server-benchmark = "mlx_vlm_server_benchmark:main"
 mlx-distributed-benchmark = "mlx_distributed_benchmark:main"
 llamacpp-benchmark = "llamacpp_benchmark:main"
 lmstudio-benchmark = "lmstudio_benchmark:main"
@@ -109,6 +110,7 @@ py-modules = [
   "lmstudio_benchmark",
   "mlx_benchmark",
   "mlx_vlm_benchmark",
+  "mlx_vlm_server_benchmark",
   "mlx_distributed_benchmark",
   "ollama_api_benchmark",
   "ollama_cli_benchmark",
