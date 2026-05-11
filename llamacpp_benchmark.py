@@ -74,6 +74,13 @@ def benchmark_llamacpp(
 ) -> Optional[Dict]:
     """Benchmark llama.cpp server with a given context file.
 
+    Uses the OpenAI-compatible /v1/chat/completions endpoint so the server
+    applies the model's chat template. Hitting the raw /completion endpoint
+    with a big chunk of document text causes the model to occasionally sample
+    EOS on its first step (there is no "assistant is responding" framing), in
+    which case predicted_n=1 and predicted_ms≈0, producing a bogus
+    ~1,000,000 tokens/sec reading.
+
     Args:
         server_url: URL of the llama.cpp server
         context_file: Path to the context file
@@ -84,8 +91,7 @@ def benchmark_llamacpp(
     Returns:
         Dictionary with benchmark results or None if failed
     """
-    # Read the context file
-    with open(context_file, "r") as f:
+    with open(context_file, "r", encoding="utf-8") as f:
         prompt = f.read()
 
     if cold_prefill:
@@ -93,73 +99,89 @@ def benchmark_llamacpp(
     elif _run_idx is not None:
         prompt = make_cache_buster(run_idx=_run_idx) + prompt
 
-    # Prepare the request payload
+    # OpenAI-style chat payload. llama.cpp accepts `cache_prompt` as an
+    # extension field on this endpoint too.
     payload = {
-        "prompt": prompt,
-        "n_predict": max_tokens,
+        "model": "default",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
         "temperature": 0.7,
-        "top_k": 40,
         "top_p": 0.95,
         "stream": True,
         "cache_prompt": not cold_prefill,
     }
 
-    # Record start time
     start_time = time.time()
     first_token_time = None
     generated_text = ""
-    result = {}
+    finish_reason: Optional[str] = None
+    timings: Dict = {}
 
-    # Make the request to the server
     try:
         import json
 
-        response = requests.post(f"{server_url}/completion", json=payload, timeout=timeout, stream=True)
+        response = requests.post(
+            f"{server_url}/v1/chat/completions",
+            json=payload,
+            timeout=timeout,
+            stream=True,
+        )
         response.raise_for_status()
 
         for line in response.iter_lines():
-            if line:
-                line = line.decode("utf-8")
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    try:
-                        chunk = json.loads(data_str)
-                        # Mark first token time when we receive content
-                        if first_token_time is None and chunk.get("content"):
-                            first_token_time = time.time()
+            if not line:
+                continue
+            line = line.decode("utf-8")
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-                        generated_text += chunk.get("content", "")
+            choices = chunk.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content") or ""
+                if content:
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                    generated_text += content
+                if choices[0].get("finish_reason"):
+                    finish_reason = choices[0]["finish_reason"]
 
-                        # Stop chunk usually contains timings
-                        if chunk.get("stop"):
-                            result = chunk
-                            break
-                    except json.JSONDecodeError:
-                        pass
+            # llama.cpp-specific: final chunk includes a `timings` object.
+            if chunk.get("timings"):
+                timings = chunk["timings"]
     except requests.exceptions.RequestException as e:
         print(f"Error during benchmark: {e}")
         return None
 
-    # Calculate timings
     total_time = time.time() - start_time
     time_to_first_token = (first_token_time - start_time) if first_token_time else 0.0
 
-    # llama.cpp server provides timing information
-    timings = result.get("timings", {})
-
-    # Get token counts
     prompt_tokens = timings.get("prompt_n", 0)
     generation_tokens = timings.get("predicted_n", 0)
 
-    # Get processing times (in milliseconds from server)
     prompt_ms = timings.get("prompt_ms", 0)
     predict_ms = timings.get("predicted_ms", 0)
 
-    # Convert to seconds
     prompt_time = prompt_ms / 1000.0
     predict_time = predict_ms / 1000.0
 
-    # Calculate tokens per second
+    # Guard against pathological results (e.g. model sampled EOS on first
+    # step so predicted_n=1 and predicted_ms≈0). Require at least 2 decoded
+    # tokens and a non-trivial decode duration before trusting the TPS ratio.
+    if generation_tokens < 2 or predict_time < 0.01:
+        print(
+            f"    Warning: degenerate run (predicted_n={generation_tokens}, "
+            f"predicted_ms={predict_ms}, finish_reason={finish_reason}); discarding"
+        )
+        return None
+
     prompt_tps = prompt_tokens / prompt_time if prompt_time > 0 else 0
     generation_tps = generation_tokens / predict_time if predict_time > 0 else 0
 
