@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Benchmark script for mlx-vlm running as an OpenAI-compatible HTTP server.
 
-mlx-vlm exposes its server-side metrics inside every chat-completion's
-``usage`` block (``prompt_tps``, ``generation_tps``, ``peak_memory``). There is
-no dedicated ``/metrics`` endpoint — but those fields are authoritative and
-preferred over client-side timing. Streaming is used so we can still measure
-TTFT on the client.
+mlx-vlm exposes server-side metrics in the final streaming chunk when
+``stream_options.include_usage`` is set: token counts in ``usage`` and
+throughput/memory in the sibling ``timings`` block (``prompt_per_second``,
+``predicted_per_second``, ``peak_memory``). Older builds put ``prompt_tps`` /
+``generation_tps`` directly on ``usage``; we accept both. Streaming is used so
+we can still measure TTFT on the client.
 
 For true cold-prefill numbers we POST ``/unload`` between rows: mlx-vlm
 auto-loads the model on the next request (``get_cached_model`` in
@@ -75,22 +76,34 @@ def unload_server_model(base_url: str, timeout: int = 60) -> None:
         print(f"  Warning: /unload failed: {exc}")
 
 
-def _coerce_usage(usage: Dict) -> Dict:
-    """Pull token counts and server-reported metrics out of a usage block.
+def _coerce_usage(usage: Dict, timings: Optional[Dict] = None) -> Dict:
+    """Pull token counts and server-reported metrics from usage and timings.
 
-    mlx-vlm streams use ``input_tokens``/``output_tokens``; the non-streaming
-    response uses OpenAI's ``prompt_tokens``/``completion_tokens``. Accept both.
+    Current mlx-vlm (>=0.4.4) splits OpenAI ``usage`` (token counts) from
+    ``timings`` (throughput/memory). Older builds inlined ``prompt_tps`` on
+    ``usage``. Accept all variants.
     """
-    if not usage:
-        return {}
+    usage = usage or {}
+    timings = timings or {}
     prompt_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
     completion_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+    prompt_tps = float(
+        usage.get("prompt_tps")
+        or timings.get("prompt_per_second")
+        or 0.0
+    )
+    generation_tps = float(
+        usage.get("generation_tps")
+        or timings.get("predicted_per_second")
+        or 0.0
+    )
+    peak_memory = float(usage.get("peak_memory") or timings.get("peak_memory") or 0.0)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "prompt_tps": float(usage.get("prompt_tps") or 0.0),
-        "generation_tps": float(usage.get("generation_tps") or 0.0),
-        "peak_memory": float(usage.get("peak_memory") or 0.0),
+        "prompt_tps": prompt_tps,
+        "generation_tps": generation_tps,
+        "peak_memory": peak_memory,
     }
 
 
@@ -116,10 +129,12 @@ def call_mlx_vlm_streaming(
         "temperature": temperature,
         "top_p": top_p,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
 
     generated_text = ""
     last_usage: Dict = {}
+    last_timings: Dict = {}
     first_token_time: Optional[float] = None
     start = time.time()
 
@@ -157,10 +172,15 @@ def call_mlx_vlm_streaming(
             if usage:
                 last_usage = usage
 
+            timings = chunk.get("timings")
+            if timings:
+                last_timings = timings
+
     end = time.time()
     return {
         "generated_text": generated_text,
         "usage": last_usage,
+        "timings": last_timings,
         "ttft": (first_token_time - start) if first_token_time else 0.0,
         "total_time": end - start,
     }
@@ -208,7 +228,7 @@ def run_benchmark(
         print(f"Error contacting mlx-vlm server: {exc}")
         return None
 
-    usage = _coerce_usage(data.get("usage") or {})
+    usage = _coerce_usage(data.get("usage") or {}, data.get("timings") or {})
     generated_text = data.get("generated_text", "") or ""
     ttft = float(data.get("ttft") or 0.0)
     total_time = float(data.get("total_time") or 0.0)
