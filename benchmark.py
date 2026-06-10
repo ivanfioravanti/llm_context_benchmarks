@@ -21,7 +21,7 @@ from pathlib import Path
 # Engines whose benchmark script can auto-detect the model from the server
 # when no model is explicitly provided. For these, the dispatcher may invoke
 # the script without a leading positional model argument.
-AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai"}
+AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai", "afms"}
 
 
 def get_available_engines():
@@ -66,6 +66,12 @@ def get_available_engines():
             "script": "openai_benchmark.py",
             "description": "Generic OpenAI-compatible endpoint (vLLM, llama.cpp, etc.)",
             "example": "local-model --base-url http://127.0.0.1:8000/v1",
+        },
+        "afms": {
+            "script": "apple_foundation_benchmark.py",
+            "description": "Apple Foundation Models Serve local endpoint",
+            "example": "system --base-url http://127.0.0.1:1976/v1 --contexts 0.5,1,2",
+            "default_contexts": "0.5,1,2",
         },
         "mlx-vlm": {
             "script": "mlx_vlm_benchmark.py",
@@ -217,7 +223,7 @@ Examples:
     # Common options that will be passed through
     parser.add_argument(
         "--contexts",
-        default="0.5,1,2,4,8,16,32",
+        default=None,
         help="Comma-separated list of context sizes to benchmark (default: 0.5,1,2,4,8,16,32)",
     )
 
@@ -386,7 +392,8 @@ Examples:
     pass_through_args = []
 
     # Add common arguments
-    pass_through_args.extend(["--contexts", args.contexts])
+    contexts = args.contexts or engines[args.engine].get("default_contexts", "0.5,1,2,4,8,16,32")
+    pass_through_args.extend(["--contexts", contexts])
     pass_through_args.extend(["--max-tokens", str(args.max_tokens)])
     pass_through_args.extend(["--timeout", str(args.timeout)])
     pass_through_args.extend(["--runs", str(args.runs)])
@@ -412,7 +419,7 @@ Examples:
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
-    if args.engine == "openai":
+    if args.engine in ("openai", "afms"):
         if args.base_url:
             pass_through_args.extend(["--base-url", args.base_url])
         if args.api_key:

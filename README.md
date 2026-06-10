@@ -2,8 +2,8 @@
 
 Benchmark prompt-processing and generation throughput across context sizes
 (0.5k–128k tokens) for many inference engines: Ollama (API & CLI), MLX,
-MLX Distributed, MLX-VLM, llama.cpp, LM Studio, Exo, vMLX, oMLX, Paroquant,
-and any OpenAI-compatible endpoint.
+MLX Distributed, MLX-VLM, llama.cpp, LM Studio, Exo, Apple Foundation Models
+Serve, vMLX, oMLX, Paroquant, and any OpenAI-compatible endpoint.
 
 Optimized for Apple Silicon but works anywhere Python runs.
 
@@ -26,6 +26,7 @@ Engine-specific setup:
 | MLX Distributed | Requires `mlx.launch` and a hostfile JSON |
 | llama.cpp | Run `llama-server -m model.gguf --port 8080` |
 | LM Studio | Install [LM Studio](https://lmstudio.ai), start the local server |
+| Apple Foundation Models Serve | Start the local server; defaults to `http://127.0.0.1:1976/v1` |
 | Exo / OpenAI-compatible | Any server exposing `/v1/chat/completions` |
 
 (Optional) pre-commit hooks for Black + isort:
@@ -47,6 +48,8 @@ uv run generate-context-files pride_and_prejudice.txt
 uv run benchmark mlx mlx-community/Qwen3-4B-Instruct-2507-4bit
 uv run benchmark ollama-api gpt-oss:20b
 uv run benchmark llamacpp gpt-oss:20b --host localhost --port 8080
+uv run benchmark afms system --contexts 0.5,1,2,3.6
+uv run benchmark afms pcc --contexts 0.5,1,2,4,8,16,32
 
 # Generic OpenAI-compatible endpoint (separate entry point)
 uv run openai-benchmark --model llama3.2 --base-url http://localhost:11434/v1
@@ -66,6 +69,12 @@ Engine-specific options worth knowing:
 - `--host`, `--port` — llama.cpp server target
 - `--backend`, `--hostfile`, `--env`, `--pipeline` — MLX Distributed
 - `--base-url`, `--api-key` — OpenAI-compatible endpoints
+
+Apple Foundation Models Serve has different practical context limits by model:
+the local `system` model accepts about a 4k-token transcript, so use
+`--contexts 0.5,1,2,3.6`; `pcc` works with the standard `32k.txt` bucket, so use
+`--contexts 0.5,1,2,4,8,16,32`. AFMS token counts are estimated client-side with
+`cl100k_base` because `pcc` currently reports zero prompt/completion usage.
 
 ## Comparing Runs
 

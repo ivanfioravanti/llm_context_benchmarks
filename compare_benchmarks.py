@@ -87,6 +87,7 @@ KNOWN_ENGINES = (
     "mlx-distributed",
     "llamacpp_embed",
     "openai_compat",
+    "afms",
     "deepseek",
     "exo",
     "grok",

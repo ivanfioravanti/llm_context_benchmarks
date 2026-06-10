@@ -85,6 +85,7 @@ exo-benchmark = "exo_benchmark:main"
 deepseek-benchmark = "deepseek_benchmark:main"
 grok-benchmark = "grok_benchmark:main"
 openai-benchmark = "openai_benchmark:main"
+apple-foundation-benchmark = "apple_foundation_benchmark:main"
 omlx-benchmark = "omlx_benchmark:main"
 mtplx-benchmark = "mtplx_benchmark:main"
 dflash-mlx-benchmark = "dflash_benchmark:main"
@@ -115,6 +116,7 @@ py-modules = [
   "ollama_api_benchmark",
   "ollama_cli_benchmark",
   "openai_benchmark",
+  "apple_foundation_benchmark",
   "omlx_benchmark",
   "mtplx_benchmark",
   "dflash_benchmark",
