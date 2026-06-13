@@ -236,6 +236,48 @@ def kv_cache_bytes(cache_list) -> int:
     return total
 
 
+def add_throughput_metrics(result: Dict, prompt_text: str = "") -> Dict:
+    """Add tokenizer-independent throughput metrics in place.
+
+    Adds four keys to ``result``:
+      - ``generation_utf8_bytes_per_sec``  — UTF-8 bytes of generated_text / eval_duration
+      - ``generation_chars_per_sec``       — Unicode code points / eval_duration
+      - ``prompt_utf8_bytes_per_sec``      — UTF-8 bytes of prompt_text / prompt_eval_duration
+      - ``prompt_chars_per_sec``           — Unicode code points / prompt_eval_duration
+
+    These metrics complement the tokenizer-dependent ``*_tps`` fields and let
+    different tokenizers be compared on the same textual workload.
+    """
+    gen_text = result.get("generated_text", "") or ""
+    prompt_text = prompt_text or ""
+    eval_dur = result.get("eval_duration", 0) or 0
+    p_eval_dur = result.get("prompt_eval_duration", 0) or 0
+
+    # Fall back to deriving duration from tokens / tps when the explicit
+    # duration field is missing (some engines report rate but not duration).
+    if eval_dur <= 0:
+        gen_tokens = result.get("generation_tokens", 0) or 0
+        gen_tps = result.get("generation_tps", 0) or 0
+        if gen_tokens > 0 and gen_tps > 0:
+            eval_dur = gen_tokens / gen_tps
+    if p_eval_dur <= 0:
+        p_tokens = result.get("prompt_tokens", 0) or 0
+        p_tps = result.get("prompt_tps", 0) or 0
+        if p_tokens > 0 and p_tps > 0:
+            p_eval_dur = p_tokens / p_tps
+
+    gen_bytes = len(gen_text.encode("utf-8"))
+    gen_chars = len(gen_text)
+    p_bytes = len(prompt_text.encode("utf-8"))
+    p_chars = len(prompt_text)
+
+    result["generation_utf8_bytes_per_sec"] = gen_bytes / eval_dur if eval_dur > 0 else 0.0
+    result["generation_chars_per_sec"] = gen_chars / eval_dur if eval_dur > 0 else 0.0
+    result["prompt_utf8_bytes_per_sec"] = p_bytes / p_eval_dur if p_eval_dur > 0 else 0.0
+    result["prompt_chars_per_sec"] = p_chars / p_eval_dur if p_eval_dur > 0 else 0.0
+    return result
+
+
 def save_results_csv(results, csv_path, exclude_fields=None):
     """Save benchmark results to CSV, excluding specified fields.
 
@@ -380,11 +422,11 @@ def generate_table(
         # Show KV cache column when any result reports it (mlx / mlx-vlm)
         has_kv = any("kv_cache_gb" in r for r in results)
         if has_kv:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory   | KV Cache\n"
-            table += "--------|------------|---------|------------|----------|----------\n"
+            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Memory   | KV Cache\n"
+            table += "--------|------------|---------|---------|----------|------------|----------|----------\n"
         else:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Memory\n"
-            table += "--------|------------|---------|------------|--------\n"
+            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Memory\n"
+            table += "--------|------------|---------|---------|----------|------------|--------\n"
 
         # Add data rows with memory
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
@@ -396,7 +438,10 @@ def generate_table(
                 prompt_str = f"{r['prompt_tps']:>10.1f}"
             row = (
                 f"{r['context_size']:>7} | {prompt_str:>10} | "
-                f"{r['generation_tps']:>7.1f} | {gen_tokens:>10} | "
+                f"{r['generation_tps']:>7.1f} | "
+                f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f} | "
+                f"{r.get('generation_chars_per_sec', 0):>8.1f} | "
+                f"{gen_tokens:>10} | "
                 f"{r.get('peak_memory_gb', 0):>6.1f} GB"
             )
             if has_kv:
@@ -406,22 +451,30 @@ def generate_table(
     else:
         # Check if we need special handling for LM Studio
         if "EXPERIMENTAL" in framework:
-            table += "\nContext | Prompt Tokens | Gen TPS | Gen Tokens | Total Time\n"
-            table += "--------|---------------|---------|------------|------------\n"
+            table += "\nContext | Prompt Tokens | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Total Time\n"
+            table += "--------|---------------|---------|---------|----------|------------|------------\n"
         else:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen Tokens | Total Time\n"
-            table += "--------|------------|---------|------------|------------\n"
+            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Total Time\n"
+            table += "--------|------------|---------|---------|----------|------------|------------\n"
 
         # Add data rows with total time
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
             total_time = r.get("total_time", r.get("wall_time", 0))
             gen_tokens = r.get("generation_tokens", 0)
+            gen_bps = r.get("generation_utf8_bytes_per_sec", 0)
+            gen_chps = r.get("generation_chars_per_sec", 0)
             # Handle N/A prompt TPS for LM Studio
             if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
                 prompt_str = f"{r.get('prompt_tokens', 0)} tok"
-                table += f"{r['context_size']:>7} | {prompt_str:>13} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                table += (
+                    f"{r['context_size']:>7} | {prompt_str:>13} | {r['generation_tps']:>7.1f} | "
+                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                )
             else:
-                table += f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                table += (
+                    f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | "
+                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                )
             total_tokens += gen_tokens
 
     table += f"\nTotal generated tokens: {total_tokens}"
@@ -431,44 +484,102 @@ def generate_table(
 
     if batch_results:
         batch_has_kv = any("kv_cache_gb" in r for r in batch_results)
+        batch_has_bps = any(r.get("generation_utf8_bytes_per_sec", 0) > 0 for r in batch_results)
         table += "\n\nBatch Benchmark\n"
+        # Build header with optional Gen B/s column (only when populated by the engine)
+        cols = ["Batch", "Prompt TPS", "Gen TPS"]
+        widths = [5, 10, 7]
+        if batch_has_bps:
+            cols.append("Gen B/s")
+            widths.append(7)
+        cols.append("Memory")
+        widths.append(9)
         if batch_has_kv:
-            table += "Batch | Prompt TPS | Gen TPS | Memory   | KV Cache\n"
-            table += "------|------------|---------|----------|----------\n"
-        else:
-            table += "Batch | Prompt TPS | Gen TPS | Memory\n"
-            table += "------|------------|---------|--------\n"
+            cols.append("KV Cache")
+            widths.append(9)
+        header = " | ".join(c.rjust(w) for c, w in zip(cols, widths))
+        sep = "-|-".join("-" * w for w in widths)
+        table += header + "\n" + sep + "\n"
         for r in batch_results:
-            row = (
-                f"{r['batch_size']:>5} | {r['prompt_tps']:>10.1f} | "
-                f"{r['generation_tps']:>7.1f} | {r.get('peak_memory_gb', 0):>6.1f} GB"
-            )
+            parts = [
+                f"{r['batch_size']:>5}",
+                f"{r['prompt_tps']:>10.1f}",
+                f"{r['generation_tps']:>7.1f}",
+            ]
+            if batch_has_bps:
+                parts.append(f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}")
+            parts.append(f"{r.get('peak_memory_gb', 0):>6.1f} GB")
             if batch_has_kv:
-                row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
-            table += row + "\n"
+                parts.append(f"{r.get('kv_cache_gb', 0):>6.2f} GB")
+            table += " | ".join(parts) + "\n"
 
     if cached_results:
         cached_has_kv = any("kv_cache_gb" in r for r in cached_results)
         table += "\n\nCached KV Cache (incremental prefill)\n"
         if cached_has_kv:
-            table += "Context | Total Tok | Delta Tok | Cached Tok | " "Inc Prefill TPS | Gen TPS | KV Cache\n"
-            table += "--------|-----------|-----------|------------|" "-----------------|---------|----------\n"
+            table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS | Gen B/s | KV Cache\n"
+            table += "--------|-----------|-----------|------------|-----------------|---------|---------|----------\n"
         else:
-            table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS\n"
-            table += "--------|-----------|-----------|------------|-----------------|--------\n"
+            table += "Context | Total Tok | Delta Tok | Cached Tok | Inc Prefill TPS | Gen TPS | Gen B/s\n"
+            table += "--------|-----------|-----------|------------|-----------------|---------|--------\n"
         for r in sorted(cached_results, key=lambda x: float(x["context_size"][:-1])):
             if r.get("cached_tokens", 0) == 0:
                 continue
             row = (
                 f"{r['context_size']:>7} | {r['prompt_tokens']:>9} | "
                 f"{r.get('delta_tokens', 0):>9} | {r.get('cached_tokens', 0):>10} | "
-                f"{r.get('incremental_prompt_tps', 0):>15.1f} | {r['generation_tps']:>7.1f}"
+                f"{r.get('incremental_prompt_tps', 0):>15.1f} | {r['generation_tps']:>7.1f} | "
+                f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}"
             )
             if cached_has_kv:
                 row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
             table += row + "\n"
 
     return table
+
+
+def _plot_throughput_panel(ax, x, context_sizes, bytes_per_sec, chars_per_sec, title):
+    """Draw a throughput panel: UTF-8 bytes/sec (bars) + chars/sec (twin axis line).
+
+    Used by both create_chart_ollama and create_chart_mlx to render the
+    tokenizer-independent throughput metrics consistently.
+    """
+    ax.set_title(title, fontsize=14, pad=10)
+    color_bytes = "#3949AB"
+    color_chars = "#43A047"
+
+    bars = ax.bar(x, bytes_per_sec, color=color_bytes, width=0.6, alpha=0.7, label="UTF-8 bytes/s")
+    if bytes_per_sec:
+        max_b = max(bytes_per_sec) if bytes_per_sec else 1
+        for bar, val in zip(bars, bytes_per_sec):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + max_b * 0.02,
+                f"{val:.0f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color=color_bytes,
+            )
+    ax.set_xticks(x)
+    ax.set_xticklabels(context_sizes)
+    ax.set_ylabel("Bytes/sec", color=color_bytes)
+    ax.tick_params(axis="y", labelcolor=color_bytes)
+    ax.set_ylim(0, max(bytes_per_sec) * 1.2 if bytes_per_sec and max(bytes_per_sec) > 0 else 1)
+    ax.grid(True, axis="y", alpha=0.3)
+
+    ax_right = ax.twinx()
+    ax_right.plot(x, chars_per_sec, "o-", color=color_chars, linewidth=2, markersize=8, label="Chars/s")
+    ax_right.set_ylabel("Chars/sec", color=color_chars)
+    ax_right.tick_params(axis="y", labelcolor=color_chars)
+    if chars_per_sec:
+        max_c = max(chars_per_sec) if chars_per_sec else 1
+        for i, c in enumerate(chars_per_sec):
+            ax_right.text(i, c + max_c * 0.02, f"{c:.0f}", ha="center", va="bottom", fontsize=8, color=color_chars)
+        ax_right.set_ylim(0, max(chars_per_sec) * 1.5 if max(chars_per_sec) > 0 else 1)
+
+    ax.legend(loc="upper left", fontsize=9)
+    ax_right.legend(loc="upper right", fontsize=9)
 
 
 def create_chart_ollama(results, model_name, hardware_info, output_path="benchmark_chart.png", framework="Ollama"):
@@ -480,6 +591,10 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     total_times = []
     generation_tokens = []
     ttft_times = []
+    gen_bytes_ps = []
+    gen_chars_ps = []
+    prompt_bytes_ps = []
+    prompt_chars_ps = []
 
     for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
@@ -488,9 +603,16 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
         total_times.append(r.get("total_time", r.get("wall_time", 0)))
         generation_tokens.append(r["generation_tokens"])
         ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
+        gen_bytes_ps.append(r.get("generation_utf8_bytes_per_sec", 0))
+        gen_chars_ps.append(r.get("generation_chars_per_sec", 0))
+        prompt_bytes_ps.append(r.get("prompt_utf8_bytes_per_sec", 0))
+        prompt_chars_ps.append(r.get("prompt_chars_per_sec", 0))
 
-    # Create figure with four subplots (2x2 grid)
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
+    # Create figure with six subplots (3x2 grid): existing 4 + 2 throughput panels
+    fig, axes = plt.subplots(3, 2, figsize=(15, 18), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
+    ax1, ax2 = axes[0]
+    ax3, ax4 = axes[1]
+    ax_thru_gen, ax_thru_prompt = axes[2]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -639,8 +761,21 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax4.grid(True, alpha=0.3)
     ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
 
+    # Throughput panels (tokenizer-independent): generation + prompt
+    _plot_throughput_panel(
+        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
+    )
+    _plot_throughput_panel(
+        ax_thru_prompt,
+        x,
+        context_sizes,
+        prompt_bytes_ps,
+        prompt_chars_ps,
+        "Prompt Throughput (tokenizer-free)",
+    )
+
     # Adjust layout with custom padding to prevent overlap
-    plt.subplots_adjust(top=0.9, bottom=0.1, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
+    plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
 
@@ -667,6 +802,10 @@ def create_chart_mlx(
     generation_tokens = []
     total_times = []
     ttft_times = []
+    gen_bytes_ps = []
+    gen_chars_ps = []
+    prompt_bytes_ps = []
+    prompt_chars_ps = []
 
     for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
         context_sizes.append(r["context_size"])
@@ -677,6 +816,10 @@ def create_chart_mlx(
         generation_tokens.append(r["generation_tokens"])
         total_times.append(r.get("total_time", 0))
         ttft_times.append(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)))
+        gen_bytes_ps.append(r.get("generation_utf8_bytes_per_sec", 0))
+        gen_chars_ps.append(r.get("generation_chars_per_sec", 0))
+        prompt_bytes_ps.append(r.get("prompt_utf8_bytes_per_sec", 0))
+        prompt_chars_ps.append(r.get("prompt_chars_per_sec", 0))
 
     has_kv_cache = any(v > 0 for v in kv_cache)
 
@@ -686,16 +829,17 @@ def create_chart_mlx(
     # KV growth across batch sizes is visible alongside the TPS panels.
     batch_has_kv = bool(batch_results) and any("kv_cache_gb" in r for r in batch_results)
 
-    # Create figure - 5x2 if batch+kv, 4x2 if just batch, else 3x2
+    # Layout: base 3 rows + always-on throughput row + optional batch rows.
+    # The throughput row is appended at the end so existing axes indices stay stable.
     if batch_has_kv:
+        num_rows = 6
+        fig_height = 28
+    elif batch_results:
         num_rows = 5
         fig_height = 24
-    elif batch_results:
+    else:
         num_rows = 4
         fig_height = 20
-    else:
-        num_rows = 3
-        fig_height = 16
     fig, axes = plt.subplots(num_rows, 2, figsize=(15, fig_height), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
     ax1, ax2 = axes[0]
     ax3, ax4 = axes[1]
@@ -704,6 +848,8 @@ def create_chart_mlx(
         ax7, ax8 = axes[3]
     if batch_has_kv:
         ax9, ax10 = axes[4]
+    # Throughput row is always the last row
+    ax_thru_gen, ax_thru_prompt = axes[num_rows - 1]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -1058,6 +1204,19 @@ def create_chart_mlx(
         ax10.tick_params(axis="y", labelcolor=color_bkv)
         ax10.set_ylim(0, max(batch_kv) * 1.2 if batch_kv and max(batch_kv) > 0 else 1)
         ax10.grid(True, axis="y", alpha=0.3)
+
+    # Final row: tokenizer-independent throughput panels (always present)
+    _plot_throughput_panel(
+        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
+    )
+    _plot_throughput_panel(
+        ax_thru_prompt,
+        x,
+        context_sizes,
+        prompt_bytes_ps,
+        prompt_chars_ps,
+        "Prompt Throughput (tokenizer-free)",
+    )
 
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)

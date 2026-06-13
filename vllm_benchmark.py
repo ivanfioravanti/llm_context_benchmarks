@@ -748,7 +748,7 @@ def run_benchmark(
     if estimated_from_text:
         print("  Token counts were not returned by vLLM and were estimated from text length.")
 
-    return {
+    result = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
         "generation_tokens": generation_tokens,
@@ -761,6 +761,7 @@ def run_benchmark(
         "generation_tps": generation_tps,
         "generated_text": generated_text,
     }
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

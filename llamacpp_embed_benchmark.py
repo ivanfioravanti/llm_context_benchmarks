@@ -109,7 +109,7 @@ def run_benchmark(
     else:
         generation_tps = 0.0
 
-    return {
+    result = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
         "generation_tokens": generation_tokens,
@@ -123,6 +123,7 @@ def run_benchmark(
         "time_to_first_token": prompt_time,
         "wall_time": total_time,
     }
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

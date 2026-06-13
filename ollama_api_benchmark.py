@@ -156,7 +156,7 @@ def run_benchmark(
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total time: {total_time:.2f}s (num_ctx={num_ctx})")
 
-        return {
+        result = {
             "context_size": context_file.stem,
             "prompt_tokens": prompt_eval_count,
             "prompt_tps": prompt_tps,
@@ -170,6 +170,7 @@ def run_benchmark(
             "generated_text": generated_text,
             "num_ctx": num_ctx,
         }
+        return common.add_throughput_metrics(result, prompt_text=prompt)
 
     except Exception as e:
         print(f"Error running benchmark: {e}")

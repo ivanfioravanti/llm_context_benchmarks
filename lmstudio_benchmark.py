@@ -291,7 +291,7 @@ def run_benchmark(
         print(f"  Time to first token: {ttft:.2f}s")
     print(f"  Total time: {total_time:.2f}s")
 
-    return {
+    result = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
         "prompt_tps": prompt_tps,
@@ -303,6 +303,7 @@ def run_benchmark(
         "time_to_first_token": ttft,
         "generated_text": generated_text,
     }
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def run_batch_benchmark(

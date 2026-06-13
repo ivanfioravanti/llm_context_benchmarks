@@ -156,9 +156,7 @@ def run_benchmark(
                     or usage_extra.get("ttft_s")
                     or 0.0
                 )
-                server_gen_duration = (
-                    usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
-                )
+                server_gen_duration = usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
                 peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
 
     except Exception as e:
@@ -168,8 +166,8 @@ def run_benchmark(
     end_time = time.time()
     total_time = end_time - start_time
 
-    ttft = server_prompt_eval if server_prompt_eval > 0 else (
-        (first_token_time - start_time) if first_token_time else 0.0
+    ttft = (
+        server_prompt_eval if server_prompt_eval > 0 else ((first_token_time - start_time) if first_token_time else 0.0)
     )
 
     # Decode window: prefer server-reported duration, then time between first
@@ -233,7 +231,7 @@ def run_benchmark(
     if peak_memory_gb > 0:
         result["peak_memory_gb"] = peak_memory_gb
 
-    return result
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def run_batch_benchmark(

@@ -122,9 +122,7 @@ def save_dflash_response(result: Dict, model_name: str, output_path: Path) -> No
         return
     with open(output_path, "a") as handle:
         if not result.get("generated_text"):
-            handle.write(
-                "[no `content` returned — generation hit max_tokens during reasoning]\n\n"
-            )
+            handle.write("[no `content` returned — generation hit max_tokens during reasoning]\n\n")
         handle.write("--- reasoning ---\n")
         handle.write(reasoning_text)
 
@@ -282,7 +280,7 @@ def run_benchmark(
     if reasoning_text:
         result["reasoning_text"] = reasoning_text
 
-    return result
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

@@ -25,6 +25,7 @@ from typing import Dict, Optional
 import requests
 
 from benchmark_common import (
+    add_throughput_metrics,
     create_output_directory,
     find_context_files,
     format_hardware_string,
@@ -163,7 +164,7 @@ def benchmark_llamacpp(
     prompt_tps = prompt_tokens / prompt_time if prompt_time > 0 else 0
     generation_tps = generation_tokens / predict_time if predict_time > 0 else 0
 
-    return {
+    result = {
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
         "generation_tokens": generation_tokens,
@@ -177,6 +178,7 @@ def benchmark_llamacpp(
         "generated_text": generated_text,
         "wall_time": total_time,
     }
+    return add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

@@ -104,8 +104,7 @@ def capture_logprobs_llamacpp(server_url: str, ref_file: Path, timeout: int = 60
     top_field = lp.get("top_logprobs")
     if not top_field:
         raise RuntimeError(
-            "llama.cpp server did not return top_logprobs. "
-            "Need a build that supports OpenAI-compat echo+logprobs."
+            "llama.cpp server did not return top_logprobs. " "Need a build that supports OpenAI-compat echo+logprobs."
         )
 
     tokens_field = lp.get("tokens", [])
@@ -159,9 +158,7 @@ def compute_kl_divergence(baseline: Dict, target: Dict) -> Dict:
 
     warnings: List[str] = []
     if baseline.get("ref_file") != target.get("ref_file"):
-        warnings.append(
-            f"ref_file mismatch: baseline={baseline.get('ref_file')}, target={target.get('ref_file')}"
-        )
+        warnings.append(f"ref_file mismatch: baseline={baseline.get('ref_file')}, target={target.get('ref_file')}")
 
     if n == 0:
         return {

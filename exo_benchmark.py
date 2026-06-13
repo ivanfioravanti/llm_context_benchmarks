@@ -305,7 +305,7 @@ def run_benchmark(
                 result["peak_memory_bytes"] = peak_memory_bytes
             if reasoning_text:
                 result["reasoning_text"] = reasoning_text
-            return result
+            return common.add_throughput_metrics(result, prompt_text=prompt)
 
         elif stream:
             stream_result = call_exo_streaming(
@@ -424,7 +424,7 @@ def run_benchmark(
     if reasoning_text:
         result["reasoning_text"] = reasoning_text
 
-    return result
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

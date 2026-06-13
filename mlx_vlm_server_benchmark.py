@@ -87,16 +87,8 @@ def _coerce_usage(usage: Dict, timings: Optional[Dict] = None) -> Dict:
     timings = timings or {}
     prompt_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
     completion_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
-    prompt_tps = float(
-        usage.get("prompt_tps")
-        or timings.get("prompt_per_second")
-        or 0.0
-    )
-    generation_tps = float(
-        usage.get("generation_tps")
-        or timings.get("predicted_per_second")
-        or 0.0
-    )
+    prompt_tps = float(usage.get("prompt_tps") or timings.get("prompt_per_second") or 0.0)
+    generation_tps = float(usage.get("generation_tps") or timings.get("predicted_per_second") or 0.0)
     peak_memory = float(usage.get("peak_memory") or timings.get("peak_memory") or 0.0)
     return {
         "prompt_tokens": prompt_tokens,
@@ -255,8 +247,8 @@ def run_benchmark(
     else:
         generation_tps = 0.0
 
-    eval_duration = generation_time if generation_time > 0 else (
-        generation_tokens / generation_tps if generation_tps > 0 else 0.0
+    eval_duration = (
+        generation_time if generation_time > 0 else (generation_tokens / generation_tps if generation_tps > 0 else 0.0)
     )
     prompt_eval_duration = ttft
 
@@ -283,13 +275,11 @@ def run_benchmark(
         "generated_text": generated_text,
         "peak_memory_gb": peak_memory_gb,
     }
-    return result
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Run benchmarks against mlx-vlm's OpenAI-compatible HTTP server"
-    )
+    parser = argparse.ArgumentParser(description="Run benchmarks against mlx-vlm's OpenAI-compatible HTTP server")
     parser.add_argument(
         "model",
         nargs="?",
@@ -387,11 +377,7 @@ def main() -> int:
     if request_model != model:
         print(f"Request model: {request_model}")
     print(f"Max tokens:  {args.max_tokens}")
-    cold_msg = (
-        "enabled (cache buster per prompt"
-        if args.cold_prefill
-        else "disabled (cache reuse allowed"
-    )
+    cold_msg = "enabled (cache buster per prompt" if args.cold_prefill else "disabled (cache reuse allowed"
     if args.cold_prefill and args.unload_between_rows:
         cold_msg += ", /unload between rows)"
     else:

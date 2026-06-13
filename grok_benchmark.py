@@ -261,7 +261,7 @@ def run_benchmark(
     if reasoning_text:
         result["reasoning_text"] = reasoning_text
 
-    return result
+    return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
 def main() -> int:

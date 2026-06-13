@@ -42,11 +42,11 @@ There are no automated tests in this project.
 - **Use `uv`** for all Python operations (install, run, sync).
 - **Code style**: Black (line-length 120) + isort (profile: black, line-length 120).
 - **Python 3.13+** required.
-- **Result dict contract**: All engines produce dicts with core keys: `context_size`, `prompt_tokens`, `prompt_tps`, `generation_tokens`, `generation_tps`, `total_time`, `eval_duration`, `prompt_eval_duration`, `time_to_first_token`, `generated_text`. MLX additionally includes `peak_memory_gb`.
+- **Result dict contract**: All engines produce dicts with core keys: `context_size`, `prompt_tokens`, `prompt_tps`, `generation_tokens`, `generation_tps`, `total_time`, `eval_duration`, `prompt_eval_duration`, `time_to_first_token`, `generated_text`. MLX additionally includes `peak_memory_gb`. Tokenizer-independent throughput keys (added by `benchmark_common.add_throughput_metrics`): `generation_utf8_bytes_per_sec`, `generation_chars_per_sec`, `prompt_utf8_bytes_per_sec`, `prompt_chars_per_sec` — every engine should call the helper once before returning so cross-tokenizer comparisons are possible.
 - **Common args**: Every engine calls `benchmark_common.setup_common_args(parser)` for shared CLI arguments (`--contexts`, `--max-tokens`, `--save-responses`, `--output-csv`, `--output-chart`, `--timeout`).
 - **Context files**: Named `{size}k.txt` (e.g., `2k.txt`, `0.5k.txt`). Discovered via glob.
 - **Output directories**: `output/benchmark_{engine}_{model}_{YYYYMMDD_HHMMSS}/`
 - **Conditional imports**: Framework-specific deps (mlx, paroquant) use `try/except ImportError`.
 - **`lmstudio_benchmark.py`** is an older script that doesn't use `setup_common_args()` or `save_all_outputs()` — it has its own manual argparse and output logic.
 - **`vllm_benchmark.py`** and **`llamacpp_embed_benchmark.py`** exist but are not registered as entry points in `pyproject.toml`.
-- **Two chart types**: `create_chart_ollama()` (2x2: prompt TPS, gen TPS, total time, TTFT) and `create_chart_mlx()` (3x2 or 4x2: adds memory and optional batch/perplexity charts).
+- **Two chart types**: `create_chart_ollama()` (3x2: prompt TPS, gen TPS, total time, TTFT, plus a row of tokenizer-free throughput panels — gen + prompt bytes/sec with chars/sec on a twin axis) and `create_chart_mlx()` (4x2 base, grows to 5x2/6x2 with batch/batch+KV: standard panels + memory + tokenizer-free throughput row + optional perplexity/batch rows).

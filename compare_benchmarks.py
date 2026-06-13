@@ -325,6 +325,16 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         ("generation_tps", "Text Generation Speed", "Tokens/sec"),
         ("ttft", "Time to First Token (TTFT)", "Time (seconds)"),
     ]
+    # Tokenizer-independent throughput. Only show when present in the data so
+    # older result CSVs (pre-helper) don't render empty panels.
+    has_throughput_data = any(
+        r.get("generation_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    )
+    if has_throughput_data:
+        subplot_specs += [
+            ("gen_bytes_ps", "Generation Speed (UTF-8 bytes/sec)", "Bytes/sec"),
+            ("gen_chars_ps", "Generation Speed (chars/sec)", "Chars/sec"),
+        ]
     if has_memory_data:
         subplot_specs.append(("memory", "Peak Memory Usage", "Memory (GB)"))
     if has_kv_cache_data:
@@ -406,6 +416,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         ttft_times = [r.get("time_to_first_token", r.get("prompt_eval_duration", 0)) for r in results]
         peak_memory = [r.get("peak_memory_gb", 0) for r in results]
         kv_cache_gb = [r.get("kv_cache_gb", 0) for r in results]
+        gen_bytes_ps = [r.get("generation_utf8_bytes_per_sec", 0) for r in results]
+        gen_chars_ps = [r.get("generation_chars_per_sec", 0) for r in results]
 
         context_nums = []
         for ctx in context_sizes:
@@ -421,9 +433,11 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 ttft_times,
                 peak_memory,
                 kv_cache_gb,
+                gen_bytes_ps,
+                gen_chars_ps,
             )
         )
-        cn, cs, pp, gn, tt, tf, pm, kv = zip(*sorted_data)
+        cn, cs, pp, gn, tt, tf, pm, kv, gbps, gcps = zip(*sorted_data)
         all_series.append(
             {
                 "context_nums": cn,
@@ -434,6 +448,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 "ttft": tf,
                 "memory": pm,
                 "kv_cache": kv,
+                "gen_bytes_ps": gbps,
+                "gen_chars_ps": gcps,
             }
         )
 
@@ -846,6 +862,8 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         # Calculate average metrics
         avg_prompt_tps = np.mean([r.get("prompt_tps", 0) for r in results])
         avg_generation_tps = np.mean([r.get("generation_tps", 0) for r in results])
+        avg_gen_bytes_per_sec = np.mean([r.get("generation_utf8_bytes_per_sec", 0) for r in results])
+        avg_gen_chars_per_sec = np.mean([r.get("generation_chars_per_sec", 0) for r in results])
         total_tokens_generated = sum([r.get("generation_tokens", 0) for r in results])
         total_time = sum([r.get("total_time", 0) for r in results])
 
@@ -885,12 +903,18 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         else:
             avg_inc_prompt_tps_str = "N/A"
 
+        # Tokenizer-independent throughput; "N/A" for older runs that lack the field
+        gen_bps_str = f"{avg_gen_bytes_per_sec:.1f}" if avg_gen_bytes_per_sec > 0 else "N/A"
+        gen_cps_str = f"{avg_gen_chars_per_sec:.1f}" if avg_gen_chars_per_sec > 0 else "N/A"
+
         table_data.append(
             {
                 "Engine/Model": display_name,
                 "Hardware": f"{chip}, {memory}GB RAM, {cores} cores",
                 "Avg Prompt TPS": f"{avg_prompt_tps:.1f}",
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
+                "Avg Gen B/s": gen_bps_str,
+                "Avg Gen Ch/s": gen_cps_str,
                 "Avg Inc Prompt TPS": avg_inc_prompt_tps_str,
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Peak KV Cache": f"{peak_kv_cache:.2f}GB" if peak_kv_cache > 0 else "N/A",
@@ -1361,6 +1385,13 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
     metric_keys = ["avg_prompt_tps", "avg_gen_tps"]
     col_labels = ["Avg Prompt TPS", "Avg Gen TPS"]
+    # Tokenizer-independent metrics — added only if any run has them (auto-hidden for older data)
+    has_throughput_data = any(
+        r.get("generation_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    )
+    if has_throughput_data:
+        metric_keys += ["avg_gen_bytes_per_sec", "avg_gen_chars_per_sec"]
+        col_labels += ["Avg Gen\nBytes/sec", "Avg Gen\nChars/sec"]
     if has_cached_data:
         metric_keys.append("avg_inc_prompt_tps")
         col_labels.append("Avg Inc\nPrompt TPS")
@@ -1382,6 +1413,10 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
         avg_prompt_tps = float(np.mean([r.get("prompt_tps", 0) for r in results]))
         avg_gen_tps = float(np.mean([r.get("generation_tps", 0) for r in results]))
+        gen_bps_vals = [r.get("generation_utf8_bytes_per_sec", 0) for r in results]
+        gen_cps_vals = [r.get("generation_chars_per_sec", 0) for r in results]
+        avg_gen_bytes_per_sec = float(np.mean(gen_bps_vals)) if any(v > 0 for v in gen_bps_vals) else float("nan")
+        avg_gen_chars_per_sec = float(np.mean(gen_cps_vals)) if any(v > 0 for v in gen_cps_vals) else float("nan")
 
         cached = data.get("cached_results", [])
         avg_inc_prompt_tps = (
@@ -1402,6 +1437,8 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
                 "base_model": base_model,
                 "avg_prompt_tps": avg_prompt_tps,
                 "avg_gen_tps": avg_gen_tps,
+                "avg_gen_bytes_per_sec": avg_gen_bytes_per_sec,
+                "avg_gen_chars_per_sec": avg_gen_chars_per_sec,
                 "avg_inc_prompt_tps": avg_inc_prompt_tps,
                 "peak_batch_prompt_tps": peak_batch_prompt,
                 "peak_batch_gen_tps": peak_batch_gen,
@@ -1666,8 +1703,14 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
                     pct = normalized[i, j]
                     text_color = "white" if pct < 25 else "black"
                     ax.text(
-                        j, i, f"{pct:.0f}%\n({val:.1f})",
-                        ha="center", va="center", fontsize=8, fontweight="bold", color=text_color,
+                        j,
+                        i,
+                        f"{pct:.0f}%\n({val:.1f})",
+                        ha="center",
+                        va="center",
+                        fontsize=8,
+                        fontweight="bold",
+                        color=text_color,
                     )
 
         ax.set_xticks(range(n_cols))
@@ -1799,8 +1842,16 @@ def create_quality_chart(benchmark_data: List[Dict], output_dir: Path) -> None:
         return
 
     readable_colors = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
     ]
     colors = readable_colors[: len(benchmark_data)]
     if len(benchmark_data) > len(readable_colors):
@@ -1830,8 +1881,15 @@ def create_quality_chart(benchmark_data: List[Dict], output_dir: Path) -> None:
         ax.set_title("Perplexity (lower is better)", fontweight="bold", fontsize=13)
         ax.grid(True, axis="y", alpha=0.3)
         for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{val:.2f}",
-                    ha="center", va="bottom", fontsize=10, fontweight="bold")
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{val:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+                fontweight="bold",
+            )
         panel_idx += 1
 
     if has_kl:
@@ -1852,8 +1910,15 @@ def create_quality_chart(benchmark_data: List[Dict], output_dir: Path) -> None:
         ax.set_title("KL Divergence vs Baseline (lower is better)", fontweight="bold", fontsize=13)
         ax.grid(True, axis="y", alpha=0.3)
         for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{val:.3f}",
-                    ha="center", va="bottom", fontsize=10, fontweight="bold")
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{val:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+                fontweight="bold",
+            )
 
     plt.tight_layout()
     out_path = output_dir / "comparison_quality.png"

@@ -26,15 +26,24 @@ def parse_folder_name(folder_name: str):
     """
     body = folder_name
     if body.startswith("benchmark_"):
-        body = body[len("benchmark_"):]
+        body = body[len("benchmark_") :]
 
     # Known multi-word engines (longest first)
-    engines_multi = ["mlx-vlm", "mlx-distributed", "ollama-api", "ollama-cli", "llamacpp", "lmstudio", "openai", "paroquant"]
+    engines_multi = [
+        "mlx-vlm",
+        "mlx-distributed",
+        "ollama-api",
+        "ollama-cli",
+        "llamacpp",
+        "lmstudio",
+        "openai",
+        "paroquant",
+    ]
     engine = None
     for eng in engines_multi:
         if body.startswith(eng + "_") or body.startswith(eng + "-"):
             engine = eng
-            body = body[len(eng):].lstrip("_")
+            body = body[len(eng) :].lstrip("_")
             break
 
     if engine is None:
@@ -45,6 +54,7 @@ def parse_folder_name(folder_name: str):
     # body is now "{model}_{cache}_{machine}_{timestamp}" or similar
     # Strip timestamp: _YYYYMMDD_HHMMSS
     import re
+
     body = re.sub(r"_\d{8}_\d{6}$", "", body)
 
     # Strip cache tag (_nocache or _cache) followed by optional machine name at end
@@ -197,6 +207,7 @@ def main():
         else:
             # Try glob
             import glob
+
             for match in sorted(glob.glob(pattern)):
                 mp = Path(match)
                 if mp.is_dir() and (mp / "benchmark_results.csv").exists():

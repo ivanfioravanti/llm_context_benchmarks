@@ -277,7 +277,7 @@ def run_benchmark(
         print(f"  KV cache: {kv_cache_gb:.3f} GB")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
-        return {
+        result = {
             "context_size": Path(context_file).stem,
             "prompt_tokens": prompt_tokens,
             "prompt_tps": prompt_tps,
@@ -293,6 +293,7 @@ def run_benchmark(
             "prompt_eval_duration": prompt_eval_duration,
             "time_to_first_token": prompt_eval_duration,
         }
+        return common.add_throughput_metrics(result, prompt_text=prompt)
 
     except Exception as e:
         print(f"Error running benchmark: {e}")

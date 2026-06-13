@@ -322,7 +322,7 @@ def run_cli_benchmark(
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
-        return {
+        result = {
             "context_size": context_file.stem,
             "prompt_tokens": prompt_eval_count,
             "prompt_tps": metrics.get("prompt_eval_rate", 0),
@@ -336,6 +336,7 @@ def run_cli_benchmark(
             "generated_text": generated_text,
             "wall_time": total_wall_time,
         }
+        return common.add_throughput_metrics(result, prompt_text=prompt)
 
     except subprocess.TimeoutExpired:
         print(f"Timeout running benchmark for {context_file}")

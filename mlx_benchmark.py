@@ -100,6 +100,7 @@ def load_model(model_url: str, trust_remote_code: bool = False) -> Tuple:
     # Ensure PreTrainedConfig exposes max_position_embeddings for model types
     # not yet registered in transformers (e.g. deepseek_v4)
     from transformers import PreTrainedConfig
+
     if not hasattr(PreTrainedConfig, "max_position_embeddings"):
         PreTrainedConfig.max_position_embeddings = None
 
@@ -275,6 +276,7 @@ def run_benchmark(
         generation_tps = last_response.generation_tps
         peak_memory_gb = last_response.peak_memory
         prompt_eval_duration = safe_duration(prompt_tokens, prompt_tps)
+        eval_duration = safe_duration(generation_tokens, generation_tps)
         kv_cache_gb = common.kv_cache_bytes(prompt_cache) / 1e9
 
         print(f"  Prompt: {prompt_tokens} tokens, {prompt_tps:.3f} tokens-per-sec")
@@ -285,7 +287,7 @@ def run_benchmark(
             print(f"  Time to first token: {prompt_eval_duration:.2f}s")
         print(f"  Total wall time: {total_wall_time:.2f}s")
 
-        return {
+        result = {
             "context_size": Path(context_file).stem,
             "prompt_tokens": prompt_tokens,
             "prompt_tps": prompt_tps,
@@ -295,9 +297,11 @@ def run_benchmark(
             "kv_cache_gb": kv_cache_gb,
             "total_time": total_wall_time,
             "generated_text": generated_text,
+            "eval_duration": eval_duration,
             "prompt_eval_duration": prompt_eval_duration,
             "time_to_first_token": prompt_eval_duration,
         }
+        return common.add_throughput_metrics(result, prompt_text=prompt)
 
     except Exception as e:
         print(f"Error running benchmark: {e}")
@@ -372,6 +376,8 @@ def run_cached_benchmark(
         print(f"{'=' * 50}")
 
         try:
+            with open(context_file, "r") as f:
+                raw_text = f.read()
             curr_tokens = full_tokens[:target_count]
             delta_tokens = curr_tokens[prev_count:]
             num_delta = len(delta_tokens)
@@ -476,26 +482,25 @@ def run_cached_benchmark(
             # Skip the first context (no prior cache prefix — identical to a cold prefill)
             if cached_token_count > 0:
                 generation_duration = max(total_wall_time - prompt_eval_duration, 0.0)
-                results.append(
-                    {
-                        "context_size": Path(context_file).stem,
-                        "prompt_tokens": total_prompt_tokens,
-                        "delta_tokens": num_delta,
-                        "cached_tokens": cached_token_count,
-                        "prompt_tps": last_response.prompt_tps,
-                        "incremental_prompt_tps": incremental_prompt_tps,
-                        "generation_tokens": generation_tokens,
-                        "generation_tps": generation_tps,
-                        "peak_memory_gb": peak_memory_gb,
-                        "kv_cache_gb": kv_cache_gb,
-                        "total_time": total_wall_time,
-                        "eval_duration": generation_duration,
-                        "generated_text": generated_text,
-                        "prompt_eval_duration": prompt_eval_duration,
-                        "time_to_first_token": prompt_eval_duration,
-                        "cached": True,
-                    }
-                )
+                cached_result = {
+                    "context_size": Path(context_file).stem,
+                    "prompt_tokens": total_prompt_tokens,
+                    "delta_tokens": num_delta,
+                    "cached_tokens": cached_token_count,
+                    "prompt_tps": last_response.prompt_tps,
+                    "incremental_prompt_tps": incremental_prompt_tps,
+                    "generation_tokens": generation_tokens,
+                    "generation_tps": generation_tps,
+                    "peak_memory_gb": peak_memory_gb,
+                    "kv_cache_gb": kv_cache_gb,
+                    "total_time": total_wall_time,
+                    "eval_duration": generation_duration,
+                    "generated_text": generated_text,
+                    "prompt_eval_duration": prompt_eval_duration,
+                    "time_to_first_token": prompt_eval_duration,
+                    "cached": True,
+                }
+                results.append(common.add_throughput_metrics(cached_result, prompt_text=raw_text))
 
             prev_count = target_count
 
