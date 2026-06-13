@@ -612,7 +612,8 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     fig, axes = plt.subplots(3, 2, figsize=(15, 18), gridspec_kw={"hspace": 0.4, "wspace": 0.3})
     ax1, ax2 = axes[0]
     ax3, ax4 = axes[1]
-    ax_thru_gen, ax_thru_prompt = axes[2]
+    # Throughput row: prompt on the left, generation (decode) on the right
+    ax_thru_prompt, ax_thru_gen = axes[2]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -761,10 +762,7 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax4.grid(True, alpha=0.3)
     ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
 
-    # Throughput panels (tokenizer-independent): generation + prompt
-    _plot_throughput_panel(
-        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
-    )
+    # Throughput panels (tokenizer-independent): prompt (left) + generation (right)
     _plot_throughput_panel(
         ax_thru_prompt,
         x,
@@ -772,6 +770,9 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
         prompt_bytes_ps,
         prompt_chars_ps,
         "Prompt Throughput (tokenizer-free)",
+    )
+    _plot_throughput_panel(
+        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
     )
 
     # Adjust layout with custom padding to prevent overlap
@@ -848,8 +849,8 @@ def create_chart_mlx(
         ax7, ax8 = axes[3]
     if batch_has_kv:
         ax9, ax10 = axes[4]
-    # Throughput row is always the last row
-    ax_thru_gen, ax_thru_prompt = axes[num_rows - 1]
+    # Throughput row is always the last row: prompt on the left, generation (decode) on the right
+    ax_thru_prompt, ax_thru_gen = axes[num_rows - 1]
 
     # Model name and hardware in title
     hardware_str = format_hardware_string(hardware_info)
@@ -1205,10 +1206,7 @@ def create_chart_mlx(
         ax10.set_ylim(0, max(batch_kv) * 1.2 if batch_kv and max(batch_kv) > 0 else 1)
         ax10.grid(True, axis="y", alpha=0.3)
 
-    # Final row: tokenizer-independent throughput panels (always present)
-    _plot_throughput_panel(
-        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
-    )
+    # Final row: tokenizer-independent throughput panels (prompt left, generation right)
     _plot_throughput_panel(
         ax_thru_prompt,
         x,
@@ -1216,6 +1214,9 @@ def create_chart_mlx(
         prompt_bytes_ps,
         prompt_chars_ps,
         "Prompt Throughput (tokenizer-free)",
+    )
+    _plot_throughput_panel(
+        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
     )
 
     # Adjust layout with custom padding to prevent overlap

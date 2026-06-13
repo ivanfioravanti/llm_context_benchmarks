@@ -326,11 +326,21 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         ("ttft", "Time to First Token (TTFT)", "Time (seconds)"),
     ]
     # Tokenizer-independent throughput. Only show when present in the data so
-    # older result CSVs (pre-helper) don't render empty panels.
-    has_throughput_data = any(
+    # older result CSVs (pre-helper) don't render empty panels. Ordered
+    # prompt-first so prompt sits left of generation (decode), matching the
+    # single-run detailed chart layout.
+    has_prompt_throughput = any(
+        r.get("prompt_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    )
+    has_gen_throughput = any(
         r.get("generation_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
     )
-    if has_throughput_data:
+    if has_prompt_throughput:
+        subplot_specs += [
+            ("prompt_bytes_ps", "Prompt Speed (UTF-8 bytes/sec)", "Bytes/sec"),
+            ("prompt_chars_ps", "Prompt Speed (chars/sec)", "Chars/sec"),
+        ]
+    if has_gen_throughput:
         subplot_specs += [
             ("gen_bytes_ps", "Generation Speed (UTF-8 bytes/sec)", "Bytes/sec"),
             ("gen_chars_ps", "Generation Speed (chars/sec)", "Chars/sec"),
@@ -418,6 +428,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         kv_cache_gb = [r.get("kv_cache_gb", 0) for r in results]
         gen_bytes_ps = [r.get("generation_utf8_bytes_per_sec", 0) for r in results]
         gen_chars_ps = [r.get("generation_chars_per_sec", 0) for r in results]
+        prompt_bytes_ps = [r.get("prompt_utf8_bytes_per_sec", 0) for r in results]
+        prompt_chars_ps = [r.get("prompt_chars_per_sec", 0) for r in results]
 
         context_nums = []
         for ctx in context_sizes:
@@ -435,9 +447,24 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 kv_cache_gb,
                 gen_bytes_ps,
                 gen_chars_ps,
+                prompt_bytes_ps,
+                prompt_chars_ps,
             )
         )
-        cn, cs, pp, gn, tt, tf, pm, kv, gbps, gcps = zip(*sorted_data)
+        (
+            cn,
+            cs,
+            pp,
+            gn,
+            tt,
+            tf,
+            pm,
+            kv,
+            gbps,
+            gcps,
+            pbps,
+            pcps,
+        ) = zip(*sorted_data)
         all_series.append(
             {
                 "context_nums": cn,
@@ -450,6 +477,8 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 "kv_cache": kv,
                 "gen_bytes_ps": gbps,
                 "gen_chars_ps": gcps,
+                "prompt_bytes_ps": pbps,
+                "prompt_chars_ps": pcps,
             }
         )
 
