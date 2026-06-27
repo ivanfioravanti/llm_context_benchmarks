@@ -28,9 +28,19 @@ def get_hardware_info():
     info["cpu_count"] = psutil.cpu_count(logical=False)
     info["cpu_count_logical"] = psutil.cpu_count(logical=True)
 
-    # Get memory info
-    mem = psutil.virtual_memory()
-    info["memory_gb"] = round(mem.total / (1024**3), 1)
+    # Get memory info. Some macOS/Python/psutil combinations can fail inside
+    # host_statistics64(); keep benchmarking usable and fall back to sysctl.
+    try:
+        mem = psutil.virtual_memory()
+        info["memory_gb"] = round(mem.total / (1024**3), 1)
+    except Exception:
+        if platform.system() == "Darwin":
+            try:
+                result = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    info["memory_gb"] = round(int(result.stdout.strip()) / (1024**3), 1)
+            except Exception:
+                pass
 
     # Try to get Mac-specific info if on macOS
     if platform.system() == "Darwin":
@@ -1251,7 +1261,11 @@ def _get_machine_name() -> str:
 
 
 def create_output_directory(
-    framework_name: str, model_name: str, base_dir: str = "output", cold_prefill: bool = True
+    framework_name: str,
+    model_name: str,
+    base_dir: str = "output",
+    cold_prefill: bool = True,
+    machine_name: Optional[str] = None,
 ) -> Path:
     """Create timestamped output directory for benchmark results.
 
@@ -1260,6 +1274,7 @@ def create_output_directory(
         model_name: Name of the model being benchmarked
         base_dir: Base directory for output (default: "output")
         cold_prefill: If True, append _nocache suffix to directory name
+        machine_name: Optional hardware label to use in the directory name
 
     Returns:
         Path object for the created directory
@@ -1271,8 +1286,9 @@ def create_output_directory(
     # Sanitize model name for filesystem
     model_safe = model_name.replace("/", "_").replace(":", "_")
 
-    # Extract short machine name for the directory
-    machine_name = _get_machine_name()
+    # Extract short machine name for the directory, unless a server-backed
+    # benchmark provided a remote hardware label.
+    machine_name = machine_name or _get_machine_name()
 
     cache_tag = "_nocache" if cold_prefill else "_cache"
     output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}-{machine_name}{cache_tag}_{timestamp}"

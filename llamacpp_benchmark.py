@@ -65,6 +65,11 @@ def get_server_info(server_url: str) -> Dict:
     return {}
 
 
+def _hardware_folder_label(label: str) -> str:
+    """Return a compact filesystem-safe hardware label."""
+    return "".join(ch for ch in label.replace("Apple ", "") if ch.isalnum())
+
+
 def benchmark_llamacpp(
     server_url: str,
     context_file: Path,
@@ -211,6 +216,20 @@ def main() -> int:
         action="store_true",
         help="Skip top-K logprob capture used by compare_benchmarks --kl-baseline",
     )
+    parser.add_argument(
+        "--server-hardware",
+        help="Remote server hardware label to store in results (e.g. 'GB10' or 'NVIDIA RTX 5090')",
+    )
+    parser.add_argument(
+        "--server-memory-gb",
+        type=float,
+        help="Remote server memory in GB to store in results",
+    )
+    parser.add_argument(
+        "--server-cores",
+        type=int,
+        help="Remote server CPU/core count to store in results",
+    )
 
     # Add common arguments
     setup_common_args(parser)
@@ -237,6 +256,16 @@ def main() -> int:
 
     # Get hardware info
     hardware_info = get_hardware_info()
+    if args.server_hardware:
+        hardware_info["client_chip"] = hardware_info.get("chip")
+        hardware_info["client_model"] = hardware_info.get("model")
+        hardware_info["chip"] = args.server_hardware
+        hardware_info["model"] = "Remote llama.cpp server"
+        hardware_info["api_endpoint"] = server_url
+        if args.server_memory_gb is not None:
+            hardware_info["memory_gb"] = args.server_memory_gb
+        if args.server_cores is not None:
+            hardware_info["total_cores"] = args.server_cores
     hardware_str = format_hardware_string(hardware_info)
 
     print(f"\nHardware: {hardware_str}")
@@ -250,7 +279,8 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = create_output_directory("llamacpp", args.model, cold_prefill=args.cold_prefill)
+    machine_name = _hardware_folder_label(args.server_hardware) if args.server_hardware else None
+    output_dir = create_output_directory("llamacpp", args.model, cold_prefill=args.cold_prefill, machine_name=machine_name)
 
     # Capture top-K logprobs on a fixed reference text for later KL comparison
     if not args.no_kl_capture:

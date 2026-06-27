@@ -46,6 +46,14 @@ def ensure_endpoint(url: str) -> str:
     return normalized
 
 
+def ensure_metrics_endpoint(url: str) -> str:
+    """Normalize a vLLM server URL for the Prometheus `/metrics` endpoint."""
+    normalized = ensure_endpoint(url)
+    if normalized.endswith("/v1"):
+        normalized = normalized[: -len("/v1")]
+    return normalized.rstrip("/")
+
+
 def list_vllm_models(base_url: str, api_key: Optional[str] = None, timeout: int = 5) -> list[str]:
     """List model IDs served by vLLM via `/v1/models`."""
     headers: Dict[str, str] = {"Content-Type": "application/json"}
@@ -600,6 +608,7 @@ def run_benchmark(
     model_name: str,
     context_file: Path,
     base_url: str,
+    metrics_base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     max_tokens: int = 128,
     temperature: float = 0.7,
@@ -620,10 +629,11 @@ def run_benchmark(
         prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
     metrics_before: Dict[str, float] = {}
+    metrics_endpoint = metrics_base_url or base_url
     if use_vllm_metrics:
         try:
             metrics_before = _read_vllm_metrics(
-                base_url,
+                metrics_endpoint,
                 model_name,
                 api_key=api_key,
                 timeout=timeout,
@@ -686,7 +696,7 @@ def run_benchmark(
     if use_vllm_metrics and metrics_before:
         try:
             metrics_after = _read_vllm_metrics(
-                base_url,
+                metrics_endpoint,
                 model_name,
                 api_key=api_key,
                 timeout=timeout,
@@ -722,6 +732,22 @@ def run_benchmark(
         if inferred_gen > 0:
             generation_tokens = inferred_gen
             estimated_from_text = estimated_from_text or generation_tokens == 0
+
+    if metric_deltas:
+        (
+            prompt_tokens,
+            generation_tokens,
+            total_tokens,
+            metrics_prompt_eval,
+            metrics_eval_duration,
+            metrics_time_to_first,
+        ) = _infer_from_vllm_metrics(metric_deltas, prompt_tokens, generation_tokens, total_tokens)
+        if math.isnan(timings.get("prompt_eval_duration", math.nan)) and not math.isnan(metrics_prompt_eval):
+            timings["prompt_eval_duration"] = metrics_prompt_eval
+        if math.isnan(timings.get("eval_duration", math.nan)) and not math.isnan(metrics_eval_duration):
+            timings["eval_duration"] = metrics_eval_duration
+        if math.isnan(timings.get("time_to_first_token", math.nan)) and not math.isnan(metrics_time_to_first):
+            timings["time_to_first_token"] = metrics_time_to_first
 
     prompt_eval_duration = timings.get("prompt_eval_duration", math.nan)
     eval_duration = timings.get("eval_duration", math.nan)
@@ -822,7 +848,12 @@ def main() -> int:
         action="store_false",
         help="Disable vLLM /metrics sampling for stats.",
     )
-    parser.set_defaults(metrics=False)
+    parser.set_defaults(metrics=True)
+    parser.add_argument(
+        "--metrics-base-url",
+        default=None,
+        help="Base URL for vLLM Prometheus metrics (default: derive server root from --base-url)",
+    )
     parser.add_argument(
         "--cold-prefill",
         action=argparse.BooleanOptionalAction,
@@ -835,9 +866,10 @@ def main() -> int:
     args = parser.parse_args()
 
     base_url = ensure_endpoint(args.base_url)
+    metrics_base_url = ensure_metrics_endpoint(args.metrics_base_url or args.base_url)
     api_key = args.api_key
 
-    context_files = common.find_context_files(args.contexts, args.context_dir)
+    context_files = common.find_context_files(args.contexts)
     if not context_files:
         return 1
 
@@ -860,7 +892,7 @@ def main() -> int:
         print("Stream mode disabled: time-to-first-token unavailable; using measured totals")
 
     if args.metrics:
-        print("vLLM metrics fallback enabled: sampling /metrics between requests for missing usage/timings.")
+        print(f"vLLM metrics fallback enabled: sampling {metrics_base_url}/metrics between requests.")
     else:
         print("vLLM metrics fallback disabled.")
 
@@ -871,7 +903,7 @@ def main() -> int:
     )
     print(f"Timeout: {args.timeout}s")
 
-    output_dir = common.create_output_directory("vllm", args.model, args.output_dir, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory("vllm", args.model, cold_prefill=args.cold_prefill)
 
     # Warmup run
     warmup_file = common.find_warmup_file()
@@ -884,6 +916,7 @@ def main() -> int:
                 model_name=args.model,
                 context_file=warmup_file,
                 base_url=base_url,
+                metrics_base_url=metrics_base_url,
                 api_key=api_key,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
@@ -914,6 +947,7 @@ def main() -> int:
                     model_name=args.model,
                     context_file=context_file,
                     base_url=base_url,
+                    metrics_base_url=metrics_base_url,
                     api_key=api_key,
                     max_tokens=args.max_tokens,
                     temperature=args.temperature,
@@ -993,6 +1027,7 @@ def main() -> int:
             n_runs=args.runs,
             model_name=args.model,
             base_url=base_url,
+            metrics_base_url=metrics_base_url,
             api_key=api_key,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
