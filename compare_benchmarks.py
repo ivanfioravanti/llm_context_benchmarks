@@ -35,16 +35,31 @@ def _clean_display_name(name: str) -> str:
     return re.sub(r"_\d{8,}$", "", name)
 
 
+def _machine_label(hardware_info: dict) -> str:
+    """Short, human-friendly per-machine identifier for chart labels.
+
+    Prefers the explicit ``machine_label`` (recorded by engines for remote or
+    custom-labelled servers, e.g. "Spark" for a DGX Spark) and falls back to the
+    chip name (e.g. "M3 Ultra"). The ``Apple `` prefix is dropped so Apple
+    Silicon chips read as ``M3 Ultra`` / ``M5 Max`` — the same shape as a custom
+    server label like ``Spark``, which is what lets a multi-machine legend show
+    peer hardware identifiers (``M3 Ultra``, ``M5 Max``, ``Spark``).
+    """
+    hw = hardware_info or {}
+    label = hw.get("machine_label") or hw.get("chip", "Unknown")
+    return label.replace("Apple ", "").strip()
+
+
 def _run_display_names(benchmark_data: List[Dict]) -> List[str]:
     """Build legend-ready run labels, appending the chip identifier whenever the
     set of runs spans more than one machine — otherwise the same-named runs
     would collide in legends (e.g. two `mtplx-qwen36-27b` entries)."""
     base = [_clean_display_name(d["display_name"]) for d in benchmark_data]
-    chips = [d.get("hardware_info", {}).get("chip", "").replace("Apple ", "").strip() for d in benchmark_data]
-    distinct_chips = {c for c in chips if c}
-    if len(distinct_chips) <= 1:
+    machines = [_machine_label(d.get("hardware_info", {})) for d in benchmark_data]
+    distinct_machines = {m for m in machines if m}
+    if len(distinct_machines) <= 1:
         return base
-    return [f"{name} [{chip}]" if chip else name for name, chip in zip(base, chips)]
+    return [f"{name} [{machine}]" if machine else name for name, machine in zip(base, machines)]
 
 
 def _folder_label(folder_name: str) -> str:
@@ -143,13 +158,23 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
             body = body[: middle.start()] + body[middle.end() - 1 :]
 
     # Body is now "{model}", "{model}-{machine}", or "{model}_{machine}".
-    # Strip a trailing machine token (separator may be "-" or "_") if it
-    # matches the recorded chip or the Apple Silicon naming convention.
-    chip_compact = re.sub(r"\s+", "", (hardware_info or {}).get("chip", "").replace("Apple ", ""))
+    # Strip a trailing machine token (separator may be "-" or "_") if it matches
+    # the recorded chip, the explicit machine_label (set by engines for remote /
+    # custom-labelled servers, e.g. "Spark"), or the Apple Silicon naming
+    # convention. Without the machine_label check, a server whose folder token
+    # differs from the recorded chip (e.g. "Spark" when the captured chip is the
+    # client's) would leak into the model name.
+    hw = hardware_info or {}
+    chip_compact = re.sub(r"\s+", "", hw.get("chip", "").replace("Apple ", ""))
+    machine_label = (hw.get("machine_label") or "").strip()
     machine_match = re.search(r"[-_]([^-_]+)$", body)
     if machine_match:
         tail = machine_match.group(1)
-        if (chip_compact and tail == chip_compact) or re.match(r"^M\d[A-Za-z0-9]*$", tail):
+        if (
+            (chip_compact and tail == chip_compact)
+            or (machine_label and tail == machine_label)
+            or re.match(r"^M\d[A-Za-z0-9]*$", tail)
+        ):
             body = body[: machine_match.start()]
 
     return engine, body or "unknown", cache_mode
@@ -1349,7 +1374,7 @@ def create_comparison_table_image(benchmark_data: List[Dict], output_dir: Path):
     per_run_hw = []
     for data in benchmark_data:
         hw = data.get("hardware_info", {})
-        chip = hw.get("chip", "Unknown").replace("Apple ", "")
+        chip = _machine_label(hw)
         mem_gb = hw.get("memory_gb", "")
         descriptor = f"{chip} \u00b7 {mem_gb} GB" if mem_gb else chip
         per_run_hw.append({"chip": chip, "descriptor": descriptor})
@@ -1435,7 +1460,7 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
             continue
 
         hardware_info = data["hardware_info"]
-        chip_short = hardware_info.get("chip", "Unknown").replace("Apple ", "")
+        chip_short = _machine_label(hardware_info)
         quant = _extract_quantization(data["model"])
         base_model = _extract_base_model(data["model"], hardware_info, quant)
         cache_mode = data.get("cache_mode", "")
@@ -1657,7 +1682,7 @@ def create_speed_heatmap(benchmark_data: List[Dict], output_dir: Path):
         cache_label = " (cached)" if cache_mode == "cache" else ""
 
         # Include chip so rows for the same model on different hardware are distinguishable.
-        chip_short = data["hardware_info"].get("chip", "Unknown").replace("Apple ", "")
+        chip_short = _machine_label(data["hardware_info"])
         label = f"{data['model']} — {chip_short}{cache_label}"
 
         run_data.append({"label": label, "ctx_map": ctx_map, "engine": data.get("engine", "")})
