@@ -50,6 +50,16 @@ def _machine_label(hardware_info: dict) -> str:
     return label.replace("Apple ", "").strip()
 
 
+def _hardware_token(chip: str) -> str:
+    """Punctuation-free form of a chip name for matching the hardware token
+    embedded in folder names, which flatten spaces and parens — e.g.
+    ``NVIDIA GB10 (DGX Spark)`` -> ``NVIDIAGB10DGXSpark`` (the folder token).
+    Whitespace-only collapsing kept the parens and broke the match, leaving the
+    hardware suffix on the model name where the quant parser then ate it.
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "", (chip or "").replace("Apple ", ""))
+
+
 def _run_display_names(benchmark_data: List[Dict]) -> List[str]:
     """Build legend-ready run labels, appending the chip identifier whenever the
     set of runs spans more than one machine — otherwise the same-named runs
@@ -165,7 +175,7 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
     # differs from the recorded chip (e.g. "Spark" when the captured chip is the
     # client's) would leak into the model name.
     hw = hardware_info or {}
-    chip_compact = re.sub(r"\s+", "", hw.get("chip", "").replace("Apple ", ""))
+    chip_compact = _hardware_token(hw.get("chip", ""))
     machine_label = (hw.get("machine_label") or "").strip()
     machine_match = re.search(r"[-_]([^-_]+)$", body)
     if machine_match:
@@ -186,8 +196,7 @@ def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
     # Strip date/time fragments like _20260324 or _20260324_092407
     base = re.sub(r"[-_]\d{8,}(?:[-_]\d+)*", "", base)
     # Strip hardware chip compact form (e.g. "M5 Max" → "M5Max")
-    chip = hardware_info.get("chip", "").replace("Apple ", "")
-    chip_compact = re.sub(r"\s+", "", chip)
+    chip_compact = _hardware_token(hardware_info.get("chip", ""))
     if chip_compact:
         base = re.sub(r"[-_]?" + re.escape(chip_compact) + r"[-_]?", "", base, flags=re.IGNORECASE)
     # Strip quantization token
@@ -2084,6 +2093,25 @@ Examples:
     if not benchmark_data:
         print("No valid benchmark data found!")
         return 1
+
+    # Keep only context sizes present in every run so charts/tables don't
+    # compare a size one engine reached against engines that didn't (e.g. a
+    # 128K run alongside two that topped out at 64K). Every downstream
+    # chart/table reads data["results"], so filtering here fixes them all.
+    per_run_contexts = [{r["context_size"] for r in d["results"]} for d in benchmark_data]
+    common_contexts = set.intersection(*per_run_contexts) if per_run_contexts else set()
+    if common_contexts:
+        for d in benchmark_data:
+            extra = {r["context_size"] for r in d["results"]} - common_contexts
+            if extra:
+                dropped = sorted(extra, key=lambda s: float(s.rstrip("k")))
+                d["results"] = [r for r in d["results"] if r["context_size"] in common_contexts]
+                print(
+                    f"  · {_clean_display_name(d['display_name'])}: dropped {', '.join(dropped)} "
+                    f"(not present in all runs)"
+                )
+    elif len(benchmark_data) > 1:
+        print("  · No common context sizes across runs; keeping all per-run sizes.")
 
     # Create output directory
     output_dir = Path(args.output)
