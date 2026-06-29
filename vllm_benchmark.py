@@ -10,7 +10,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -790,6 +790,116 @@ def run_benchmark(
     return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
+def run_batch_benchmark(
+    base_url: str,
+    model_name: str,
+    batch_sizes: List[int],
+    api_key: Optional[str] = None,
+    prompt_tokens: int = 2048,
+    gen_tokens: int = 128,
+    num_trials: int = 3,
+    timeout: int = 300,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+) -> List[Dict[str, object]]:
+    """Benchmark aggregate throughput under concurrent requests.
+
+    vLLM's defining feature is continuous batching, so we fire N concurrent
+    non-streaming /chat/completions requests and report aggregate prompt +
+    generation tokens/sec (total tokens across the batch / wall time),
+    averaged over ``num_trials`` trials per batch size.
+    """
+    import concurrent.futures
+    import statistics
+
+    # Build a fixed prompt of approximately prompt_tokens tokens.
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        base_text = "The quick brown fox jumps over the lazy dog. "
+        base_tokens = enc.encode(base_text)
+        prompt_text = enc.decode((enc.encode(base_text * max(1, prompt_tokens // len(base_tokens))))[:prompt_tokens])
+    except Exception:
+        # ponytail: ~4 chars/token fallback when tiktoken is unavailable
+        prompt_text = "The quick brown fox jumps over the lazy dog. " * max(1, prompt_tokens // 10)
+
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    def single_request() -> Tuple[int, int]:
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            json={
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt_text}],
+                "max_tokens": gen_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "stream": False,
+            },
+            headers=headers,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        usage = (resp.json() or {}).get("usage", {}) or {}
+        prompt_t = _safe_int(usage.get("prompt_tokens", usage.get("input_tokens", 0)), 0)
+        gen_t = _safe_int(usage.get("completion_tokens", usage.get("output_tokens", 0)), 0)
+        return prompt_t, gen_t
+
+    batch_results: List[Dict[str, object]] = []
+
+    for bs in batch_sizes:
+        print(f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
+
+        # Warmup so the scheduler and KV cache are primed.
+        print("    Warmup...")
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                list(pool.map(lambda _: single_request(), range(bs)))
+        except Exception as exc:
+            print(f"    Warmup error: {exc}")
+
+        trial_prompt_tps: List[float] = []
+        trial_gen_tps: List[float] = []
+
+        for trial in range(num_trials):
+            start = time.time()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                    futures = [pool.submit(single_request) for _ in range(bs)]
+                    responses = [f.result() for f in futures]
+            except Exception as exc:
+                print(f"    Trial {trial + 1} error: {exc}")
+                continue
+            wall_time = time.time() - start
+
+            total_prompt_tok = sum(p for p, _ in responses)
+            total_gen_tok = sum(g for _, g in responses)
+            agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0.0
+            agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0.0
+
+            trial_prompt_tps.append(agg_prompt_tps)
+            trial_gen_tps.append(agg_gen_tps)
+            print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
+
+        if trial_prompt_tps:
+            avg_prompt = statistics.mean(trial_prompt_tps)
+            avg_gen = statistics.mean(trial_gen_tps)
+            batch_results.append(
+                {
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt, 2),
+                    "generation_tps": round(avg_gen, 2),
+                    "peak_memory_gb": 0.0,
+                }
+            )
+            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+
+    return batch_results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark vLLM OpenAI-compatible endpoint across context sizes")
     parser.add_argument("model", help="Model name configured in your vLLM server")
@@ -861,6 +971,34 @@ def main() -> int:
         help="Prepend a unique marker to every prompt to bust KV "
         "cache reuse, forcing cold prefill on every row (default: enabled; "
         "use --no-cold-prefill for cached/warm-reuse numbers)",
+    )
+    parser.add_argument(
+        "--batch-sizes",
+        default="1,2,4,8",
+        help="Comma-separated concurrent request counts for the batch benchmark (default: 1,2,4,8)",
+    )
+    parser.add_argument(
+        "--batch-prompt-tokens",
+        type=int,
+        default=2048,
+        help="Approximate prompt tokens per request in the batch benchmark (default: 2048)",
+    )
+    parser.add_argument(
+        "--batch-gen-tokens",
+        type=int,
+        default=128,
+        help="Tokens to generate per request in the batch benchmark (default: 128)",
+    )
+    parser.add_argument(
+        "--batch-trials",
+        type=int,
+        default=3,
+        help="Number of trials per batch size (default: 3)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Skip the batch (concurrent request) benchmark",
     )
 
     args = parser.parse_args()
@@ -1053,6 +1191,33 @@ def main() -> int:
         return 1
 
     total_benchmark_time = time.time() - benchmark_start
+
+    batch_results = None
+    if not args.no_batch:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(",") if s.strip()]
+        print(f"\nRunning batch benchmark (concurrent requests: {batch_sizes})...")
+        try:
+            batch_results = run_batch_benchmark(
+                base_url,
+                args.model,
+                batch_sizes,
+                api_key=api_key,
+                prompt_tokens=args.batch_prompt_tokens,
+                gen_tokens=args.batch_gen_tokens,
+                num_trials=args.batch_trials,
+                timeout=args.timeout,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )
+            if batch_results:
+                print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
+            else:
+                print("\nBatch benchmark produced no results")
+        except Exception as exc:
+            print(f"\nBatch benchmark failed (continuing): {exc}")
+            batch_results = None
+
+    has_memory = any(r.get("peak_memory_gb", 0) > 0 for r in results)
     common.save_all_outputs(
         results,
         output_dir,
@@ -1060,6 +1225,8 @@ def main() -> int:
         "vLLM",
         hardware_info,
         args,
+        include_memory=has_memory or bool(batch_results),
+        batch_results=batch_results,
     )
     common.print_benchmark_summary(
         results,
@@ -1068,6 +1235,7 @@ def main() -> int:
         hardware_info,
         output_dir,
         total_benchmark_time,
+        batch_results=batch_results,
     )
 
     return 0

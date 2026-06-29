@@ -48,5 +48,5 @@ There are no automated tests in this project.
 - **Output directories**: `output/benchmark_{engine}_{model}_{YYYYMMDD_HHMMSS}/`
 - **Conditional imports**: Framework-specific deps (mlx, paroquant) use `try/except ImportError`.
 - **`lmstudio_benchmark.py`** is an older script that doesn't use `setup_common_args()` or `save_all_outputs()` — it has its own manual argparse and output logic.
-- **`vllm_benchmark.py`** and **`llamacpp_embed_benchmark.py`** exist but are not registered as entry points in `pyproject.toml`.
+- **`llamacpp_embed_benchmark.py`** exists but is not registered as an entry point in `pyproject.toml`. (`vllm_benchmark.py` is registered as the `vllm` engine + `vllm-benchmark` script and supports continuous-batch sweeps via `--batch-sizes`.)
 - **Two chart types**: `create_chart_ollama()` (3x2: prompt TPS, gen TPS, total time, TTFT, plus a row of tokenizer-free throughput panels — gen + prompt bytes/sec with chars/sec on a twin axis) and `create_chart_mlx()` (4x2 base, grows to 5x2/6x2 with batch/batch+KV: standard panels + memory + tokenizer-free throughput row + optional perplexity/batch rows).

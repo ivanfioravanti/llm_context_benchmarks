@@ -67,6 +67,11 @@ def get_available_engines():
             "description": "Generic OpenAI-compatible endpoint (vLLM, llama.cpp, etc.)",
             "example": "local-model --base-url http://127.0.0.1:8000/v1",
         },
+        "vllm": {
+            "script": "vllm_benchmark.py",
+            "description": "vLLM server (streaming + /metrics + continuous batch)",
+            "example": "Qwen/Qwen3-8B --base-url http://127.0.0.1:8000/v1",
+        },
         "afms": {
             "script": "apple_foundation_benchmark.py",
             "description": "Apple Foundation Models Serve local endpoint",
@@ -419,7 +424,7 @@ Examples:
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
-    if args.engine in ("openai", "afms"):
+    if args.engine in ("openai", "afms", "vllm"):
         if args.base_url:
             pass_through_args.extend(["--base-url", args.base_url])
         if args.api_key:
