@@ -579,14 +579,16 @@ def call_vllm_streaming(
             first_choice = choices[0] if isinstance(choices[0], dict) else {}
             delta = first_choice.get("delta", {}) if isinstance(first_choice, dict) else {}
             if isinstance(delta, dict):
-                token_piece = delta.get("content", "")
-                if token_piece is None:
-                    token_piece = ""
+                content_piece = delta.get("content") or ""
+                # Reasoning models stream thinking via reasoning_content; capture
+                # it too so TTFT/throughput anchor on the first generated token
+                # and generated_text isn't empty for thinking-only responses.
+                reasoning_piece = delta.get("reasoning_content") or ""
 
-                if token_piece:
+                if content_piece or reasoning_piece:
                     if math.isnan(first_token_time):
                         first_token_time = time.time() - request_start
-                    generated_text += str(token_piece)
+                    generated_text += str(content_piece) + str(reasoning_piece)
 
         chunk_usage = chunk.get("usage")
         if isinstance(chunk_usage, dict):
@@ -693,7 +695,8 @@ def run_benchmark(
                         timings[key] = value
 
     metric_deltas: Dict[str, float] = {}
-    if use_vllm_metrics and metrics_before:
+    kv_cache_usage_perc = math.nan
+    if use_vllm_metrics:
         try:
             metrics_after = _read_vllm_metrics(
                 metrics_endpoint,
@@ -703,10 +706,24 @@ def run_benchmark(
                 debug=debug,
                 debug_label=f"After request metrics ({context_file.name})",
             )
-            for key in set(metrics_before.keys()) | set(metrics_after.keys()):
-                delta = _safe_metric_delta(metrics_before, metrics_after, key)
-                if not math.isnan(delta):
-                    metric_deltas[key] = delta
+            # KV cache pool utilization is a Prometheus gauge (0-1); report the
+            # peak across the before/after scrapes as this request's footprint.
+            gauge_vals = [
+                v
+                for v in (
+                    metrics_before.get("vllm:kv_cache_usage_perc", math.nan) if metrics_before else math.nan,
+                    metrics_after.get("vllm:kv_cache_usage_perc", math.nan),
+                )
+                if not math.isnan(v)
+            ]
+            if gauge_vals:
+                kv_cache_usage_perc = max(gauge_vals)
+
+            if metrics_before:
+                for key in set(metrics_before.keys()) | set(metrics_after.keys()):
+                    delta = _safe_metric_delta(metrics_before, metrics_after, key)
+                    if not math.isnan(delta):
+                        metric_deltas[key] = delta
         except requests.exceptions.RequestException:
             metric_deltas = {}
 
@@ -787,6 +804,8 @@ def run_benchmark(
         "generation_tps": generation_tps,
         "generated_text": generated_text,
     }
+    if not math.isnan(kv_cache_usage_perc):
+        result["kv_cache_usage_perc"] = kv_cache_usage_perc
     return common.add_throughput_metrics(result, prompt_text=prompt)
 
 
@@ -801,6 +820,8 @@ def run_batch_benchmark(
     timeout: int = 300,
     temperature: float = 0.7,
     top_p: float = 0.95,
+    metrics_base_url: Optional[str] = None,
+    use_metrics: bool = True,
 ) -> List[Dict[str, object]]:
     """Benchmark aggregate throughput under concurrent requests.
 
@@ -863,6 +884,7 @@ def run_batch_benchmark(
 
         trial_prompt_tps: List[float] = []
         trial_gen_tps: List[float] = []
+        trial_kv_perc: List[float] = []
 
         for trial in range(num_trials):
             start = time.time()
@@ -874,6 +896,19 @@ def run_batch_benchmark(
                 print(f"    Trial {trial + 1} error: {exc}")
                 continue
             wall_time = time.time() - start
+
+            # Sample the KV cache pool gauge right after the burst — under
+            # continuous batching it reflects how full the pool got at bs-wide
+            # concurrency (rises with batch size).
+            if use_metrics and metrics_base_url:
+                try:
+                    gauge = _read_vllm_metrics(metrics_base_url, model_name, api_key=api_key, timeout=timeout).get(
+                        "vllm:kv_cache_usage_perc", math.nan
+                    )
+                    if not math.isnan(gauge):
+                        trial_kv_perc.append(gauge)
+                except requests.exceptions.RequestException:
+                    pass
 
             total_prompt_tok = sum(p for p, _ in responses)
             total_gen_tok = sum(g for _, g in responses)
@@ -887,14 +922,14 @@ def run_batch_benchmark(
         if trial_prompt_tps:
             avg_prompt = statistics.mean(trial_prompt_tps)
             avg_gen = statistics.mean(trial_gen_tps)
-            batch_results.append(
-                {
-                    "batch_size": bs,
-                    "prompt_tps": round(avg_prompt, 2),
-                    "generation_tps": round(avg_gen, 2),
-                    "peak_memory_gb": 0.0,
-                }
-            )
+            result = {
+                "batch_size": bs,
+                "prompt_tps": round(avg_prompt, 2),
+                "generation_tps": round(avg_gen, 2),
+            }
+            if trial_kv_perc:
+                result["kv_cache_usage_perc"] = round(max(trial_kv_perc), 4)
+            batch_results.append(result)
             print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
 
     return batch_results
@@ -1148,6 +1183,8 @@ def main() -> int:
                 else:
                     print("  Prompt TPS: n/a")
                 print(f"  Generation TPS: {result['generation_tps']:.2f}")
+                if "kv_cache_usage_perc" in result:
+                    print(f"  KV cache usage:    {result['kv_cache_usage_perc'] * 100:.1f}%")
                 print(f"  Total time: {result['total_time']:.2f}s")
 
                 if args.save_responses:
@@ -1208,6 +1245,8 @@ def main() -> int:
                 timeout=args.timeout,
                 temperature=args.temperature,
                 top_p=args.top_p,
+                metrics_base_url=metrics_base_url,
+                use_metrics=args.metrics,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")

@@ -72,6 +72,15 @@ def _run_display_names(benchmark_data: List[Dict]) -> List[str]:
     return [f"{name} [{machine}]" if machine else name for name, machine in zip(base, machines)]
 
 
+def _all_plotted_runs_have_metrics(benchmark_data: List[Dict], metric_keys: List[str]) -> bool:
+    """Return true when every run with plotted results has all requested metrics."""
+    plotted_runs = [data for data in benchmark_data if data["results"]]
+    return bool(plotted_runs) and all(
+        all(any(r.get(metric_key, 0) > 0 for r in data["results"]) for metric_key in metric_keys)
+        for data in plotted_runs
+    )
+
+
 def _folder_label(folder_name: str) -> str:
     """Clean ``benchmark_<engine>_<model>...<timestamp>`` into ``<engine>: <model>-<machine>``.
 
@@ -363,11 +372,11 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     # older result CSVs (pre-helper) don't render empty panels. Ordered
     # prompt-first so prompt sits left of generation (decode), matching the
     # single-run detailed chart layout.
-    has_prompt_throughput = any(
-        r.get("prompt_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    has_prompt_throughput = _all_plotted_runs_have_metrics(
+        benchmark_data, ["prompt_utf8_bytes_per_sec", "prompt_chars_per_sec"]
     )
-    has_gen_throughput = any(
-        r.get("generation_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    has_gen_throughput = _all_plotted_runs_have_metrics(
+        benchmark_data, ["generation_utf8_bytes_per_sec", "generation_chars_per_sec"]
     )
     if has_prompt_throughput:
         subplot_specs += [
@@ -1448,9 +1457,12 @@ def create_heatmap(benchmark_data: List[Dict], output_dir: Path):
 
     metric_keys = ["avg_prompt_tps", "avg_gen_tps"]
     col_labels = ["Avg Prompt TPS", "Avg Gen TPS"]
-    # Tokenizer-independent metrics — added only if any run has them (auto-hidden for older data)
-    has_throughput_data = any(
-        r.get("generation_utf8_bytes_per_sec", 0) > 0 for data in benchmark_data for r in data["results"]
+    # Tokenizer-independent metrics are comparable only when every plotted run
+    # provides them. Mixed comparisons, such as DGX Spark runs without generated
+    # text measurements alongside local runs with them, should not add columns
+    # that are partly N/A.
+    has_throughput_data = _all_plotted_runs_have_metrics(
+        benchmark_data, ["generation_utf8_bytes_per_sec", "generation_chars_per_sec"]
     )
     if has_throughput_data:
         metric_keys += ["avg_gen_bytes_per_sec", "avg_gen_chars_per_sec"]

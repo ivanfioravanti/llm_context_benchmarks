@@ -357,6 +357,8 @@ def generate_xpost_text(
                 line += f" {r['peak_memory_gb']:.1f}GB"
         if has_kv:
             line += f" kv {r['kv_cache_gb']:.2f}GB"
+        if "kv_cache_usage_perc" in r:
+            line += f" kv{r['kv_cache_usage_perc'] * 100:.0f}%"
 
         xpost += line + "\n"
         total_tokens += r.get("generation_tokens", 0)
@@ -371,6 +373,9 @@ def generate_xpost_text(
         xpost += f"\nBatch TPS: {' '.join(parts)}"
         if any("kv_cache_gb" in r for r in batch_results):
             kv_parts = [f"b{r['batch_size']} {r.get('kv_cache_gb', 0):.2f}GB" for r in batch_results]
+            xpost += f"\nBatch KV : {' '.join(kv_parts)}"
+        if any("kv_cache_usage_perc" in r for r in batch_results):
+            kv_parts = [f"b{r['batch_size']} {r.get('kv_cache_usage_perc', 0) * 100:.0f}%" for r in batch_results]
             xpost += f"\nBatch KV : {' '.join(kv_parts)}"
 
     if cached_results:
@@ -429,16 +434,24 @@ def generate_table(
 
     total_tokens = 0
     if include_memory:
-        # Show KV cache column when any result reports it (mlx / mlx-vlm)
-        has_kv = any("kv_cache_gb" in r for r in results)
-        if has_kv:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Memory   | KV Cache\n"
-            table += "--------|------------|---------|---------|----------|------------|----------|----------\n"
-        else:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Memory\n"
-            table += "--------|------------|---------|---------|----------|------------|--------\n"
+        # Trailing memory columns render only when at least one result reports a
+        # non-zero value, so engines that don't expose a metric (e.g. vLLM has no
+        # peak VRAM) don't show an all-zero column.
+        trail = []
+        if any(r.get("peak_memory_gb", 0) > 0 for r in results):
+            trail.append(("Memory", 8, lambda r: f"{r.get('peak_memory_gb', 0):>6.1f} GB"))
+        if any("kv_cache_gb" in r for r in results):
+            trail.append(("KV Cache", 8, lambda r: f"{r.get('kv_cache_gb', 0):>6.2f} GB"))
+        if any("kv_cache_usage_perc" in r for r in results):
+            trail.append(("KV Cache %", 9, lambda r: f"{r.get('kv_cache_usage_perc', 0) * 100:>7.1f}%"))
 
-        # Add data rows with memory
+        base_cols = ["Context", "Prompt TPS", "Gen TPS", "Gen B/s", "Gen Ch/s", "Gen Tokens"]
+        base_widths = [7, 10, 7, 7, 8, 10]
+        cols = base_cols + [t[0] for t in trail]
+        widths = base_widths + [t[1] for t in trail]
+        table += "\n" + " | ".join(c.rjust(w) for c, w in zip(cols, widths)) + "\n"
+        table += "-|-".join("-" * w for w in widths) + "\n"
+
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
             gen_tokens = r.get("generation_tokens", 0)
             # Handle N/A prompt TPS for LM Studio
@@ -446,17 +459,15 @@ def generate_table(
                 prompt_str = f"{r.get('prompt_tokens', 0)} tok"
             else:
                 prompt_str = f"{r['prompt_tps']:>10.1f}"
-            row = (
-                f"{r['context_size']:>7} | {prompt_str:>10} | "
-                f"{r['generation_tps']:>7.1f} | "
-                f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f} | "
-                f"{r.get('generation_chars_per_sec', 0):>8.1f} | "
-                f"{gen_tokens:>10} | "
-                f"{r.get('peak_memory_gb', 0):>6.1f} GB"
-            )
-            if has_kv:
-                row += f" | {r.get('kv_cache_gb', 0):>6.2f} GB"
-            table += row + "\n"
+            parts = [
+                f"{r['context_size']:>7}",
+                prompt_str,
+                f"{r['generation_tps']:>7.1f}",
+                f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}",
+                f"{r.get('generation_chars_per_sec', 0):>8.1f}",
+                f"{gen_tokens:>10}",
+            ] + [fmt(r) for _, _, fmt in trail]
+            table += " | ".join(parts) + "\n"
             total_tokens += gen_tokens
     else:
         # Check if we need special handling for LM Studio
@@ -493,8 +504,16 @@ def generate_table(
         table += f"\nPerplexity: {perplexity:.2f}"
 
     if batch_results:
-        batch_has_kv = any("kv_cache_gb" in r for r in batch_results)
         batch_has_bps = any(r.get("generation_utf8_bytes_per_sec", 0) > 0 for r in batch_results)
+        # Same all-zero suppression as the main table for batch trailing columns.
+        batch_trail = []
+        if any(r.get("peak_memory_gb", 0) > 0 for r in batch_results):
+            batch_trail.append(("Memory", 9, lambda r: f"{r.get('peak_memory_gb', 0):>6.1f} GB"))
+        if any("kv_cache_gb" in r for r in batch_results):
+            batch_trail.append(("KV Cache", 9, lambda r: f"{r.get('kv_cache_gb', 0):>6.2f} GB"))
+        if any("kv_cache_usage_perc" in r for r in batch_results):
+            batch_trail.append(("KV Cache %", 10, lambda r: f"{r.get('kv_cache_usage_perc', 0) * 100:>8.1f}%"))
+
         table += "\n\nBatch Benchmark\n"
         # Build header with optional Gen B/s column (only when populated by the engine)
         cols = ["Batch", "Prompt TPS", "Gen TPS"]
@@ -502,11 +521,8 @@ def generate_table(
         if batch_has_bps:
             cols.append("Gen B/s")
             widths.append(7)
-        cols.append("Memory")
-        widths.append(9)
-        if batch_has_kv:
-            cols.append("KV Cache")
-            widths.append(9)
+        cols += [t[0] for t in batch_trail]
+        widths += [t[1] for t in batch_trail]
         header = " | ".join(c.rjust(w) for c, w in zip(cols, widths))
         sep = "-|-".join("-" * w for w in widths)
         table += header + "\n" + sep + "\n"
@@ -518,9 +534,7 @@ def generate_table(
             ]
             if batch_has_bps:
                 parts.append(f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}")
-            parts.append(f"{r.get('peak_memory_gb', 0):>6.1f} GB")
-            if batch_has_kv:
-                parts.append(f"{r.get('kv_cache_gb', 0):>6.2f} GB")
+            parts += [fmt(r) for _, _, fmt in batch_trail]
             table += " | ".join(parts) + "\n"
 
     if cached_results:
@@ -772,18 +786,23 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax4.grid(True, alpha=0.3)
     ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
 
-    # Throughput panels (tokenizer-independent): prompt (left) + generation (right)
-    _plot_throughput_panel(
-        ax_thru_prompt,
-        x,
-        context_sizes,
-        prompt_bytes_ps,
-        prompt_chars_ps,
-        "Prompt Throughput (tokenizer-free)",
-    )
-    _plot_throughput_panel(
-        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
-    )
+    # Throughput panels (tokenizer-independent): prompt (left) + generation (right).
+    # Hide the row entirely when an engine reports no usable throughput data.
+    if any(v > 0 for v in prompt_bytes_ps + prompt_chars_ps + gen_bytes_ps + gen_chars_ps):
+        _plot_throughput_panel(
+            ax_thru_prompt,
+            x,
+            context_sizes,
+            prompt_bytes_ps,
+            prompt_chars_ps,
+            "Prompt Throughput (tokenizer-free)",
+        )
+        _plot_throughput_panel(
+            ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
+        )
+    else:
+        ax_thru_prompt.set_visible(False)
+        ax_thru_gen.set_visible(False)
 
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
@@ -833,6 +852,8 @@ def create_chart_mlx(
         prompt_chars_ps.append(r.get("prompt_chars_per_sec", 0))
 
     has_kv_cache = any(v > 0 for v in kv_cache)
+    # vLLM reports KV cache pool utilization (0-1) instead of peak VRAM GB.
+    has_kv_perc = any("kv_cache_usage_perc" in r for r in results)
 
     # Detect whether the batch sweep also tracked KV cache (mlx-lm always does;
     # mlx-vlm does once the patched fork is in place). When present, we add a
@@ -1045,54 +1066,86 @@ def create_chart_mlx(
                 ax4.text(i + 0.15, t, f"{t:.2f}s", ha="left", va="bottom", fontsize=8, color="#2196F3")
             ax4.legend()
 
-    # Fifth subplot - Peak Memory Usage (with KV cache overlay if present)
-    title5 = "Peak Memory Usage" + (" & KV Cache" if has_kv_cache else "")
-    ax5.set_title(title5, fontsize=14, pad=10)
+    # Fifth subplot - memory / KV cache. Draw Peak Memory bars when an engine
+    # reports VRAM; otherwise fall back to KV-cache pool utilization (vLLM);
+    # hide the panel entirely when there is no memory data, so we never render
+    # an empty all-zero chart.
+    if has_kv_cache or any(r.get("peak_memory_gb", 0) > 0 for r in results):
+        title5 = "Peak Memory Usage" + (" & KV Cache" if has_kv_cache else "")
+        ax5.set_title(title5, fontsize=14, pad=10)
 
-    # Bar chart for memory
-    color_memory = "#ff9800"
-    bars = ax5.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7, label="Peak Memory")
+        # Bar chart for memory
+        color_memory = "#ff9800"
+        bars = ax5.bar(x, peak_memory, color=color_memory, width=0.6, alpha=0.7, label="Peak Memory")
 
-    # Add value labels on bars
-    if peak_memory:
-        max_mem = max(peak_memory) if peak_memory else 1
-        for i, (bar, mem) in enumerate(zip(bars, peak_memory)):
-            height = bar.get_height()
-            ax5.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height + max_mem * 0.02,
-                f"{mem:.1f} GB",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                color=color_memory,
-            )
-
-    ax5.set_xticks(x)
-    ax5.set_xticklabels(context_sizes)
-    ax5.set_ylabel("Memory (GB)", color=color_memory)
-    ax5.tick_params(axis="y", labelcolor=color_memory)
-    ax5.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
-
-    # Overlay KV cache as a line on the same y-axis (both are GB)
-    if has_kv_cache:
-        color_kv = "#2196F3"
-        ax5.plot(x, kv_cache, "s-", color=color_kv, linewidth=2, markersize=8, label="KV Cache")
-        for i, kv in enumerate(kv_cache):
-            if kv > 0:
+        # Add value labels on bars
+        if peak_memory:
+            max_mem = max(peak_memory) if peak_memory else 1
+            for i, (bar, mem) in enumerate(zip(bars, peak_memory)):
+                height = bar.get_height()
                 ax5.text(
-                    i,
-                    kv,
-                    f"{kv:.2f} GB",
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height + max_mem * 0.02,
+                    f"{mem:.1f} GB",
                     ha="center",
                     va="bottom",
-                    fontsize=8,
+                    fontsize=9,
+                    color=color_memory,
+                )
+
+        ax5.set_xticks(x)
+        ax5.set_xticklabels(context_sizes)
+        ax5.set_ylabel("Memory (GB)", color=color_memory)
+        ax5.tick_params(axis="y", labelcolor=color_memory)
+        ax5.set_ylim(0, max(peak_memory) * 1.2 if peak_memory and max(peak_memory) > 0 else 1)
+
+        # Overlay KV cache as a line on the same y-axis (both are GB)
+        if has_kv_cache:
+            color_kv = "#2196F3"
+            ax5.plot(x, kv_cache, "s-", color=color_kv, linewidth=2, markersize=8, label="KV Cache")
+            for i, kv in enumerate(kv_cache):
+                if kv > 0:
+                    ax5.text(
+                        i,
+                        kv,
+                        f"{kv:.2f} GB",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                        color=color_kv,
+                    )
+            ax5.legend(loc="upper left", fontsize=9)
+
+        # Add grid
+        ax5.grid(True, axis="y", alpha=0.3)
+    elif has_kv_perc:
+        # vLLM: KV cache pool utilization (%) in place of peak VRAM GB.
+        kv_perc = [
+            r.get("kv_cache_usage_perc", 0) * 100 for r in sorted(results, key=lambda x: float(x["context_size"][:-1]))
+        ]
+        ax5.set_title("KV Cache Usage", fontsize=14, pad=10)
+        color_kv = "#2196F3"
+        bars = ax5.bar(x, kv_perc, color=color_kv, width=0.6, alpha=0.7, label="KV cache used")
+        if kv_perc:
+            max_kv = max(kv_perc) if kv_perc else 1
+            for bar, kv in zip(bars, kv_perc):
+                ax5.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height() + max_kv * 0.02,
+                    f"{kv:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
                     color=color_kv,
                 )
-        ax5.legend(loc="upper left", fontsize=9)
-
-    # Add grid
-    ax5.grid(True, axis="y", alpha=0.3)
+        ax5.set_xticks(x)
+        ax5.set_xticklabels(context_sizes)
+        ax5.set_ylabel("KV cache pool used (%)", color=color_kv)
+        ax5.tick_params(axis="y", labelcolor=color_kv)
+        ax5.set_ylim(0, max(kv_perc) * 1.2 if kv_perc and max(kv_perc) > 0 else 100)
+        ax5.grid(True, axis="y", alpha=0.3)
+    else:
+        ax5.set_visible(False)
 
     # Sixth subplot - Perplexity info or hidden
     if perplexity is not None:
@@ -1216,18 +1269,23 @@ def create_chart_mlx(
         ax10.set_ylim(0, max(batch_kv) * 1.2 if batch_kv and max(batch_kv) > 0 else 1)
         ax10.grid(True, axis="y", alpha=0.3)
 
-    # Final row: tokenizer-independent throughput panels (prompt left, generation right)
-    _plot_throughput_panel(
-        ax_thru_prompt,
-        x,
-        context_sizes,
-        prompt_bytes_ps,
-        prompt_chars_ps,
-        "Prompt Throughput (tokenizer-free)",
-    )
-    _plot_throughput_panel(
-        ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
-    )
+    # Final row: tokenizer-independent throughput panels (prompt left, generation right).
+    # Hide the row entirely when an engine reports no usable throughput data.
+    if any(v > 0 for v in prompt_bytes_ps + prompt_chars_ps + gen_bytes_ps + gen_chars_ps):
+        _plot_throughput_panel(
+            ax_thru_prompt,
+            x,
+            context_sizes,
+            prompt_bytes_ps,
+            prompt_chars_ps,
+            "Prompt Throughput (tokenizer-free)",
+        )
+        _plot_throughput_panel(
+            ax_thru_gen, x, context_sizes, gen_bytes_ps, gen_chars_ps, "Generation Throughput (tokenizer-free)"
+        )
+    else:
+        ax_thru_prompt.set_visible(False)
+        ax_thru_gen.set_visible(False)
 
     # Adjust layout with custom padding to prevent overlap
     plt.subplots_adjust(top=0.93, bottom=0.05, left=0.1, right=0.95, hspace=0.4, wspace=0.3)
@@ -1640,12 +1698,13 @@ def print_benchmark_summary(
         print("BATCH BENCHMARK RESULTS")
         print("=" * 50)
         for r in batch_results:
-            line = (
-                f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} "
-                f"tg {r['generation_tps']:.1f} t/s, mem {r.get('peak_memory_gb', 0):.2f} GB"
-            )
+            line = f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s"
+            if r.get("peak_memory_gb", 0) > 0:
+                line += f", mem {r['peak_memory_gb']:.2f} GB"
             if "kv_cache_gb" in r:
                 line += f", kv {r['kv_cache_gb']:.2f} GB"
+            if "kv_cache_usage_perc" in r:
+                line += f", kv {r['kv_cache_usage_perc'] * 100:.0f}%"
             print(line)
 
     # Print cached benchmark results if available
