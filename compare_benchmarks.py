@@ -367,6 +367,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
     subplot_specs += [
         ("generation_tps", "Text Generation Speed", "Tokens/sec"),
         ("ttft", "Time to First Token (TTFT)", "Time (seconds)"),
+        ("tpot", "Time Per Output Token (TPOT)", "Time (ms)"),
     ]
     # Tokenizer-independent throughput. Only show when present in the data so
     # older result CSVs (pre-helper) don't render empty panels. Ordered
@@ -467,6 +468,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
         generation_tps = [r.get("generation_tps", 0) for r in results]
         total_times = [r.get("total_time", 0) for r in results]
         ttft_times = [r.get("time_to_first_token", r.get("prompt_eval_duration", 0)) for r in results]
+        tpot_times_ms = [r.get("time_per_output_token", 0) * 1000 for r in results]
         peak_memory = [r.get("peak_memory_gb", 0) for r in results]
         kv_cache_gb = [r.get("kv_cache_gb", 0) for r in results]
         gen_bytes_ps = [r.get("generation_utf8_bytes_per_sec", 0) for r in results]
@@ -486,6 +488,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 generation_tps,
                 total_times,
                 ttft_times,
+                tpot_times_ms,
                 peak_memory,
                 kv_cache_gb,
                 gen_bytes_ps,
@@ -501,6 +504,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
             gn,
             tt,
             tf,
+            tpot,
             pm,
             kv,
             gbps,
@@ -516,6 +520,7 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                 "generation_tps": gn,
                 "total_time": tt,
                 "ttft": tf,
+                "tpot": tpot,
                 "memory": pm,
                 "kv_cache": kv,
                 "gen_bytes_ps": gbps,
@@ -538,12 +543,38 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
             if current is None or ttft < current:
                 min_ttft_by_context[ctx] = ttft
 
+    # For TPOT labels, annotate only the lowest value for each context size.
+    min_tpot_by_context = {}
+    for series in all_series:
+        if series is None:
+            continue
+        for ctx, tpot in zip(series["context_labels"], series["tpot"]):
+            current = min_tpot_by_context.get(ctx)
+            if current is None or tpot < current:
+                min_tpot_by_context[ctx] = tpot
+
     # Plot each subplot
     for plot_idx, (key, title, ylabel) in enumerate(subplot_specs):
         ax = axes_all[plot_idx]
         if key == "ttft":
             ax.set_title(
                 "Time to First Token (TTFT)",
+                fontweight="bold",
+                fontsize=13,
+                pad=22,
+            )
+            ax.text(
+                0.5,
+                1.005,
+                "(only lower values labeled)",
+                transform=ax.transAxes,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        elif key == "tpot":
+            ax.set_title(
+                "Time Per Output Token (TPOT)",
                 fontweight="bold",
                 fontsize=13,
                 pad=22,
@@ -690,6 +721,17 @@ def create_comparison_charts(benchmark_data: List[Dict], output_dir: Path, chart
                     if np.isclose(y, min_ttft_by_context.get(x, y)):
                         ax.annotate(
                             f"{y:.2f}s",
+                            (x, y),
+                            textcoords="offset points",
+                            xytext=(0, 8),
+                            ha="center",
+                            fontsize=7,
+                            color=colors[i],
+                        )
+                elif key == "tpot":
+                    if np.isclose(y, min_tpot_by_context.get(x, y)):
+                        ax.annotate(
+                            f"{y:.1f}ms",
                             (x, y),
                             textcoords="offset points",
                             xytext=(0, 8),
@@ -936,6 +978,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         avg_generation_tps = np.mean([r.get("generation_tps", 0) for r in results])
         avg_gen_bytes_per_sec = np.mean([r.get("generation_utf8_bytes_per_sec", 0) for r in results])
         avg_gen_chars_per_sec = np.mean([r.get("generation_chars_per_sec", 0) for r in results])
+        avg_tpot_ms = np.mean([r.get("time_per_output_token", 0) * 1000 for r in results])
         total_tokens_generated = sum([r.get("generation_tokens", 0) for r in results])
         total_time = sum([r.get("total_time", 0) for r in results])
 
@@ -978,6 +1021,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
         # Tokenizer-independent throughput; "N/A" for older runs that lack the field
         gen_bps_str = f"{avg_gen_bytes_per_sec:.1f}" if avg_gen_bytes_per_sec > 0 else "N/A"
         gen_cps_str = f"{avg_gen_chars_per_sec:.1f}" if avg_gen_chars_per_sec > 0 else "N/A"
+        tpot_str = f"{avg_tpot_ms:.2f}ms" if avg_tpot_ms > 0 else "N/A"
 
         table_data.append(
             {
@@ -987,6 +1031,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                 "Avg Gen TPS": f"{avg_generation_tps:.1f}",
                 "Avg Gen B/s": gen_bps_str,
                 "Avg Gen Ch/s": gen_cps_str,
+                "Avg TPOT": tpot_str,
                 "Avg Inc Prompt TPS": avg_inc_prompt_tps_str,
                 "Peak Memory": f"{peak_memory:.1f}GB" if peak_memory > 0 else "N/A",
                 "Peak KV Cache": f"{peak_kv_cache:.2f}GB" if peak_kv_cache > 0 else "N/A",
@@ -1022,6 +1067,7 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                     "Generation TPS": round(r.get("generation_tps", 0), 2),
                     "Total Time": round(r.get("total_time", 0), 2),
                     "TTFT": round(r.get("time_to_first_token", r.get("prompt_eval_duration", 0)), 2),
+                    "TPOT (ms)": round(r.get("time_per_output_token", 0) * 1000, 2),
                     "Peak Memory GB": round(r.get("peak_memory_gb", 0), 2),
                     "KV Cache GB": round(r.get("kv_cache_gb", 0), 3),
                 }

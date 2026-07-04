@@ -849,25 +849,77 @@ def run_batch_benchmark(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    def single_request() -> Tuple[int, int]:
-        resp = requests.post(
-            f"{base_url}/chat/completions",
-            json={
-                "model": model_name,
-                "messages": [{"role": "user", "content": prompt_text}],
-                "max_tokens": gen_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-                "stream": False,
-            },
-            headers=headers,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        usage = (resp.json() or {}).get("usage", {}) or {}
+    def single_request() -> Tuple[int, int, float, float]:
+        """Send one streaming request, return (prompt_tokens, gen_tokens, ttft, tpot_ms)."""
+        request_start = time.time()
+        first_token_time: Optional[float] = None
+        last_token_time: Optional[float] = None
+        generated_text = ""
+        usage: Dict[str, Any] = {}
+
+        try:
+            with requests.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt_text}],
+                    "max_tokens": gen_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "stream": True,
+                },
+                headers=headers,
+                timeout=timeout,
+                stream=True,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    line = line.decode("utf-8")
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        choices = chunk.get("choices", [])
+                        if choices and isinstance(choices[0], dict):
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content")
+                            if content and first_token_time is None:
+                                first_token_time = time.time()
+                            if content:
+                                last_token_time = time.time()
+                                generated_text += str(content)
+
+                        # Extract usage from final chunk
+                        chunk_usage = chunk.get("usage")
+                        if isinstance(chunk_usage, dict):
+                            usage.update(chunk_usage)
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as exc:
+            return 0, 0, 0.0, 0.0
+
+        total_time = time.time() - request_start
+
+        # Extract token counts
         prompt_t = _safe_int(usage.get("prompt_tokens", usage.get("input_tokens", 0)), 0)
         gen_t = _safe_int(usage.get("completion_tokens", usage.get("output_tokens", 0)), 0)
-        return prompt_t, gen_t
+
+        # Calculate TTFT
+        ttft = (first_token_time - request_start) if first_token_time else 0.0
+
+        # Calculate TPOT (ms per token after first)
+        if first_token_time and last_token_time and gen_t > 1:
+            eval_duration = last_token_time - first_token_time
+            tpot_ms = (eval_duration / (gen_t - 1)) * 1000 if eval_duration > 0 else 0.0
+        else:
+            tpot_ms = 0.0
+
+        return prompt_t, gen_t, ttft, tpot_ms
 
     batch_results: List[Dict[str, object]] = []
 
@@ -885,6 +937,8 @@ def run_batch_benchmark(
         trial_prompt_tps: List[float] = []
         trial_gen_tps: List[float] = []
         trial_kv_perc: List[float] = []
+        trial_ttft: List[float] = []
+        trial_tpot: List[float] = []
 
         for trial in range(num_trials):
             start = time.time()
@@ -910,14 +964,31 @@ def run_batch_benchmark(
                 except requests.exceptions.RequestException:
                     pass
 
-            total_prompt_tok = sum(p for p, _ in responses)
-            total_gen_tok = sum(g for _, g in responses)
+            # Unpack responses: (prompt_tokens, gen_tokens, ttft, tpot_ms)
+            prompt_toks = [p for p, _, _, _ in responses]
+            gen_toks = [g for _, g, _, _ in responses]
+            ttfts = [t for _, _, t, _ in responses if t > 0]
+            tpots = [tp for _, _, _, tp in responses if tp > 0]
+
+            total_prompt_tok = sum(prompt_toks)
+            total_gen_tok = sum(gen_toks)
             agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0.0
             agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0.0
 
             trial_prompt_tps.append(agg_prompt_tps)
             trial_gen_tps.append(agg_gen_tps)
-            print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
+            if ttfts:
+                trial_ttft.extend(ttfts)
+            if tpots:
+                trial_tpot.extend(tpots)
+
+            ttft_str = f"TTFT {statistics.median(ttfts):.0f}ms" if ttfts else ""
+            tpot_str = f"TPOT {statistics.median(tpots):.0f}ms" if tpots else ""
+            lat_str = ", ".join(s for s in [ttft_str, tpot_str] if s)
+            print(
+                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)"
+                + (f" [{lat_str}]" if lat_str else "")
+            )
 
         if trial_prompt_tps:
             avg_prompt = statistics.mean(trial_prompt_tps)
@@ -927,6 +998,10 @@ def run_batch_benchmark(
                 "prompt_tps": round(avg_prompt, 2),
                 "generation_tps": round(avg_gen, 2),
             }
+            if trial_ttft:
+                result["time_to_first_token"] = round(statistics.median(trial_ttft), 3)
+            if trial_tpot:
+                result["time_per_output_token"] = round(statistics.median(trial_tpot) / 1000, 3)  # Convert ms to sec
             if trial_kv_perc:
                 result["kv_cache_usage_perc"] = round(max(trial_kv_perc), 4)
             batch_results.append(result)

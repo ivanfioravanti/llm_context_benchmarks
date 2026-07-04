@@ -249,11 +249,12 @@ def kv_cache_bytes(cache_list) -> int:
 def add_throughput_metrics(result: Dict, prompt_text: str = "") -> Dict:
     """Add tokenizer-independent throughput metrics in place.
 
-    Adds four keys to ``result``:
+    Adds five keys to ``result``:
       - ``generation_utf8_bytes_per_sec``  — UTF-8 bytes of generated_text / eval_duration
       - ``generation_chars_per_sec``       — Unicode code points / eval_duration
       - ``prompt_utf8_bytes_per_sec``      — UTF-8 bytes of prompt_text / prompt_eval_duration
       - ``prompt_chars_per_sec``           — Unicode code points / prompt_eval_duration
+      - ``time_per_output_token``          — eval_duration / (generation_tokens - 1), i.e. TPOT
 
     These metrics complement the tokenizer-dependent ``*_tps`` fields and let
     different tokenizers be compared on the same textual workload.
@@ -285,6 +286,14 @@ def add_throughput_metrics(result: Dict, prompt_text: str = "") -> Dict:
     result["generation_chars_per_sec"] = gen_chars / eval_dur if eval_dur > 0 else 0.0
     result["prompt_utf8_bytes_per_sec"] = p_bytes / p_eval_dur if p_eval_dur > 0 else 0.0
     result["prompt_chars_per_sec"] = p_chars / p_eval_dur if p_eval_dur > 0 else 0.0
+
+    # TPOT: average time per output token during decode (excluding first token).
+    gen_tokens = result.get("generation_tokens", 0) or 0
+    if eval_dur > 0 and gen_tokens > 1:
+        result["time_per_output_token"] = eval_dur / (gen_tokens - 1)
+    else:
+        result["time_per_output_token"] = 0.0
+
     return result
 
 
@@ -445,8 +454,8 @@ def generate_table(
         if any("kv_cache_usage_perc" in r for r in results):
             trail.append(("KV Cache %", 9, lambda r: f"{r.get('kv_cache_usage_perc', 0) * 100:>7.1f}%"))
 
-        base_cols = ["Context", "Prompt TPS", "Gen TPS", "Gen B/s", "Gen Ch/s", "Gen Tokens"]
-        base_widths = [7, 10, 7, 7, 8, 10]
+        base_cols = ["Context", "Prompt TPS", "Gen TPS", "Gen B/s", "Gen Ch/s", "Gen Tokens", "TPOT (ms)"]
+        base_widths = [7, 10, 7, 7, 8, 10, 9]
         cols = base_cols + [t[0] for t in trail]
         widths = base_widths + [t[1] for t in trail]
         table += "\n" + " | ".join(c.rjust(w) for c, w in zip(cols, widths)) + "\n"
@@ -454,6 +463,7 @@ def generate_table(
 
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
             gen_tokens = r.get("generation_tokens", 0)
+            tpot_ms = r.get("time_per_output_token", 0) * 1000  # Convert to ms
             # Handle N/A prompt TPS for LM Studio
             if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
                 prompt_str = f"{r.get('prompt_tokens', 0)} tok"
@@ -466,17 +476,18 @@ def generate_table(
                 f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}",
                 f"{r.get('generation_chars_per_sec', 0):>8.1f}",
                 f"{gen_tokens:>10}",
+                f"{tpot_ms:>8.2f}",
             ] + [fmt(r) for _, _, fmt in trail]
             table += " | ".join(parts) + "\n"
             total_tokens += gen_tokens
     else:
         # Check if we need special handling for LM Studio
         if "EXPERIMENTAL" in framework:
-            table += "\nContext | Prompt Tokens | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Total Time\n"
-            table += "--------|---------------|---------|---------|----------|------------|------------\n"
+            table += "\nContext | Prompt Tokens | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | TPOT (ms) | Total Time\n"
+            table += "--------|---------------|---------|---------|----------|------------|-----------|------------\n"
         else:
-            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | Total Time\n"
-            table += "--------|------------|---------|---------|----------|------------|------------\n"
+            table += "\nContext | Prompt TPS | Gen TPS | Gen B/s | Gen Ch/s | Gen Tokens | TPOT (ms) | Total Time\n"
+            table += "--------|------------|---------|---------|----------|------------|-----------|------------\n"
 
         # Add data rows with total time
         for r in sorted(results, key=lambda x: float(x["context_size"][:-1])):
@@ -484,17 +495,18 @@ def generate_table(
             gen_tokens = r.get("generation_tokens", 0)
             gen_bps = r.get("generation_utf8_bytes_per_sec", 0)
             gen_chps = r.get("generation_chars_per_sec", 0)
+            tpot_ms = r.get("time_per_output_token", 0) * 1000  # Convert to ms
             # Handle N/A prompt TPS for LM Studio
             if r.get("prompt_tps", 0) == 0 and "EXPERIMENTAL" in framework:
                 prompt_str = f"{r.get('prompt_tokens', 0)} tok"
                 table += (
                     f"{r['context_size']:>7} | {prompt_str:>13} | {r['generation_tps']:>7.1f} | "
-                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {tpot_ms:>8.2f} | {total_time:>9.1f}s\n"
                 )
             else:
                 table += (
                     f"{r['context_size']:>7} | {r['prompt_tps']:>10.1f} | {r['generation_tps']:>7.1f} | "
-                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {total_time:>9.1f}s\n"
+                    f"{gen_bps:>7.1f} | {gen_chps:>8.1f} | {gen_tokens:>10} | {tpot_ms:>8.2f} | {total_time:>9.1f}s\n"
                 )
             total_tokens += gen_tokens
 
@@ -768,11 +780,11 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax3.legend(loc="upper left")
     ax3_right.legend(loc="upper right")
 
-    # Fourth subplot - Time to First Token (TTFT)
-    ax4.set_title("Time to First Token (TTFT)", fontsize=14, pad=10)
+    # Fourth subplot - Time to First Token (TTFT) and Time Per Output Token (TPOT)
+    ax4.set_title("Latency: TTFT (left) and TPOT (right)", fontsize=14, pad=10)
     color_ttft = "#E91E63"  # Pink
-    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8)
-    ax4.set_ylabel("Time (seconds)", color=color_ttft)
+    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8, label="TTFT")
+    ax4.set_ylabel("TTFT (seconds)", color=color_ttft)
     ax4.tick_params(axis="y", labelcolor=color_ttft)
 
     # Add value labels for TTFT
@@ -785,6 +797,25 @@ def create_chart_ollama(results, model_name, hardware_info, output_path="benchma
     ax4.set_xticklabels(context_sizes)
     ax4.grid(True, alpha=0.3)
     ax4.set_ylim(0, max(ttft_times) * 1.15 if ttft_times and max(ttft_times) > 0 else 1)
+
+    # Twin axis for TPOT (in milliseconds)
+    ax4_tpot = ax4.twinx()
+    tpot_times_ms = [r.get("time_per_output_token", 0) * 1000 for r in results]
+    color_tpot = "#9C27B0"  # Purple
+    ax4_tpot.plot(x, tpot_times_ms, "s--", color=color_tpot, linewidth=2, markersize=6, label="TPOT")
+    ax4_tpot.set_ylabel("TPOT (ms)", color=color_tpot)
+    ax4_tpot.tick_params(axis="y", labelcolor=color_tpot)
+
+    # Add value labels for TPOT
+    if tpot_times_ms:
+        max_tpot = max(tpot_times_ms) if tpot_times_ms else 1
+        for i, t in enumerate(tpot_times_ms):
+            ax4_tpot.text(i, t + max_tpot * 0.03, f"{t:.1f}ms", ha="center", va="bottom", fontsize=8, color=color_tpot)
+    ax4_tpot.set_ylim(0, max(tpot_times_ms) * 1.15 if tpot_times_ms and max(tpot_times_ms) > 0 else 1)
+
+    # Add legends
+    ax4.legend(loc="upper left", fontsize=9)
+    ax4_tpot.legend(loc="upper right", fontsize=9)
 
     # Throughput panels (tokenizer-independent): prompt (left) + generation (right).
     # Hide the row entirely when an engine reports no usable throughput data.
@@ -1032,11 +1063,11 @@ def create_chart_mlx(
     ax3.legend(loc="upper left")
     ax3_right.legend(loc="upper right")
 
-    # Fourth subplot - Time to First Token (TTFT)
-    ax4.set_title("Time to First Token (TTFT)", fontsize=14, pad=10)
+    # Fourth subplot - Time to First Token (TTFT) and Time Per Output Token (TPOT)
+    ax4.set_title("Latency: TTFT (left) and TPOT (right)", fontsize=14, pad=10)
     color_ttft = "#E91E63"  # Pink
-    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8)
-    ax4.set_ylabel("Time (seconds)", color=color_ttft)
+    ax4.plot(x, ttft_times, "o-", color=color_ttft, linewidth=2, markersize=8, label="TTFT")
+    ax4.set_ylabel("TTFT (seconds)", color=color_ttft)
     ax4.tick_params(axis="y", labelcolor=color_ttft)
 
     # Add value labels for TTFT
@@ -1065,6 +1096,26 @@ def create_chart_mlx(
             for i, t in zip(cached_x, cached_ttft):
                 ax4.text(i + 0.15, t, f"{t:.2f}s", ha="left", va="bottom", fontsize=8, color="#2196F3")
             ax4.legend()
+
+    # Twin axis for TPOT (in milliseconds)
+    ax4_tpot = ax4.twinx()
+    tpot_times_ms = [r.get("time_per_output_token", 0) * 1000 for r in results]
+    color_tpot = "#9C27B0"  # Purple
+    ax4_tpot.plot(x, tpot_times_ms, "s--", color=color_tpot, linewidth=2, markersize=6, label="TPOT")
+    ax4_tpot.set_ylabel("TPOT (ms)", color=color_tpot)
+    ax4_tpot.tick_params(axis="y", labelcolor=color_tpot)
+
+    # Add value labels for TPOT
+    if tpot_times_ms:
+        max_tpot = max(tpot_times_ms) if tpot_times_ms else 1
+        for i, t in enumerate(tpot_times_ms):
+            ax4_tpot.text(i, t + max_tpot * 0.03, f"{t:.1f}ms", ha="center", va="bottom", fontsize=8, color=color_tpot)
+    ax4_tpot.set_ylim(0, max(tpot_times_ms) * 1.15 if tpot_times_ms and max(tpot_times_ms) > 0 else 1)
+
+    # Add legends (avoid duplicate if cached TTFT already added a legend)
+    if not cached_results:
+        ax4.legend(loc="upper left", fontsize=9)
+        ax4_tpot.legend(loc="upper right", fontsize=9)
 
     # Fifth subplot - memory / KV cache. Draw Peak Memory bars when an engine
     # reports VRAM; otherwise fall back to KV-cache pool utilization (vLLM);
@@ -1699,6 +1750,10 @@ def print_benchmark_summary(
         print("=" * 50)
         for r in batch_results:
             line = f"  Batch {r['batch_size']:>2}: pp {r['prompt_tps']:.1f} tg {r['generation_tps']:.1f} t/s"
+            if r.get("time_to_first_token", 0) > 0:
+                line += f", TTFT {r['time_to_first_token'] * 1000:.0f}ms"
+            if r.get("time_per_output_token", 0) > 0:
+                line += f", TPOT {r['time_per_output_token'] * 1000:.0f}ms"
             if r.get("peak_memory_gb", 0) > 0:
                 line += f", mem {r['peak_memory_gb']:.2f} GB"
             if "kv_cache_gb" in r:
