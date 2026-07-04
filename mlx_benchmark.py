@@ -516,6 +516,61 @@ def run_cached_benchmark(
     return results if results else None
 
 
+def _run_batch_generate_with_latency(model, tokenizer, prompts: List[List[int]], max_tokens: int) -> Dict:
+    """Run MLX-LM continuous batching and timestamp generated tokens by sequence."""
+    from mlx_lm.generate import BatchGenerator
+
+    raw_eos = getattr(tokenizer, "eos_token_ids", [])
+    eos_ids = [raw_eos] if isinstance(raw_eos, int) else list(raw_eos or [])
+
+    generator = BatchGenerator(model, stop_tokens=[[token] for token in eos_ids])
+    uids = generator.insert(prompts, [max_tokens] * len(prompts))
+    first_token_times = {}
+    last_token_times = {}
+    generated_counts = {uid: 0 for uid in uids}
+    prompt_caches = {}
+    finished_uids = set()
+
+    start = time.perf_counter()
+    try:
+        with generator.stats() as stats:
+            while len(finished_uids) < len(uids):
+                prompt_responses, generation_responses = generator.next()
+                now = time.perf_counter()
+                if not prompt_responses and not generation_responses:
+                    break
+
+                for response in generation_responses:
+                    uid = response.uid
+                    if uid not in first_token_times:
+                        first_token_times[uid] = now
+                    last_token_times[uid] = now
+                    generated_counts[uid] += 1
+
+                    if response.finish_reason is not None and uid not in finished_uids:
+                        finished_uids.add(uid)
+                        prompt_caches[uid] = response.prompt_cache
+
+        wall_time = time.perf_counter() - start
+    finally:
+        generator.close()
+
+    ttfts = [first_token_times[uid] - start for uid in uids if uid in first_token_times]
+    tpots = []
+    for uid in uids:
+        count = generated_counts.get(uid, 0)
+        if count > 1 and uid in first_token_times and uid in last_token_times:
+            tpots.append((last_token_times[uid] - first_token_times[uid]) / (count - 1))
+
+    return {
+        "stats": stats,
+        "caches": [prompt_caches.get(uid) for uid in uids],
+        "ttfts": ttfts,
+        "tpots": tpots,
+        "wall_time": wall_time,
+    }
+
+
 def run_batch_benchmark(
     model,
     tokenizer,
@@ -533,15 +588,13 @@ def run_batch_benchmark(
         batch_sizes: List of batch sizes to test
         prompt_tokens: Number of prompt tokens per sequence
         gen_tokens: Number of tokens to generate
-        num_trials: Number of trials per batch size (takes median)
+        num_trials: Number of trials per batch size
         vocab_size: Vocabulary size to sample synthetic prompts from
 
     Returns:
-        List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb
+        List of result dicts with batch_size, throughput, latency, peak_memory_gb
     """
     import mlx.core as mx
-    from mlx_lm import batch_generate, stream_generate
-    from mlx_lm.models.cache import make_prompt_cache
 
     if vocab_size is None:
         vocab_size = tokenizer.vocab_size
@@ -567,51 +620,45 @@ def run_batch_benchmark(
 
             # Warmup run
             print("    Warmup...")
-            if bs == 1:
-                for response in stream_generate(model, tokenizer, prompts[0], max_tokens=gen_tokens):
-                    pass
-            else:
-                batch_generate(model, tokenizer, prompts=prompts, max_tokens=gen_tokens)
+            _run_batch_generate_with_latency(model, tokenizer, prompts, gen_tokens)
 
             # Actual trials - reuse same prompts
             trial_prompt_tps = []
             trial_gen_tps = []
             trial_kv_bytes = []
+            trial_ttft = []
+            trial_tpot = []
+            trial_prompt_times = []
+            trial_gen_times = []
+            trial_wall_times = []
+            trial_prompt_tokens = []
+            trial_gen_tokens = []
 
             for trial in range(num_trials):
-                if bs == 1:
-                    # Build the cache externally so we can read its size after.
-                    trial_cache = make_prompt_cache(model)
-                    last_response = None
-                    for response in stream_generate(
-                        model, tokenizer, prompts[0], max_tokens=gen_tokens, prompt_cache=trial_cache
-                    ):
-                        last_response = response
-                    if last_response is not None:
-                        trial_prompt_tps.append(last_response.prompt_tps)
-                        trial_gen_tps.append(last_response.generation_tps)
-                        trial_kv_bytes.append(common.kv_cache_bytes(trial_cache))
-                        print(
-                            f"    Trial {trial + 1}: pp {last_response.prompt_tps:.1f} tg {last_response.generation_tps:.1f} t/s"
-                        )
-                else:
-                    # batch_generate exposes the per-prompt caches via
-                    # return_prompt_caches=True so we can sum nbytes across the
-                    # whole batch (matches what peak_memory_gb measures).
-                    resp = batch_generate(
-                        model,
-                        tokenizer,
-                        prompts=prompts,
-                        max_tokens=gen_tokens,
-                        return_prompt_caches=True,
-                    )
-                    trial_prompt_tps.append(resp.stats.prompt_tps)
-                    trial_gen_tps.append(resp.stats.generation_tps)
-                    if resp.caches:
-                        trial_kv_bytes.append(sum(common.kv_cache_bytes(c) for c in resp.caches))
-                    print(
-                        f"    Trial {trial + 1}: pp {resp.stats.prompt_tps:.1f} tg {resp.stats.generation_tps:.1f} t/s"
-                    )
+                resp = _run_batch_generate_with_latency(model, tokenizer, prompts, gen_tokens)
+                stats = resp["stats"]
+
+                trial_prompt_tps.append(stats.prompt_tps)
+                trial_gen_tps.append(stats.generation_tps)
+                trial_prompt_times.append(stats.prompt_time)
+                trial_gen_times.append(stats.generation_time)
+                trial_wall_times.append(resp["wall_time"])
+                trial_prompt_tokens.append(stats.prompt_tokens)
+                trial_gen_tokens.append(stats.generation_tokens)
+                if resp["caches"]:
+                    trial_kv_bytes.append(sum(common.kv_cache_bytes(c) for c in resp["caches"]))
+                if resp["ttfts"]:
+                    trial_ttft.extend(resp["ttfts"])
+                if resp["tpots"]:
+                    trial_tpot.extend(resp["tpots"])
+
+                ttft_str = f"TTFT {statistics.median(resp['ttfts']) * 1000:.0f}ms" if resp["ttfts"] else ""
+                tpot_str = f"TPOT {statistics.median(resp['tpots']) * 1000:.1f}ms" if resp["tpots"] else ""
+                lat_str = ", ".join(s for s in [ttft_str, tpot_str] if s)
+                print(
+                    f"    Trial {trial + 1}: pp {stats.prompt_tps:.1f} tg {stats.generation_tps:.1f} t/s"
+                    + (f" [{lat_str}]" if lat_str else "")
+                )
 
             if trial_prompt_tps:
                 avg_prompt_tps = statistics.mean(trial_prompt_tps)
@@ -624,15 +671,29 @@ def run_batch_benchmark(
                     f"peak mem {peak_mem:.2f} GB, kv cache {avg_kv_gb:.2f} GB"
                 )
 
-                batch_results.append(
-                    {
-                        "batch_size": bs,
-                        "prompt_tps": round(avg_prompt_tps, 2),
-                        "generation_tps": round(avg_gen_tps, 2),
-                        "peak_memory_gb": round(peak_mem, 3),
-                        "kv_cache_gb": round(avg_kv_gb, 3),
-                    }
-                )
+                result = {
+                    "batch_size": bs,
+                    "prompt_tps": round(avg_prompt_tps, 2),
+                    "generation_tps": round(avg_gen_tps, 2),
+                    "peak_memory_gb": round(peak_mem, 3),
+                    "kv_cache_gb": round(avg_kv_gb, 3),
+                }
+                if trial_ttft:
+                    result["time_to_first_token"] = round(statistics.median(trial_ttft), 4)
+                if trial_tpot:
+                    result["time_per_output_token"] = round(statistics.median(trial_tpot), 5)
+                if trial_prompt_times:
+                    result["prompt_eval_duration"] = round(statistics.mean(trial_prompt_times), 4)
+                if trial_gen_times:
+                    result["eval_duration"] = round(statistics.mean(trial_gen_times), 4)
+                if trial_wall_times:
+                    result["total_time"] = round(statistics.mean(trial_wall_times), 4)
+                if trial_prompt_tokens:
+                    result["prompt_tokens"] = int(round(statistics.mean(trial_prompt_tokens)))
+                if trial_gen_tokens:
+                    result["generation_tokens"] = int(round(statistics.mean(trial_gen_tokens)))
+
+                batch_results.append(result)
     finally:
         if restored_via_private_attr:
             tokenizer._eos_token_ids = original_eos

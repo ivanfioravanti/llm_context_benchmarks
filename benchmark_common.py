@@ -517,6 +517,8 @@ def generate_table(
 
     if batch_results:
         batch_has_bps = any(r.get("generation_utf8_bytes_per_sec", 0) > 0 for r in batch_results)
+        batch_has_ttft = any(r.get("time_to_first_token", 0) > 0 for r in batch_results)
+        batch_has_tpot = any(r.get("time_per_output_token", 0) > 0 for r in batch_results)
         # Same all-zero suppression as the main table for batch trailing columns.
         batch_trail = []
         if any(r.get("peak_memory_gb", 0) > 0 for r in batch_results):
@@ -533,6 +535,12 @@ def generate_table(
         if batch_has_bps:
             cols.append("Gen B/s")
             widths.append(7)
+        if batch_has_ttft:
+            cols.append("TTFT")
+            widths.append(8)
+        if batch_has_tpot:
+            cols.append("TPOT")
+            widths.append(8)
         cols += [t[0] for t in batch_trail]
         widths += [t[1] for t in batch_trail]
         header = " | ".join(c.rjust(w) for c, w in zip(cols, widths))
@@ -546,6 +554,12 @@ def generate_table(
             ]
             if batch_has_bps:
                 parts.append(f"{r.get('generation_utf8_bytes_per_sec', 0):>7.1f}")
+            if batch_has_ttft:
+                ttft_ms = r.get("time_to_first_token", 0) * 1000
+                parts.append(f"{ttft_ms:>6.0f}ms" if ttft_ms > 0 else f"{'':>8}")
+            if batch_has_tpot:
+                tpot_ms = r.get("time_per_output_token", 0) * 1000
+                parts.append(f"{tpot_ms:>6.1f}ms" if tpot_ms > 0 else f"{'':>8}")
             parts += [fmt(r) for _, _, fmt in batch_trail]
             table += " | ".join(parts) + "\n"
 
@@ -1232,6 +1246,8 @@ def create_chart_mlx(
         batch_sizes = [r["batch_size"] for r in batch_results]
         batch_prompt_tps = [r["prompt_tps"] for r in batch_results]
         batch_gen_tps = [r["generation_tps"] for r in batch_results]
+        batch_ttft_ms = [r.get("time_to_first_token", 0) * 1000 for r in batch_results]
+        batch_tpot_ms = [r.get("time_per_output_token", 0) * 1000 for r in batch_results]
         bx = np.arange(len(batch_sizes))
         batch_labels = [str(bs) for bs in batch_sizes]
 
@@ -1251,6 +1267,22 @@ def create_chart_mlx(
         ax7.grid(True, alpha=0.3)
         ax7.set_ylim(0, max(batch_prompt_tps) * 1.15 if batch_prompt_tps and max(batch_prompt_tps) > 0 else 1)
 
+        if any(v > 0 for v in batch_ttft_ms):
+            ax7_ttft = ax7.twinx()
+            color_bttft = "#E91E63"
+            ax7_ttft.plot(bx, batch_ttft_ms, "s--", color=color_bttft, linewidth=2, markersize=6, label="TTFT")
+            ax7_ttft.set_ylabel("TTFT (ms)", color=color_bttft)
+            ax7_ttft.tick_params(axis="y", labelcolor=color_bttft)
+            max_bttft = max(batch_ttft_ms) if batch_ttft_ms else 1
+            for i, t in enumerate(batch_ttft_ms):
+                if t > 0:
+                    ax7_ttft.text(
+                        i, t + max_bttft * 0.03, f"{t:.0f}ms", ha="center", va="bottom", fontsize=8, color=color_bttft
+                    )
+            ax7_ttft.set_ylim(0, max_bttft * 1.15 if max_bttft > 0 else 1)
+            ax7.legend(loc="upper left", fontsize=9)
+            ax7_ttft.legend(loc="upper right", fontsize=9)
+
         # Batch Generation TPS
         ax8.set_title("Batch Generation Tokens per Second", fontsize=14, pad=10)
         color_bg = "#009688"
@@ -1266,6 +1298,22 @@ def create_chart_mlx(
         ax8.set_xticklabels(batch_labels)
         ax8.grid(True, alpha=0.3)
         ax8.set_ylim(0, max(batch_gen_tps) * 1.15 if batch_gen_tps and max(batch_gen_tps) > 0 else 1)
+
+        if any(v > 0 for v in batch_tpot_ms):
+            ax8_tpot = ax8.twinx()
+            color_btpot = "#9C27B0"
+            ax8_tpot.plot(bx, batch_tpot_ms, "s--", color=color_btpot, linewidth=2, markersize=6, label="TPOT")
+            ax8_tpot.set_ylabel("TPOT (ms)", color=color_btpot)
+            ax8_tpot.tick_params(axis="y", labelcolor=color_btpot)
+            max_btpot = max(batch_tpot_ms) if batch_tpot_ms else 1
+            for i, t in enumerate(batch_tpot_ms):
+                if t > 0:
+                    ax8_tpot.text(
+                        i, t + max_btpot * 0.03, f"{t:.1f}ms", ha="center", va="bottom", fontsize=8, color=color_btpot
+                    )
+            ax8_tpot.set_ylim(0, max_btpot * 1.15 if max_btpot > 0 else 1)
+            ax8.legend(loc="upper left", fontsize=9)
+            ax8_tpot.legend(loc="upper right", fontsize=9)
 
     # Row 5: Batch Peak Memory + Batch KV Cache (when KV is tracked per batch)
     if batch_has_kv:

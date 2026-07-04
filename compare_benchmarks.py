@@ -1082,8 +1082,13 @@ def create_comparison_table(benchmark_data: List[Dict], output_dir: Path):
                         "Context": f"batch_{b['batch_size']}",
                         "Prompt TPS": round(b.get("prompt_tps", 0), 2),
                         "Generation TPS": round(b.get("generation_tps", 0), 2),
-                        "Total Time": "",
-                        "TTFT": "",
+                        "Total Time": round(b.get("total_time", 0), 2) if b.get("total_time", 0) else "",
+                        "TTFT": round(b.get("time_to_first_token", 0), 2) if b.get("time_to_first_token", 0) else "",
+                        "TPOT (ms)": (
+                            round(b.get("time_per_output_token", 0) * 1000, 2)
+                            if b.get("time_per_output_token", 0)
+                            else ""
+                        ),
                         "Peak Memory GB": round(b.get("peak_memory_gb", 0), 2),
                         "KV Cache GB": round(b.get("kv_cache_gb", 0), 3),
                     }
