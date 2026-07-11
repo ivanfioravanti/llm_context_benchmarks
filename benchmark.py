@@ -21,7 +21,7 @@ from pathlib import Path
 # Engines whose benchmark script can auto-detect the model from the server
 # when no model is explicitly provided. For these, the dispatcher may invoke
 # the script without a leading positional model argument.
-AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai", "afms"}
+AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai", "afms", "unsloth"}
 
 
 def get_available_engines():
@@ -66,6 +66,11 @@ def get_available_engines():
             "script": "openai_benchmark.py",
             "description": "Generic OpenAI-compatible endpoint (vLLM, llama.cpp, etc.)",
             "example": "local-model --base-url http://127.0.0.1:8000/v1",
+        },
+        "unsloth": {
+            "script": "unsloth_benchmark.py",
+            "description": "Unsloth Studio local server (OpenAI-compatible + server timings)",
+            "example": "unsloth/Qwen3.6-35B-A3B-GGUF",
         },
         "vllm": {
             "script": "vllm_benchmark.py",
@@ -424,7 +429,7 @@ Examples:
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
-    if args.engine in ("openai", "afms", "vllm"):
+    if args.engine in ("openai", "afms", "vllm", "unsloth"):
         if args.base_url:
             pass_through_args.extend(["--base-url", args.base_url])
         if args.api_key:
