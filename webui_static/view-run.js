@@ -152,18 +152,21 @@
       if (!ollama && !connection.base_url && !connection.host) return null;
       return connection;
     };
+    // MLX has no server to query — its models live in the local HF cache.
+    const localEngine = engine.id === "mlx" ? "mlx" : null;
     state.runModelPicker = attachModelPicker({
       select: document.getElementById("rfModelSel"),
       input: document.getElementById("rfModel"),
       button: document.getElementById("rfModelLoad"),
       hint: document.getElementById("rfModelHint"),
       getConnection: runConnection,
+      localEngine,
     });
     for (const id of ["rfBaseUrl", "rfHost", "rfPort", "rfApiKey"]) {
       const node = document.getElementById(id);
       if (node) node.addEventListener("change", () => state.runModelPicker.load(true));
     }
-    if (runConnection()) {
+    if (runConnection() || localEngine) {
       state.runModelPicker.load(true).then(() => {
         if (ep && ep.model) state.runModelPicker.set(ep.model);
       });

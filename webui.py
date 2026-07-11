@@ -43,7 +43,7 @@ from webui_common import (
     STATIC_DIR,
     is_apple_silicon,
 )
-from webui_engines import build_command, engine_available, get_engine_catalog
+from webui_engines import build_command, cached_mlx_models, engine_available, get_engine_catalog
 from webui_runs import RunManager
 
 run_manager = RunManager()
@@ -274,6 +274,14 @@ def api_models(payload: dict):
         return {"models": models}
     except Exception as exc:
         return {"models": [], "detail": f"{exc.__class__.__name__}: {exc}"}
+
+
+@app.get("/api/cached-models")
+def api_cached_models(engine: str = ""):
+    """Local HF-cache models for an engine that has no server (e.g. MLX)."""
+    if engine == "mlx":
+        return {"models": cached_mlx_models()}
+    return {"models": []}
 
 
 @app.post("/api/endpoints/{endpoint_id}/ping")

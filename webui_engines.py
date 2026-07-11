@@ -1,5 +1,6 @@
 """Engine catalog and benchmark-command construction for the web UI."""
 
+import json
 import sys
 
 from fastapi import HTTPException
@@ -507,6 +508,54 @@ def engine_available(info: dict) -> bool:
     if info.get("local_mlx") and not is_apple_silicon():
         return False
     return True
+
+
+def cached_mlx_models() -> list:
+    """Local HF-cache models the MLX (mlx_lm) engine can load.
+
+    Walks the cache via huggingface_hub (honors HF_HOME) and keeps only
+    MLX-format text models: a tokenizer + config.json, no GGUF weights, and
+    either an MLX ``quantization`` block in config.json or an ``mlx`` marker in
+    the repo id. Vanilla HF transformers repos (Qwen3-0.6B, gpt2, gemma, ...)
+    are excluded because mlx_lm needs MLX-converted weights.
+    """
+    # ponytail: heuristic, not a load attempt. Name markers drop unambiguous
+    # non-text MLX repos (whisper/TTS/flux/multimodal) that mlx_lm can't load;
+    # mlx-vlm has its own engine. Upgrade to probing mlx_lm.load if needed.
+    try:
+        from huggingface_hub import scan_cache_dir
+    except ImportError:
+        return []
+
+    non_text = ("whisper", "tts", "asr", "flux", "mflux", "multimodal")
+    models = []
+    for repo in scan_cache_dir().repos:
+        if str(repo.repo_type) != "model":
+            continue
+        repo_lower = repo.repo_id.lower()
+        if any(m in repo_lower for m in non_text):
+            continue
+        names = set()
+        config_path = None
+        for rev in repo.revisions:
+            for f in rev.files:
+                names.add(f.file_name)
+                if f.file_name == "config.json" and config_path is None:
+                    config_path = getattr(f, "file_path", None)
+        if "config.json" not in names or any(n.lower().endswith(".gguf") for n in names):
+            continue
+        if not any(n in names for n in ("tokenizer.json", "tokenizer_config.json")):
+            continue
+        is_mlx = "mlx" in repo_lower
+        if not is_mlx and config_path:
+            try:
+                with open(config_path) as fh:
+                    is_mlx = isinstance(json.load(fh).get("quantization"), dict)
+            except Exception:
+                pass
+        if is_mlx:
+            models.append(repo.repo_id)
+    return sorted(models)
 
 
 # ---------------------------------------------------------------------------
