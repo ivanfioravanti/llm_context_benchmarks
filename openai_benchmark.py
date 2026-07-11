@@ -58,6 +58,66 @@ def get_available_model(client: OpenAI) -> Optional[str]:
     return None
 
 
+class HostMemorySampler:
+    """Samples system RAM while a request runs. On Apple Silicon the unified
+    memory is also the GPU memory, so for a locally hosted server this is the
+    closest thing to server RAM/VRAM a client can observe. Only meaningful
+    when the endpoint runs on this machine (see is_local_base_url)."""
+
+    def __init__(self, interval: float = 0.2):
+        self.interval = interval
+        self.peak_bytes = 0
+        self._stop = None
+        self._thread = None
+
+    def __enter__(self):
+        import threading
+
+        import psutil
+
+        self._stop = threading.Event()
+
+        def sample():
+            while not self._stop.is_set():
+                used = psutil.virtual_memory().used
+                if used > self.peak_bytes:
+                    self.peak_bytes = used
+                self._stop.wait(self.interval)
+
+        self.peak_bytes = psutil.virtual_memory().used
+        self._thread = threading.Thread(target=sample, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=2)
+        return False
+
+    @property
+    def peak_gb(self) -> float:
+        return round(self.peak_bytes / (1024**3), 2)
+
+
+def is_local_base_url(base_url: str) -> bool:
+    """True when the server runs on this machine (so host RAM sampling is meaningful)."""
+    import socket
+    from urllib.parse import urlparse
+
+    host = (urlparse(base_url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        return True
+    try:
+        return host in (socket.gethostname().lower(), socket.getfqdn().lower())
+    except OSError:
+        return False
+
+
+# Set from main() when the endpoint is local; run_benchmark/run_batch_benchmark
+# then record host_memory_gb (peak system RAM during the request).
+SAMPLE_HOST_MEMORY = False
+
+
 def run_benchmark(
     client: OpenAI,
     model: str,
@@ -94,6 +154,9 @@ def run_benchmark(
     server_gen_duration = 0.0
     peak_memory_gb = 0.0
 
+    host_mem_sampler = HostMemorySampler() if SAMPLE_HOST_MEMORY else None
+    if host_mem_sampler:
+        host_mem_sampler.__enter__()
     try:
         stream = client.chat.completions.create(
             model=model,
@@ -162,6 +225,9 @@ def run_benchmark(
     except Exception as e:
         print(f"Error during benchmark: {e}")
         return None
+    finally:
+        if host_mem_sampler:
+            host_mem_sampler.__exit__()
 
     end_time = time.time()
     total_time = end_time - start_time
@@ -230,6 +296,9 @@ def run_benchmark(
         result["reasoning_text"] = reasoning_text
     if peak_memory_gb > 0:
         result["peak_memory_gb"] = peak_memory_gb
+    if host_mem_sampler:
+        result["host_memory_gb"] = host_mem_sampler.peak_gb
+        print(f"  Host memory peak:   {host_mem_sampler.peak_gb:.2f} GB (system RAM, local server)")
 
     return common.add_throughput_metrics(result, prompt_text=prompt)
 
@@ -315,12 +384,22 @@ def run_batch_benchmark(
         trial_prompt_tps = []
         trial_gen_tps = []
         trial_peak_mem = []
+        trial_decode_tps = []  # pure decode rate summed across clients (from server usage)
 
+        trial_host_mem = []
         for trial in range(num_trials):
             start = time.time()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
-                futures = [pool.submit(single_request) for _ in range(bs)]
-                responses = [f.result() for f in futures]
+            host_mem_sampler = HostMemorySampler() if SAMPLE_HOST_MEMORY else None
+            if host_mem_sampler:
+                host_mem_sampler.__enter__()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                    futures = [pool.submit(single_request) for _ in range(bs)]
+                    responses = [f.result() for f in futures]
+            finally:
+                if host_mem_sampler:
+                    host_mem_sampler.__exit__()
+                    trial_host_mem.append(host_mem_sampler.peak_gb)
             wall_time = time.time() - start
 
             total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
@@ -334,6 +413,14 @@ def run_batch_benchmark(
             if peak_mem > 0:
                 trial_peak_mem.append(peak_mem)
 
+            # Pure decode throughput: the server reports each request's own
+            # generation_tps (decode phase only). Summed across the N parallel
+            # clients this is the aggregate decode rate, independent of how
+            # long the prompt phase took.
+            per_request_decode = [r["generation_tps"] for r in responses if r.get("generation_tps")]
+            if len(per_request_decode) == len(responses):
+                trial_decode_tps.append(sum(per_request_decode))
+
             print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
 
         if trial_prompt_tps:
@@ -344,6 +431,12 @@ def run_batch_benchmark(
                 "prompt_tps": round(avg_prompt, 2),
                 "generation_tps": round(avg_gen, 2),
             }
+            if trial_decode_tps:
+                avg_decode = statistics.mean(trial_decode_tps)
+                result["decode_tps_total"] = round(avg_decode, 2)
+                result["decode_tps_per_client"] = round(avg_decode / bs, 2)
+            if trial_host_mem:
+                result["host_memory_gb"] = round(max(trial_host_mem), 2)
             if trial_peak_mem:
                 result["peak_memory_gb"] = round(max(trial_peak_mem), 3)
             else:
@@ -424,6 +517,12 @@ def main() -> int:
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
+
+    # host RAM/VRAM sampling is only meaningful when the server is local
+    global SAMPLE_HOST_MEMORY
+    SAMPLE_HOST_MEMORY = is_local_base_url(base_url)
+    if SAMPLE_HOST_MEMORY:
+        print("Local endpoint detected — sampling host memory (RAM/VRAM) during requests.")
     client = build_client(base_url, args.api_key)
 
     print(f"Testing connection to {base_url} ...")

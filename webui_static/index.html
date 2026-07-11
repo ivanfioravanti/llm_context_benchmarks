@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Context Bench</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>⏱</text></svg>">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="wordmark">
+      <span class="wordmark-sigil" aria-hidden="true"></span>
+      <div>
+        <div class="wordmark-title">Context Bench</div>
+        <div class="wordmark-sub">LLM benchmarks</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <a href="#run" data-view="run">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.8v10.4l8-5.2z"/></svg>
+        Run</a>
+      <a href="#results" data-view="results">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+        Results</a>
+      <a href="#compare" data-view="compare">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12.5l4-4 3 2.5 5-6"/><path d="M10.5 5H14v3.5"/></svg>
+        Compare</a>
+      <a href="#endpoints" data-view="endpoints">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4.6" rx="1.2"/><rect x="2" y="8.9" width="12" height="4.6" rx="1.2"/><path d="M4.6 4.8h.01M4.6 11.2h.01"/></svg>
+        Endpoints</a>
+      <a href="#tools" data-view="tools">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.7"/><circle cx="10" cy="11" r="1.7"/></svg>
+        Tools</a>
+    </nav>
+    <div class="rail-foot">
+      <div class="hw-readout" id="hwReadout" title="">–</div>
+      <div class="mlx-badge" id="mlxBadge"></div>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">◐ theme</button>
+    </div>
+  </aside>
+  <main class="main" id="main">
+    <section class="view" id="view-run" hidden></section>
+    <section class="view" id="view-results" hidden></section>
+    <section class="view" id="view-compare" hidden></section>
+    <section class="view" id="view-endpoints" hidden></section>
+    <section class="view" id="view-tools" hidden></section>
+  </main>
+</div>
+<div class="modal-backdrop" id="modalBackdrop" hidden>
+  <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+</div>
+<div class="toast-stack" id="toastStack"></div>
+<script src="/static/charts.js"></script>
+<script src="/static/export.js"></script>
+<script src="/static/core.js"></script>
+<script src="/static/report.js"></script>
+<script src="/static/view-run.js"></script>
+<script src="/static/view-results.js"></script>
+<script src="/static/view-compare.js"></script>
+<script src="/static/view-endpoints.js"></script>
+<script src="/static/view-tools.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
