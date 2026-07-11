@@ -65,7 +65,7 @@ def _request_model_opt() -> dict:
 
 def get_engine_catalog() -> dict:
     """Full engine catalog with everything the UI needs to build run forms."""
-    return {
+    catalog = {
         "ollama-api": {
             "label": "Ollama API",
             "script": "ollama_api_benchmark.py",
@@ -162,6 +162,19 @@ def get_engine_catalog() -> dict:
             "cold_prefill": True,
             "local_mlx": False,
             "options": _batch_opts(),
+        },
+        "unsloth": {
+            "label": "Unsloth",
+            "script": "unsloth_benchmark.py",
+            "tag": "unsloth",
+            "description": "Unsloth Studio local server (OpenAI-compatible + server timings)",
+            "example": "unsloth/Qwen3.6-35B-A3B-GGUF",
+            "model": "auto",
+            "connection": "base_url",
+            "default_base_url": "http://127.0.0.1:8888/v1",
+            "cold_prefill": True,
+            "local_mlx": False,
+            "options": [],
         },
         "vllm": {
             "label": "vLLM",
@@ -487,6 +500,7 @@ def get_engine_catalog() -> dict:
             ],
         },
     }
+    return dict(sorted(catalog.items()))
 
 
 def engine_available(info: dict) -> bool:
