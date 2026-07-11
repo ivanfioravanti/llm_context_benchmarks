@@ -1,0 +1,221 @@
+"""Subprocess run manager for the web UI: launches benchmark scripts,
+captures their output live and claims result folders."""
+
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import uuid
+from datetime import datetime
+
+from fastapi import HTTPException
+
+from webui_common import OUTPUT_DIR, ROOT, RUN_META_FILE
+
+PROGRESS_RE = re.compile(r"Benchmarking\s+([\d.]+k)\.txt")
+GEN_TPS_RES = [
+    re.compile(r"Generation:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
+    re.compile(r"Generation TPS:\s+([\d.]+)"),
+    re.compile(r"generation_tps:\s+([\d.]+)"),
+]
+PROMPT_TPS_RES = [
+    re.compile(r"Prompt:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
+    re.compile(r"Prompt TPS:\s+([\d.]+)"),
+]
+TTFT_RES = [
+    re.compile(r"Time to first token:\s+([\d.]+)s"),
+    re.compile(r"TTFT:\s+([\d.]+)s"),
+]
+
+SECRET_FLAGS = {"--api-key"}
+
+
+def redact_argv(argv: list) -> list:
+    out, hide = [], False
+    for arg in argv:
+        out.append("***" if hide else arg)
+        hide = arg in SECRET_FLAGS
+    return out
+
+
+class BenchmarkRun:
+    def __init__(self, run_id, kind, engine_id, tag, model, label, endpoint_name, argv, contexts):
+        self.id = run_id
+        self.kind = kind  # "benchmark" | "ctxgen"
+        self.engine = engine_id
+        self.tag = tag
+        self.model = model
+        self.label = label
+        self.endpoint_name = endpoint_name
+        self.argv = argv
+        self.contexts = contexts
+        self.status = "starting"
+        self.returncode = None
+        self.started = time.time()
+        self.finished = None
+        self.log_lines = []
+        self.lock = threading.Lock()
+        self.proc = None
+        self.stop_requested = False
+        self.current_context = None
+        self.contexts_done = 0
+        self.live = {}
+        self.result_folders = []
+        self.error = None
+
+    def snapshot(self):
+        with self.lock:
+            return {
+                "id": self.id,
+                "kind": self.kind,
+                "engine": self.engine,
+                "model": self.model,
+                "label": self.label,
+                "endpoint": self.endpoint_name,
+                "command": " ".join(redact_argv(self.argv)),
+                "status": self.status,
+                "returncode": self.returncode,
+                "started": self.started,
+                "finished": self.finished,
+                "elapsed": (self.finished or time.time()) - self.started,
+                "contexts": self.contexts,
+                "current_context": self.current_context,
+                "contexts_done": self.contexts_done,
+                "live": dict(self.live),
+                "result_folders": list(self.result_folders),
+                "error": self.error,
+                "log_length": len(self.log_lines),
+            }
+
+    def log_slice(self, offset):
+        with self.lock:
+            return self.log_lines[offset:], len(self.log_lines)
+
+
+class RunManager:
+    def __init__(self):
+        self.runs = {}
+        self.lock = threading.Lock()
+
+    def start(self, kind, engine_id, tag, model, label, endpoint_name, argv, contexts):
+        run = BenchmarkRun(uuid.uuid4().hex[:12], kind, engine_id, tag, model, label, endpoint_name, argv, contexts)
+        with self.lock:
+            self.runs[run.id] = run
+        thread = threading.Thread(target=self._execute, args=(run,), daemon=True)
+        thread.start()
+        return run
+
+    def get(self, run_id) -> BenchmarkRun:
+        with self.lock:
+            run = self.runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, f"Unknown run '{run_id}'")
+        return run
+
+    def list_runs(self):
+        with self.lock:
+            runs = list(self.runs.values())
+        return sorted((r.snapshot() for r in runs), key=lambda r: r["started"], reverse=True)
+
+    def stop(self, run_id):
+        run = self.get(run_id)
+        with run.lock:
+            run.stop_requested = True
+            proc = run.proc
+        if proc and proc.poll() is None:
+            proc.terminate()
+            threading.Timer(10, lambda: proc.poll() is None and proc.kill()).start()
+        return run
+
+    def _execute(self, run: BenchmarkRun):
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        before = {p.name for p in OUTPUT_DIR.iterdir() if p.is_dir()}
+        try:
+            # PYTHONUNBUFFERED: without it the child buffers stdout when piped,
+            # so the UI only sees output in 8 KB bursts instead of live lines.
+            proc = subprocess.Popen(
+                run.argv,
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+        except Exception as exc:
+            with run.lock:
+                run.status = "failed"
+                run.error = str(exc)
+                run.finished = time.time()
+            return
+
+        with run.lock:
+            run.proc = proc
+            run.status = "running"
+
+        seen_contexts = set()
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            with run.lock:
+                run.log_lines.append(line)
+                match = PROGRESS_RE.search(line)
+                if match:
+                    ctx = match.group(1)
+                    if run.current_context and run.current_context not in seen_contexts:
+                        seen_contexts.add(run.current_context)
+                    run.current_context = ctx
+                    run.contexts_done = len(seen_contexts)
+                for regex in GEN_TPS_RES:
+                    m = regex.search(line)
+                    if m:
+                        run.live["generation_tps"] = float(m.group(1))
+                        break
+                for regex in PROMPT_TPS_RES:
+                    m = regex.search(line)
+                    if m:
+                        run.live["prompt_tps"] = float(m.group(1))
+                        break
+                for regex in TTFT_RES:
+                    m = regex.search(line)
+                    if m:
+                        run.live["ttft"] = float(m.group(1))
+                        break
+        proc.wait()
+
+        folders = []
+        if run.kind == "benchmark":
+            try:
+                after = {p.name for p in OUTPUT_DIR.iterdir() if p.is_dir()}
+                prefix = f"benchmark_{run.tag}_"
+                for name in sorted(after - before):
+                    if not name.startswith(prefix):
+                        continue
+                    meta_path = OUTPUT_DIR / name / RUN_META_FILE
+                    if meta_path.exists():
+                        continue  # claimed by a concurrent run
+                    meta = {
+                        "run_id": run.id,
+                        "engine_id": run.engine,
+                        "label": run.label or "",
+                        "endpoint": run.endpoint_name or "",
+                        "created": datetime.now().isoformat(timespec="seconds"),
+                    }
+                    meta_path.write_text(json.dumps(meta, indent=2))
+                    folders.append(name)
+            except OSError:
+                pass
+
+        with run.lock:
+            run.returncode = proc.returncode
+            run.finished = time.time()
+            run.result_folders = folders
+            run.current_context = None
+            if run.stop_requested:
+                run.status = "stopped"
+            elif proc.returncode == 0:
+                run.status = "done"
+                run.contexts_done = len(run.contexts)
+            else:
+                run.status = "failed"

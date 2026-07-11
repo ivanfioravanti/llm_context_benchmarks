@@ -20,6 +20,7 @@ uv run benchmark -- llamacpp <model> --host localhost --port 8080
 uv run benchmark -- <engine> <model> --contexts 2,4,8,16 --max-tokens 500 --timeout 7200
 
 uv run compare-benchmarks            # Compare benchmark results
+uv run benchmark-webui               # Web UI on http://127.0.0.1:8321
 uv run generate-context-files -- <source.txt> --sizes 2,4,8,16,32,64,128
 ```
 
@@ -35,6 +36,7 @@ There are no automated tests in this project.
 - **`benchmark_common.py`** — Shared library used by all engines. Provides: hardware detection, context file discovery, CLI argument setup (`setup_common_args()`), result serialization (CSV, JSON, charts), chart generation (`create_chart_ollama()`, `create_chart_mlx()`), and summary formatting.
 - **`{engine}_benchmark.py`** — Engine-specific scripts (ollama_api, ollama_cli, mlx, mlx_distributed, llamacpp, lmstudio, exo, deepseek, grok, openai, vllm). Each follows: parse args → verify engine → collect hardware → warmup → iterate contexts → save outputs → print summary.
 - **`compare_benchmarks.py`** — Multi-benchmark comparison tool. Reads result directories, produces side-by-side charts/CSV/tables.
+- **`webui.py`** — FastAPI web UI (`benchmark-webui` entry point, serves `webui_static/`): routes, endpoints store (`webui_endpoints.json`, gitignored, 0600), results API. Companion modules: `webui_common.py` (paths/regexes), `webui_engines.py` (engine catalog + CLI command construction), `webui_runs.py` (subprocess run manager; children run with `PYTHONUNBUFFERED=1` so logs stream live). Writes a `webui_run.json` label file into each result folder. MLX-local engines (`mlx`, `mlx-vlm`, `mlx-distributed`, `paroquant`) are disabled on non-Apple-Silicon hosts. Frontend in `webui_static/`: `core.js` (state/router/helpers on `window.CB`), `charts.js` (SVG charts), `export.js` (ZIP/CSV/HTML/PDF builders), `report.js` (export pipeline), `view-*.js` (one module per view), `app.js` (bootstrap).
 - **`generate_context_files.py`** — Generates token-precise context files (`{size}k.txt`) using tiktoken.
 
 ## Key Conventions

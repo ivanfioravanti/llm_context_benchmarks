@@ -117,3 +117,6 @@ $RECYCLE.BIN/
 *.lnk
 
 .mypy_cache
+
+# Web UI
+webui_endpoints.json

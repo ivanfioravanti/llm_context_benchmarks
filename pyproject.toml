@@ -15,6 +15,7 @@ dependencies = [
   "cycler>=0.12.1",
   "datasets>=4.8.5",
   "distlib>=0.4.0",
+  "fastapi>=0.115.0",
   "filelock>=3.29.0",
   "fonttools>=4.62.1",
   "fsspec>=2026.2.0",
@@ -65,12 +66,14 @@ dependencies = [
   "typing-inspection>=0.4.2",
   "tzdata>=2026.2",
   "urllib3>=2.6.3",
+  "uvicorn>=0.30.0",
   "virtualenv>=21.3.0",
   "torchvision>=0.26.0",
 ]
 
 [project.scripts]
 benchmark = "benchmark:main"
+benchmark-webui = "webui:main"
 compare-benchmarks = "compare_benchmarks:main"
 generate-context-files = "generate_context_files:main"
 ollama-api-benchmark = "ollama_api_benchmark:main"
@@ -125,4 +128,8 @@ py-modules = [
   "regen_charts",
   "paroquant_benchmark",
   "vllm_benchmark",
+  "webui",
+  "webui_common",
+  "webui_engines",
+  "webui_runs",
 ]

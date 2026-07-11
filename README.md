@@ -35,6 +35,27 @@ Engine-specific setup:
 pre-commit install
 ```
 
+## Web UI
+
+Everything the CLI does is also available in a local web UI — launching sweeps
+with live progress, named endpoints, browsing saved results, and interactive
+comparisons across any set of runs:
+
+```bash
+uv run benchmark-webui            # opens http://127.0.0.1:8321
+uv run benchmark-webui --host 0.0.0.0 --port 9000 --no-open
+```
+
+- **Run** — pick an engine, contexts, and options; watch prompt/generation
+  speed live per context. MLX engines are automatically disabled on machines
+  without Apple Silicon (e.g. NVIDIA boxes).
+- **Endpoints** — save named inference targets ("M3 Ultra · llama.cpp",
+  "DGX · vLLM"); the name labels the run in results and charts.
+- **Results** — every folder in `output/` with sparklines, details, rename
+  and delete.
+- **Compare** — select up to 8 runs and compare any metric (generation/prompt
+  t/s, TTFT, TPOT, memory, KV cache, batch sweeps) in interactive charts.
+
 ## Running Benchmarks
 
 ```bash
