@@ -89,7 +89,7 @@ input, select, textarea { font: inherit; }
   top: 0;
   height: 100vh;
 }
-.wordmark { display: flex; gap: 10px; align-items: center; padding: 2px 10px 6px; }
+.wordmark { display: flex; gap: 10px; align-items: center; padding: 2px 10px 6px; color: inherit; text-decoration: none; cursor: pointer; }
 .wordmark-sigil {
   width: 26px; height: 26px; flex: none;
   border-radius: 7px;

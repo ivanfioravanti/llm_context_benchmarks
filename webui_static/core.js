@@ -247,14 +247,14 @@
   // A text input that upgrades to a dropdown once the target server's
   // model list was fetched (OpenAI /v1/models or the local Ollama daemon).
 
-  function attachModelPicker({ select, input, button, hint, getConnection }) {
+  function attachModelPicker({ select, input, button, hint, getConnection, localEngine }) {
     function show(asSelect) {
       select.hidden = !asSelect;
       input.hidden = asSelect;
     }
     async function load(auto) {
       const connection = getConnection();
-      if (!connection) {
+      if (!connection && !localEngine) {
         show(false);
         if (!auto) toast("No connection configured — enter the model manually.", true);
         return;
@@ -263,7 +263,9 @@
       const original = button.textContent;
       button.textContent = "…";
       try {
-        const res = await api("/api/models", { body: connection });
+        const res = connection
+          ? await api("/api/models", { body: connection })
+          : await api(`/api/cached-models?engine=${encodeURIComponent(localEngine)}`);
         if (res.models && res.models.length) {
           const current = (select.hidden ? input.value : select.value).trim();
           const models = res.models.slice();
@@ -272,10 +274,13 @@
             `<option value="${esc(m)}" ${m === current ? "selected" : ""}>${esc(m)}</option>`).join("") +
             `<option value="__custom__">✎ enter manually…</option>`;
           show(true);
-          if (hint) hint.textContent = `${res.models.length} model${res.models.length === 1 ? "" : "s"} found on the server.`;
+          if (hint) hint.textContent = `${res.models.length} model${res.models.length === 1 ? "" : "s"} ` +
+            (connection ? "found on the server." : "in the local HF cache.");
         } else {
           show(false);
-          if (hint) hint.textContent = "No model list from the server — enter manually.";
+          if (hint) hint.textContent = connection
+            ? "No model list from the server — enter manually."
+            : "No cached models found in HF_HOME — enter a repo id manually.";
           if (!auto && res.detail) toast("Model discovery failed: " + res.detail, true);
         }
       } catch (e) {
