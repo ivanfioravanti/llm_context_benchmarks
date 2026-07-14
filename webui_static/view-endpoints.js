@@ -215,11 +215,14 @@
         notes: modal.querySelector("#epNotes").value,
       };
       try {
-        if (endpoint) await api(`/api/endpoints/${encodeURIComponent(endpoint.id)}`, { method: "PUT", body: payload });
-        else await api("/api/endpoints", { body: payload });
+        const saved = endpoint
+          ? await api(`/api/endpoints/${encodeURIComponent(endpoint.id)}`, { method: "PUT", body: payload })
+          : await api("/api/endpoints", { body: payload });
         closeModal();
         renderEndpointsView();
-        toast("Endpoint saved.");
+        toast(saved.base_url_corrected
+          ? `Endpoint saved — appended /v1 to the base URL (the server answers there): ${saved.base_url}`
+          : "Endpoint saved.");
       } catch (e) { toast(e.message, true); }
     });
   }
