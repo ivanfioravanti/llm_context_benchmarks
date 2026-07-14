@@ -73,13 +73,6 @@ def save_endpoints(endpoints: list):
         os.close(fd)
 
 
-def expects_v1_base_url(engine_id: str) -> bool:
-    """Engines whose script takes the base URL verbatim as an OpenAI-style
-    /v1 root advertise that through their default base URL."""
-    info = get_engine_catalog().get(engine_id) or {}
-    return (info.get("default_base_url") or "").rstrip("/").endswith("/v1")
-
-
 def normalize_base_url(base_url: str, engine_id: str, api_key: str = "") -> tuple[str, bool]:
     """Append /v1 to a path-less base URL when the engine expects an OpenAI-style
     /v1 root and the server actually answers there (probed, never guessed).
@@ -89,7 +82,9 @@ def normalize_base_url(base_url: str, engine_id: str, api_key: str = "") -> tupl
     servers are left untouched.
     """
     url = (base_url or "").strip().rstrip("/")
-    if not url or not expects_v1_base_url(engine_id):
+    # engines whose script wants the /v1 root advertise that via their default
+    info = get_engine_catalog().get(engine_id) or {}
+    if not url or not (info.get("default_base_url") or "").rstrip("/").endswith("/v1"):
         return base_url, False
     from urllib.parse import urlparse
 

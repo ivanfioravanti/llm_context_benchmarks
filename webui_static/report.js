@@ -82,6 +82,7 @@
 
     try {
       for (const metric of metrics) {
+        if (only && !only.has(metric.key)) continue;
         await render(
           seriesFor(e => e.detail.results.map(r => [ctxNum(r.context_size), r[metric.key]])),
           { height, seconds: metric.seconds, xLabel: "context (tokens ×1000)", yLabel: metric.unit },
@@ -121,13 +122,12 @@
   // charts are rendered; tables and CSVs always keep the full data
   async function exportRuns(entries, format, baseName, title, only) {
     const metrics = metricsForEntries(entries);
-    const chartMetrics = only ? metrics.filter(m => only.has(m.key)) : metrics;
     const tables = CBExport.buildTables(entries, metrics, fmt);
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
 
     if (format === "zip") {
       // one compact dashboard PNG instead of a folder of single charts
-      const charts = await renderExportCharts(entries, chartMetrics,
+      const charts = await renderExportCharts(entries, metrics,
         { width: 720, height: 330, batchHeight: 300, legend: false, only });
       const encoder = new TextEncoder();
       const files = [];
@@ -156,7 +156,7 @@
     if (format === "html") {
       // interactive SVG charts: theme with the report's toggle, points show
       // their values on hover/click
-      const charts = await renderExportCharts(entries, chartMetrics,
+      const charts = await renderExportCharts(entries, metrics,
         { raw: true, width: 1060, height: 420, batchHeight: 380, only });
       const legend = entries.map(e => ({ name: e.name, color: seriesColor(e.slot || 0) }));
       const html = CBExport.buildHtmlReport(title, entries, tables, charts, legend);
@@ -165,7 +165,7 @@
     }
 
     // pdf — always the print-friendly light style
-    const charts = await renderExportCharts(entries, chartMetrics, { theme: "light", only });
+    const charts = await renderExportCharts(entries, metrics, { theme: "light", only });
     const chartData = [];
     for (const c of charts) chartData.push({ title: c.title, jpeg: await CBExport.canvasToJpeg(c.canvas) });
     const pdf = CBExport.buildPdfReport(title, entries, tables, chartData);
@@ -252,5 +252,5 @@
     </span>`;
   }
 
-  CB.report = { metricsForEntries, batchChartDefs, wireExportGroup, exportGroupHtml };
+  CB.report = { batchChartDefs, wireExportGroup, exportGroupHtml };
 })();
