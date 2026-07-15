@@ -29,23 +29,41 @@
   };
 
   const METRICS = [
-    { key: "generation_tps", label: "Generation", unit: "tok/s" },
-    { key: "prompt_tps", label: "Prompt", unit: "tok/s" },
-    { key: "time_to_first_token", label: "TTFT", unit: "s", seconds: true },
-    { key: "time_per_output_token", label: "TPOT", unit: "s", seconds: true },
-    { key: "total_time", label: "Total time", unit: "s", seconds: true },
-    { key: "generation_utf8_bytes_per_sec", label: "Gen bytes/s", unit: "B/s" },
-    { key: "prompt_utf8_bytes_per_sec", label: "Prompt bytes/s", unit: "B/s" },
-    { key: "generation_chars_per_sec", label: "Gen chars/s", unit: "chars/s" },
-    { key: "prompt_chars_per_sec", label: "Prompt chars/s", unit: "chars/s" },
-    { key: "peak_memory_gb", label: "Peak memory", unit: "GB" },
-    { key: "host_memory_gb", label: "Host RAM", unit: "GB" },
-    { key: "kv_cache_gb", label: "KV cache", unit: "GB" },
-    { key: "kv_cache_usage_perc", label: "KV usage", unit: "%" },
+    { key: "generation_tps", label: "Generation", unit: "tok/s",
+      desc: "Decode speed: generated tokens per second of pure generation time. Higher is better." },
+    { key: "prompt_tps", label: "Prompt", unit: "tok/s",
+      desc: "Prefill speed: prompt tokens processed per second before generation starts. Higher is better." },
+    { key: "time_to_first_token", label: "TTFT", unit: "s", seconds: true,
+      desc: "Time to first token: how long from sending the request until the first generated token arrives — dominated by prompt processing. Lower is better." },
+    { key: "time_per_output_token", label: "TPOT", unit: "s", seconds: true,
+      desc: "Time per output token: average gap between two generated tokens once generation is running. Lower is better." },
+    { key: "total_time", label: "Total time", unit: "s", seconds: true,
+      desc: "Wall-clock time of the whole request: prompt processing plus generation." },
+    { key: "generation_utf8_bytes_per_sec", label: "Gen bytes/s", unit: "B/s",
+      desc: "Tokenizer-independent generation throughput: UTF-8 bytes of generated text per second — comparable across models with different tokenizers." },
+    { key: "prompt_utf8_bytes_per_sec", label: "Prompt bytes/s", unit: "B/s",
+      desc: "Tokenizer-independent prefill throughput: UTF-8 bytes of prompt text processed per second." },
+    { key: "generation_chars_per_sec", label: "Gen chars/s", unit: "chars/s",
+      desc: "Generated Unicode characters per second — like bytes/s but counting characters, so multi-byte scripts read naturally." },
+    { key: "prompt_chars_per_sec", label: "Prompt chars/s", unit: "chars/s",
+      desc: "Prompt Unicode characters processed per second — tokenizer-independent prefill throughput in characters." },
+    { key: "peak_memory_gb", label: "Peak memory", unit: "GB",
+      desc: "Peak accelerator/unified memory used during the run (reported by the framework, e.g. MLX)." },
+    { key: "host_memory_gb", label: "Host RAM", unit: "GB",
+      desc: "Resident memory of the server process, sampled while the benchmark ran." },
+    { key: "kv_cache_gb", label: "KV cache", unit: "GB",
+      desc: "Size of the key-value cache after the context was processed — grows with context length." },
+    { key: "kv_cache_usage_perc", label: "KV usage", unit: "%",
+      desc: "Share of the server's KV-cache pool in use (as reported by e.g. vLLM or llama.cpp)." },
   ];
 
   function metricsForKeys(keys) {
     return METRICS.filter(m => keys.has(m.key));
+  }
+
+  // hoverable »?« that explains a metric; keyboard-reachable via tabindex
+  function qmarkHtml(desc) {
+    return desc ? `<span class="qmark" tabindex="0" data-tip="${esc(desc)}">?</span>` : "";
   }
 
   // ----------------------------------------------------------------- utils
@@ -340,7 +358,7 @@
   }
 
   window.CB = {
-    state, METRICS, metricsForKeys,
+    state, METRICS, metricsForKeys, qmarkHtml,
     esc, fmt, api, toast,
     seriesColor, ctxNum, cachedSeriesPoints, fmtDate, fmtDuration,
     pageHead, resultName, resultSubtitle, seriesLabel, matchesFilter, engineById, endpointTarget,

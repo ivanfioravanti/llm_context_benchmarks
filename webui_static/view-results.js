@@ -5,7 +5,7 @@
   "use strict";
 
   const {
-    state, METRICS, esc, fmt, api, toast, seriesColor, ctxNum, cachedSeriesPoints, fmtDate,
+    state, METRICS, esc, fmt, api, toast, seriesColor, ctxNum, cachedSeriesPoints, qmarkHtml, fmtDate,
     pageHead, resultName, resultSubtitle, seriesLabel, matchesFilter,
     ensureResults, ensureDetail, toggleCompare, openModal,
   } = CB;
@@ -137,7 +137,7 @@
     const chartPanels = chartKeys.map(key => {
       const metric = METRICS.find(m => m.key === key) || { label: key, unit: "" };
       return `<div><div class="chart-title">${esc(metric.label)}
-        ${metric.unit ? `<span class="unit">${esc(metric.unit)}</span>` : ""}</div>
+        ${metric.unit ? `<span class="unit">${esc(metric.unit)}</span>` : ""}${qmarkHtml(metric.desc)}</div>
         <div data-chart="${esc(key)}"></div></div>`;
     }).join("");
 

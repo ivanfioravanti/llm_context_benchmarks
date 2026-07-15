@@ -5,7 +5,7 @@
   "use strict";
 
   const {
-    state, esc, fmt, seriesColor, ctxNum, cachedSeriesPoints, fmtDate, pageHead,
+    state, esc, fmt, seriesColor, ctxNum, cachedSeriesPoints, qmarkHtml, fmtDate, pageHead,
     resultName, resultSubtitle, seriesLabel, matchesFilter, metricsForKeys,
     ensureResults, ensureDetail, toggleCompare,
   } = CB;
@@ -26,7 +26,7 @@
         <div class="metric-tabs" id="cmpTabs"></div>
         <div class="chart-controls">
           <label class="check"><input type="checkbox" id="cmpGrid" ${state.compare.grid ? "checked" : ""}> All metrics grid</label>
-          <label class="check" id="cmpBaselineWrap" hidden>Relative to
+          <label class="check" id="cmpBaselineWrap" style="display:none">Relative to
             <select id="cmpBaseline"></select></label>
           <span style="flex:1"></span>
           ${CB.report.exportGroupHtml()}
@@ -168,7 +168,8 @@
       state.compare.metric = metrics[0].key;
     }
     tabs.innerHTML = metrics.map(m =>
-      `<button class="metric-tab ${m.key === state.compare.metric ? "active" : ""}" data-metric="${esc(m.key)}">
+      `<button class="metric-tab ${m.key === state.compare.metric ? "active" : ""}" data-metric="${esc(m.key)}"
+        title="${esc(m.desc || "")}">
         ${esc(m.label)} <span class="unit">${esc(m.unit)}</span></button>`).join("");
     tabs.querySelectorAll(".metric-tab").forEach(btn =>
       btn.addEventListener("click", () => {
@@ -187,7 +188,7 @@
       for (const metric of metrics) {
         const panel = document.createElement("div");
         panel.className = "panel";
-        panel.innerHTML = `<div class="chart-title">${esc(metric.label)} <span class="unit">${esc(unitFor(metric))}</span></div><div></div>`;
+        panel.innerHTML = `<div class="chart-title">${esc(metric.label)} <span class="unit">${esc(unitFor(metric))}</span>${qmarkHtml(metric.desc)}</div><div></div>`;
         wrap.appendChild(panel);
         const series = await compareSeriesFor(metric.key);
         Charts.lineChart(panel.lastElementChild, {
@@ -199,7 +200,7 @@
       const metric = metrics.find(m => m.key === state.compare.metric) || metrics[0];
       if (!metric) { container.innerHTML = `<div class="empty">No comparable metrics.</div>`; return; }
       container.innerHTML = `<div class="panel">
-          <div class="chart-title">${esc(metric.label)} across context size <span class="unit">${esc(unitFor(metric))}</span></div>
+          <div class="chart-title">${esc(metric.label)} across context size <span class="unit">${esc(unitFor(metric))}</span>${qmarkHtml(metric.desc)}</div>
           <div id="cmpHero"></div>
         </div>
         <div class="panel"><div class="chart-title">Values</div><div class="tbl-wrap" id="cmpTable"></div></div>
@@ -226,7 +227,8 @@
       const summary = state.results.find(r => r.folder === folder);
       return { folder, name: summary ? seriesLabel(summary) : folder };
     });
-    wrap.hidden = runs.length < 2;
+    // .check sets display:flex, which would override the hidden attribute
+    wrap.style.display = runs.length < 2 ? "none" : "";
     select.innerHTML = `<option value="">absolute values</option>` + runs.map(r =>
       `<option value="${esc(r.folder)}" ${r.folder === state.compare.baseline ? "selected" : ""}>${esc(r.name)}</option>`).join("");
   }
@@ -264,7 +266,7 @@
       const panel = document.createElement("div");
       panel.className = "panel";
       panel.innerHTML = `<div class="chart-title">${esc(def.title.replace(/ \[.+\]$/, ""))}
-        <span class="unit">${esc(unit)}</span></div><div></div>`;
+        <span class="unit">${esc(unit)}</span>${qmarkHtml(def.desc)}</div><div></div>`;
       wrap.appendChild(panel);
       Charts.lineChart(panel.lastElementChild, {
         series, logX: true, height: 240, seconds: def.seconds,

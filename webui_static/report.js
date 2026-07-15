@@ -14,8 +14,8 @@
   // every chart the given runs could produce — the export picker offers these
   function chartChoices(entries) {
     return [
-      ...metricsForEntries(entries).map(m => ({ key: m.key, label: `${m.label} (${m.unit})` })),
-      ...batchChartDefs(entries).map(d => ({ key: d.key, label: d.title.replace(/ \[.+\]$/, "") })),
+      ...metricsForEntries(entries).map(m => ({ key: m.key, label: `${m.label} (${m.unit})`, desc: m.desc })),
+      ...batchChartDefs(entries).map(d => ({ key: d.key, label: d.title.replace(/ \[.+\]$/, ""), desc: d.desc })),
     ];
   }
 
@@ -36,26 +36,34 @@
     if (!withBatch.length) return [];
     const has = field => withBatch.some(e => e.detail.batch_data.some(b => b[field] != null && b[field] > 0));
     const defs = [
-      { key: "batch_prompt", title: "Batch — prompt throughput [tok/s]", field: "prompt_tps" },
-      { key: "batch_e2e", title: "Batch — end-to-end gen throughput [tok/s]", field: "generation_tps" },
+      { key: "batch_prompt", title: "Batch — prompt throughput [tok/s]", field: "prompt_tps",
+        desc: "Prompt (prefill) throughput summed across N parallel clients. Higher is better." },
+      { key: "batch_e2e", title: "Batch — end-to-end gen throughput [tok/s]", field: "generation_tps",
+        desc: "End-to-end generation throughput: generated tokens ÷ total wall time including the prompt phase, summed across clients." },
     ];
     if (has("decode_tps_total")) {
-      defs.push({ key: "batch_decode", title: "Batch — decode throughput [tok/s]", field: "decode_tps_total" });
+      defs.push({ key: "batch_decode", title: "Batch — decode throughput [tok/s]", field: "decode_tps_total",
+        desc: "Pure generation rate the server reported, summed across clients — prompt phase excluded." });
     }
     if (has("time_to_first_token")) {
-      defs.push({ key: "batch_ttft", title: "Batch — TTFT [s]", field: "time_to_first_token", seconds: true });
+      defs.push({ key: "batch_ttft", title: "Batch — TTFT [s]", field: "time_to_first_token", seconds: true,
+        desc: "Time to first token at this concurrency — the wait each client sees under load. Lower is better." });
     }
     if (has("time_per_output_token")) {
-      defs.push({ key: "batch_tpot", title: "Batch — TPOT [s]", field: "time_per_output_token", seconds: true });
+      defs.push({ key: "batch_tpot", title: "Batch — TPOT [s]", field: "time_per_output_token", seconds: true,
+        desc: "Average gap between two generated tokens at this concurrency. Lower is better." });
     }
     if (has("peak_memory_gb")) {
-      defs.push({ key: "batch_peak_mem", title: "Batch — peak memory [GB]", field: "peak_memory_gb" });
+      defs.push({ key: "batch_peak_mem", title: "Batch — peak memory [GB]", field: "peak_memory_gb",
+        desc: "Peak accelerator/unified memory while serving N clients in parallel." });
     }
     if (has("kv_cache_gb")) {
-      defs.push({ key: "batch_kv", title: "Batch — KV cache [GB]", field: "kv_cache_gb" });
+      defs.push({ key: "batch_kv", title: "Batch — KV cache [GB]", field: "kv_cache_gb",
+        desc: "Key-value-cache size with N concurrent sequences — grows with concurrency." });
     }
     if (has("host_memory_gb")) {
-      defs.push({ key: "batch_host_mem", title: "Batch — host RAM [GB]", field: "host_memory_gb" });
+      defs.push({ key: "batch_host_mem", title: "Batch — host RAM [GB]", field: "host_memory_gb",
+        desc: "Resident memory of the server process while serving N clients in parallel." });
     }
     return defs;
   }
@@ -78,7 +86,7 @@
       .map(e => ({ name: e.name, color: seriesColor(e.slot || 0), points: getPoints(e) }))
       .filter(s => s.points.some(p => p[1] != null && isFinite(p[1])));
 
-    const render = async (series, chartOpts, key, title) => {
+    const render = async (series, chartOpts, key, title, desc) => {
       if (!series.length) return;
       stage.innerHTML = "";
       Charts.lineChart(stage, {
@@ -90,8 +98,8 @@
       const svg = stage.querySelector("svg");
       if (!svg) return;
       charts.push(raw
-        ? { key, title, svg: svg.outerHTML }
-        : { key, title, canvas: await CBExport.svgToCanvas(svg, 2, surface()) });
+        ? { key, title, desc, svg: svg.outerHTML }
+        : { key, title, desc, canvas: await CBExport.svgToCanvas(svg, 2, surface()) });
     };
 
     try {
@@ -109,6 +117,7 @@
           { height, seconds: metric.seconds, xLabel: "context (tokens ×1000)", yLabel: metric.unit },
           metric.key,
           `${metric.label} across context size [${metric.unit}]`,
+          metric.desc,
         );
       }
       for (const def of batchChartDefs(entries)) {
@@ -119,6 +128,7 @@
           { height: batchHeight, seconds: def.seconds, xLabel: "batch size (parallel clients)", yLabel: def.title.match(/\[(.+)\]/)[1], xTickFormat: v => String(v) },
           def.key,
           def.title,
+          def.desc,
         );
       }
     } finally {
@@ -144,7 +154,7 @@
   // charts are rendered; tables and CSVs always keep the full data
   async function exportRuns(entries, format, baseName, title, only) {
     const metrics = metricsForEntries(entries);
-    const tables = CBExport.buildTables(entries, metrics, fmt);
+    const tables = CBExport.buildTables(entries, metrics, fmt, batchChartDefs(entries));
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
 
     if (format === "zip") {
@@ -223,7 +233,7 @@
     pop.innerHTML = `
       <div class="pop-title">Charts in the ${esc(format.toUpperCase())} export</div>
       <div class="pop-list">${choices.map(c => `
-        <label class="check"><input type="checkbox" value="${esc(c.key)}" ${off.has(c.key) ? "" : "checked"}>
+        <label class="check" title="${esc(c.desc || "")}"><input type="checkbox" value="${esc(c.key)}" ${off.has(c.key) ? "" : "checked"}>
           ${esc(c.label)}</label>`).join("")}
       </div>
       <div class="pop-actions">

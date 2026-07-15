@@ -206,8 +206,20 @@
     return s.length >= width ? s : s + " ".repeat(width - s.length);
   }
 
-  // shared tabular model for TXT / HTML / PDF: one table per metric
-  function buildTables(entries, metrics, fmt) {
+  function wrapText(text, max) {
+    const lines = [];
+    let line = "";
+    for (const word of String(text).split(/\s+/)) {
+      if (line && (line + " " + word).length > max) { lines.push(line); line = word; }
+      else line = line ? line + " " + word : word;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // shared tabular model for TXT / HTML / PDF: one table per metric, plus
+  // cached re-prompt tables and one table per batch chart
+  function buildTables(entries, metrics, fmt, batchDefs) {
     const contexts = [...new Set(entries.flatMap(e => e.detail.results.map(r => r.context_size)))]
       .sort((a, b) => parseFloat(a) - parseFloat(b));
     const tables = [];
@@ -220,25 +232,57 @@
       if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
       tables.push({
         title: `${metric.label} [${metric.unit}]`,
+        desc: metric.desc,
         headers: ["context"].concat(entries.map(e => e.name)),
         rows,
       });
     }
+
+    const withCached = entries.filter(e => e.detail.cached_results && e.detail.cached_results.length);
+    if (withCached.length) {
+      const cachedDefs = [
+        { key: "incremental_prompt_tps", title: "Cached re-prompt — incremental prompt [tok/s]",
+          desc: "Prefill speed on top of a stored KV cache, counting only the tokens added after the cached prefix." },
+        { key: "generation_tps", title: "Cached re-prompt — generation [tok/s]",
+          desc: "Decode speed of the warm run that reused the stored KV cache." },
+        { key: "time_to_first_token", title: "Cached re-prompt — TTFT [s]", seconds: true,
+          desc: "Time to first token when the context prefix is already cached. Lower is better." },
+      ];
+      const cachedContexts = [...new Set(withCached.flatMap(e => e.detail.cached_results.map(r => r.context_size)))]
+        .sort((a, b) => parseFloat(a) - parseFloat(b));
+      for (const def of cachedDefs) {
+        const rows = cachedContexts.map(ctx => [ctx].concat(entries.map(e => {
+          const row = (e.detail.cached_results || []).find(r => r.context_size === ctx);
+          return row && row[def.key] != null && isFinite(row[def.key]) && row[def.key] > 0
+            ? fmt(row[def.key], { seconds: def.seconds }) : null;
+        })));
+        if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
+        tables.push({
+          title: def.title,
+          desc: def.desc,
+          headers: ["context"].concat(entries.map(e => e.name)),
+          rows,
+        });
+      }
+    }
+
     const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
-    if (withBatch.length) {
+    if (withBatch.length && batchDefs) {
       const batchSizes = [...new Set(withBatch.flatMap(e => e.detail.batch_data.map(b => b.batch_size)))]
         .sort((a, b) => a - b);
-      const hasDecode = withBatch.some(e => e.detail.batch_data.some(b => b.decode_tps_total != null));
-      tables.push({
-        title: `Batch sweep [prompt / e2e-gen${hasDecode ? " / decode" : ""} tok/s, N parallel clients]`,
-        headers: ["batch"].concat(withBatch.map(e => e.name)),
-        rows: batchSizes.map(bs => [bs].concat(withBatch.map(e => {
-          const row = e.detail.batch_data.find(b => b.batch_size === bs);
-          if (!row) return null;
-          const cell = `${fmt(row.prompt_tps)} / ${fmt(row.generation_tps)}`;
-          return row.decode_tps_total != null ? `${cell} / ${fmt(row.decode_tps_total)}` : cell;
-        }))),
-      });
+      for (const def of batchDefs) {
+        const rows = batchSizes.map(bs => [bs].concat(entries.map(e => {
+          const row = (e.detail.batch_data || []).find(b => b.batch_size === bs);
+          return row && row[def.field] > 0 ? fmt(row[def.field], { seconds: def.seconds }) : null;
+        })));
+        if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
+        tables.push({
+          title: def.title,
+          desc: def.desc,
+          headers: ["batch"].concat(entries.map(e => e.name)),
+          rows,
+        });
+      }
     }
     return tables;
   }
@@ -259,6 +303,7 @@
     lines.push("");
     for (const table of tables) {
       lines.push(`== ${table.title} ==`);
+      if (table.desc) lines.push(`   ${table.desc}`);
       const widths = table.headers.map((h, i) =>
         Math.max(h.length, ...table.rows.map(r => (r[i] == null ? 1 : String(r[i]).length))) + 2);
       lines.push(table.headers.map((h, i) => pad(h, widths[i])).join(""));
@@ -287,13 +332,14 @@
     const legendHtml = (legend || []).length < 2 ? "" :
       `<div class="legend">${legend.map(l =>
         `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${h(l.name)}</span>`).join("")}</div>`;
+    const qmark = desc => (desc ? `<span class="qmark" tabindex="0" data-tip="${h(desc)}">?</span>` : "");
     const chartsHtml = charts.map(c => `<figure>
-      <figcaption>${h(c.title)}</figcaption>
+      <figcaption>${h(c.title)}${qmark(c.desc)}</figcaption>
       <div class="viz">${c.svg}</div>
       ${legendHtml}
     </figure>`).join("\n");
     const tablesHtml = tables.map(t => `
-      <h2>${h(t.title)}</h2>
+      <h2>${h(t.title)}${qmark(t.desc)}</h2>
       <table><thead><tr>${t.headers.map((x, i) =>
         `<th${i ? "" : ' class="left"'}>${h(x)}</th>`).join("")}</tr></thead>
       <tbody>${t.rows.map(r => `<tr>${r.map((v, i) =>
@@ -363,6 +409,19 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 10px; }
   .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
   .legend-swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .qmark { display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; margin-left: 7px; vertical-align: 1px;
+    border: 1px solid var(--axis); border-radius: 50%;
+    color: var(--muted); font: 600 9.5px/1 ui-monospace, Menlo, monospace;
+    cursor: help; position: relative; }
+  .qmark:hover { color: var(--ink); border-color: var(--muted); }
+  .qmark::after { content: attr(data-tip); position: absolute; left: -20px; top: calc(100% + 8px);
+    width: 300px; background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px;
+    padding: 8px 11px; font: 400 12px/1.5 system-ui, sans-serif; color: var(--ink-2);
+    text-align: left; text-transform: none; letter-spacing: normal; white-space: normal;
+    box-shadow: 0 8px 30px rgba(0,0,0,.35); z-index: 20;
+    opacity: 0; visibility: hidden; transition: opacity 120ms ease; pointer-events: none; }
+  .qmark:hover::after, .qmark:focus::after { opacity: 1; visibility: visible; }
   .pt-tip { position: fixed; z-index: 10; pointer-events: none;
     background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px;
     padding: 7px 10px; font-size: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.35); max-width: 320px; }
@@ -664,12 +723,20 @@ ${tablesHtml}
       pdf.addPage();
       pdf.text(M, 44, chart.title, { bold: true, size: 13 });
       pdf.line(M, 56, pdf.W - M, 56, 0.2);
+      let iy = 72;
+      if (chart.desc) {
+        for (const line of wrapText(chart.desc, 100)) {
+          pdf.text(M, iy, line, { size: 9, color: [0.45, 0.44, 0.4] });
+          iy += 12;
+        }
+        iy += 6;
+      }
       const maxW = pdf.W - 2 * M;
-      const maxH = pdf.H - 100;
+      const maxH = pdf.H - iy - 40;
       const ratio = Math.min(maxW / chart.jpeg.width, maxH / chart.jpeg.height);
       const w = chart.jpeg.width * ratio;
       const h = chart.jpeg.height * ratio;
-      pdf.image(chart.jpeg, M + (maxW - w) / 2, 72, w, h);
+      pdf.image(chart.jpeg, M + (maxW - w) / 2, iy, w, h);
     }
 
     // --- data tables (monospace) ---
@@ -690,6 +757,13 @@ ${tablesHtml}
       if (ty === Infinity || room() < Math.min(neededRows, 6) * lineHeight) newDataPage();
       pdf.text(M, ty, table.title, { bold: true, size: 10.5 });
       ty += 16;
+      if (table.desc) {
+        for (const line of wrapText(table.desc, 110)) {
+          pdf.text(M, ty, line, { size: 8, color: [0.45, 0.44, 0.4] });
+          ty += 11;
+        }
+        ty += 2;
+      }
       pdf.text(M, ty, headerLine, { mono: true, size: 8.5, color: [0.45, 0.44, 0.4] });
       ty += 4;
       pdf.line(M, ty, pdf.W - M, ty, 0.6);
