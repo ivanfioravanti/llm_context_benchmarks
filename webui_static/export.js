@@ -81,7 +81,8 @@
   // --------------------------------------------------------- SVG -> canvas
 
   const INLINE_PROPS = ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
-    "opacity", "font-family", "font-size", "font-weight", "letter-spacing", "visibility"];
+    "stroke-dasharray", "paint-order", "opacity", "font-family", "font-size", "font-weight",
+    "letter-spacing", "visibility"];
 
   async function svgToCanvas(svgEl, scale, background) {
     const clone = svgEl.cloneNode(true);

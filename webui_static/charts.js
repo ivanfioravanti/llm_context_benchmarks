@@ -204,6 +204,37 @@
       }
     }
 
+    // static value labels at each point — for rasterized exports (PNG, PDF)
+    // where there is no hover tooltip. Labels sharing an x position are
+    // de-overlapped vertically, keeping the dots' top-to-bottom order so the
+    // color association stays readable.
+    if (opts.pointLabels) {
+      const GAP = 11;
+      const yTop = margin.top + 9;
+      const yBottom = margin.top + ih - 4;
+      const perX = new Map();
+      for (const s of series) {
+        for (const p of s.points) {
+          if (!perX.has(p[0])) perX.set(p[0], []);
+          perX.get(p[0]).push({ color: s.color, value: p[1], y: py(p[1]) - 8 });
+        }
+      }
+      for (const [xv, labels] of perX) {
+        const x = Math.min(Math.max(px(xv), margin.left + 16), width - margin.right - 16);
+        labels.sort((a, b) => a.y - b.y);
+        for (let i = 0; i < labels.length; i++) {
+          labels[i].y = Math.max(labels[i].y, yTop, i ? labels[i - 1].y + GAP : yTop);
+        }
+        // pushed past the plot bottom? shift the column back up
+        const overflow = labels[labels.length - 1].y - yBottom;
+        if (overflow > 0) for (const l of labels) l.y -= overflow;
+        for (const l of labels) {
+          const t = el("text", { x, y: l.y, "text-anchor": "middle", class: "point-label", fill: l.color }, svg);
+          t.textContent = fmtNum(l.value, opts);
+        }
+      }
+    }
+
     // crosshair + tooltip
     const crosshair = el("line", {
       y1: margin.top, y2: margin.top + ih, x1: 0, x2: 0,

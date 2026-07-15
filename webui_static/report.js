@@ -73,8 +73,10 @@
   // opts.raw: return class-based SVG markup (themable + interactive in the
   //           HTML report) instead of rasterized canvases.
   async function renderExportCharts(entries, metrics, opts) {
-    const { theme = null, width = 1160, height = 480, batchHeight = 420, legend = true, raw = false, only = null } =
-      opts || {};
+    const {
+      theme = null, width = 1160, height = 480, batchHeight = 420,
+      legend = true, raw = false, only = null, pointLabels = false,
+    } = opts || {};
     const stage = document.createElement("div");
     stage.style.cssText = `position:fixed;left:-12000px;top:0;width:${width}px`;
     if (theme === "light") stage.className = "force-light";
@@ -90,7 +92,7 @@
       if (!series.length) return;
       stage.innerHTML = "";
       Charts.lineChart(stage, {
-        series, logX: true, width, legend: false,
+        series, logX: true, width, legend: false, pointLabels,
         svgTitle: raw ? undefined : title,
         svgLegend: raw ? false : legend,
         ...chartOpts,
@@ -114,7 +116,8 @@
         }
         await render(
           series,
-          { height, seconds: metric.seconds, xLabel: "context (tokens ×1000)", yLabel: metric.unit },
+          // no x-axis label: the »0.5k / 1k / …« ticks say it all
+          { height, seconds: metric.seconds, yLabel: metric.unit },
           metric.key,
           `${metric.label} across context size [${metric.unit}]`,
           metric.desc,
@@ -158,9 +161,10 @@
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
 
     if (format === "zip") {
-      // one compact dashboard PNG instead of a folder of single charts
+      // one compact dashboard PNG instead of a folder of single charts;
+      // value labels at the points because a PNG has no hover tooltip
       const charts = await renderExportCharts(entries, metrics,
-        { width: 720, height: 330, batchHeight: 300, legend: false, only });
+        { width: 720, height: 330, batchHeight: 300, legend: false, only, pointLabels: true });
       const encoder = new TextEncoder();
       const files = [];
       if (charts.length) {
@@ -200,8 +204,9 @@
       return "HTML report saved";
     }
 
-    // pdf — always the print-friendly light style
-    const charts = await renderExportCharts(entries, metrics, { theme: "light", only });
+    // pdf — always the print-friendly light style; value labels because
+    // print has no hover tooltip either
+    const charts = await renderExportCharts(entries, metrics, { theme: "light", only, pointLabels: true });
     const chartData = [];
     for (const c of charts) chartData.push({ title: c.title, jpeg: await CBExport.canvasToJpeg(c.canvas) });
     const pdf = CBExport.buildPdfReport(title, entries, tables, chartData);

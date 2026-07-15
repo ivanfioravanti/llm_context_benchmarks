@@ -208,7 +208,7 @@
       const series = await compareSeriesFor(metric.key);
       Charts.lineChart(document.getElementById("cmpHero"), {
         series, logX: true, height: 440, seconds: secondsFor(metric),
-        xLabel: "context (tokens ×1000)", yLabel: unitFor(metric),
+        xLabel: "context", yLabel: unitFor(metric),
       });
       renderCompareTable(series, { ...metric, seconds: secondsFor(metric) });
     }

@@ -480,6 +480,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .viz .gridline { stroke: var(--grid); stroke-width: 1; }
 .viz .axisline { stroke: var(--axis); stroke-width: 1; }
 .viz .tick-label { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+.viz .point-label {
+  font-family: var(--mono); font-size: 8.5px; font-weight: 600;
+  /* surface-colored halo keeps the value readable where lines cross it */
+  paint-order: stroke; stroke: var(--surface); stroke-width: 2.5px;
+}
 .viz .axis-title { fill: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; }
 .viz .series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .viz .series-dot { stroke: var(--surface); stroke-width: 2; }
