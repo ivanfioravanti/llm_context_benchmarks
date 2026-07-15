@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  const { esc, fmt, toast, seriesColor, ctxNum, metricsForKeys } = CB;
+  const { esc, fmt, toast, seriesColor, ctxNum, cachedSeriesPoints, metricsForKeys } = CB;
 
   function metricsForEntries(entries) {
     return metricsForKeys(new Set(entries.flatMap(e => e.detail.summary.columns)));
@@ -28,19 +28,33 @@
     catch (e) { return new Set(); }
   }
 
-  // Batch charts: prompt + end-to-end are always there; the pure decode rate
-  // only when the engine recorded it (decode_tps_total from server usage).
+  // Batch charts: prompt + end-to-end are always there; the rest only when
+  // some run in the set actually recorded the field (engines report 0 or
+  // omit it entirely when a metric is unavailable).
   function batchChartDefs(entries) {
     const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
     if (!withBatch.length) return [];
+    const has = field => withBatch.some(e => e.detail.batch_data.some(b => b[field] != null && b[field] > 0));
     const defs = [
       { key: "batch_prompt", title: "Batch — prompt throughput [tok/s]", field: "prompt_tps" },
       { key: "batch_e2e", title: "Batch — end-to-end gen throughput [tok/s]", field: "generation_tps" },
     ];
-    if (withBatch.some(e => e.detail.batch_data.some(b => b.decode_tps_total != null))) {
+    if (has("decode_tps_total")) {
       defs.push({ key: "batch_decode", title: "Batch — decode throughput [tok/s]", field: "decode_tps_total" });
     }
-    if (withBatch.some(e => e.detail.batch_data.some(b => b.host_memory_gb != null))) {
+    if (has("time_to_first_token")) {
+      defs.push({ key: "batch_ttft", title: "Batch — TTFT [s]", field: "time_to_first_token", seconds: true });
+    }
+    if (has("time_per_output_token")) {
+      defs.push({ key: "batch_tpot", title: "Batch — TPOT [s]", field: "time_per_output_token", seconds: true });
+    }
+    if (has("peak_memory_gb")) {
+      defs.push({ key: "batch_peak_mem", title: "Batch — peak memory [GB]", field: "peak_memory_gb" });
+    }
+    if (has("kv_cache_gb")) {
+      defs.push({ key: "batch_kv", title: "Batch — KV cache [GB]", field: "kv_cache_gb" });
+    }
+    if (has("host_memory_gb")) {
       defs.push({ key: "batch_host_mem", title: "Batch — host RAM [GB]", field: "host_memory_gb" });
     }
     return defs;
@@ -83,8 +97,15 @@
     try {
       for (const metric of metrics) {
         if (only && !only.has(metric.key)) continue;
+        const series = seriesFor(e => e.detail.results.map(r => [ctxNum(r.context_size), r[metric.key]]));
+        for (const e of entries) {
+          const cached = cachedSeriesPoints(e.detail, metric.key);
+          if (cached) series.push({
+            name: `${e.name} · cached`, color: seriesColor(e.slot || 0), dash: true, points: cached,
+          });
+        }
         await render(
-          seriesFor(e => e.detail.results.map(r => [ctxNum(r.context_size), r[metric.key]])),
+          series,
           { height, seconds: metric.seconds, xLabel: "context (tokens ×1000)", yLabel: metric.unit },
           metric.key,
           `${metric.label} across context size [${metric.unit}]`,
@@ -93,8 +114,9 @@
       for (const def of batchChartDefs(entries)) {
         if (only && !only.has(def.key)) continue;
         await render(
-          seriesFor(e => (e.detail.batch_data || []).map(b => [b.batch_size, b[def.field]])),
-          { height: batchHeight, xLabel: "batch size (parallel clients)", yLabel: def.title.match(/\[(.+)\]/)[1], xTickFormat: v => String(v) },
+          // engines write 0 when a batch metric is unavailable — not a data point
+          seriesFor(e => (e.detail.batch_data || []).map(b => [b.batch_size, b[def.field] > 0 ? b[def.field] : null])),
+          { height: batchHeight, seconds: def.seconds, xLabel: "batch size (parallel clients)", yLabel: def.title.match(/\[(.+)\]/)[1], xTickFormat: v => String(v) },
           def.key,
           def.title,
         );
@@ -148,6 +170,8 @@
       files.push({ name: "results.csv", data: encoder.encode(CBExport.buildResultsCsv(entries)) });
       const batchCsv = CBExport.buildBatchCsv(entries);
       if (batchCsv) files.push({ name: "batch_results.csv", data: encoder.encode(batchCsv) });
+      const cachedCsv = CBExport.buildCachedCsv(entries);
+      if (cachedCsv) files.push({ name: "cached_results.csv", data: encoder.encode(cachedCsv) });
       files.push({ name: "comparison.txt", data: encoder.encode(CBExport.buildComparisonTxt(entries, tables, title)) });
       CBExport.download(CBExport.makeZip(files), `${baseName}_${stamp}.zip`);
       return files.length + " files zipped";

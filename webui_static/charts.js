@@ -139,7 +139,9 @@
       const y = height - legendHeight + 14 + r * 20;
       for (const item of legendRows[r]) {
         const x = margin.left + item.x;
-        el("line", { x1: x, x2: x + 14, y1: y - 4, y2: y - 4, stroke: item.s.color, "stroke-width": 3 }, svg);
+        const swatch = { x1: x, x2: x + 14, y1: y - 4, y2: y - 4, stroke: item.s.color, "stroke-width": 3 };
+        if (item.s.dash) swatch["stroke-dasharray"] = "4 3";
+        el("line", swatch, svg);
         const t = el("text", {
           x: x + 20, y, fill: tok("--ink-2") || "#555",
           "font-family": "system-ui, sans-serif", "font-size": 11,
@@ -189,7 +191,9 @@
     // (standalone) SVGs can offer point tooltips without re-plumbing data
     for (const s of series) {
       const d = s.points.map((p, i) => `${i ? "L" : "M"}${px(p[0]).toFixed(1)},${py(p[1]).toFixed(1)}`).join("");
-      el("path", { d, class: "series-line", stroke: s.color }, svg);
+      const attrs = { d, class: "series-line", stroke: s.color };
+      if (s.dash) attrs["stroke-dasharray"] = "6 5";
+      el("path", attrs, svg);
       for (const p of s.points) {
         el("circle", {
           cx: px(p[0]), cy: py(p[1]), r: 4, fill: s.color, class: "series-dot",

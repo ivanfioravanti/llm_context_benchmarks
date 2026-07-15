@@ -20,6 +20,7 @@
       slots: new Map(),    // folder -> color slot index (0..7)
       metric: "generation_tps",
       grid: false,
+      baseline: null,      // folder shown as 100% — null = absolute values
     },
     resultsFilter: "",
     runFormEngine: null,
@@ -35,6 +36,8 @@
     { key: "total_time", label: "Total time", unit: "s", seconds: true },
     { key: "generation_utf8_bytes_per_sec", label: "Gen bytes/s", unit: "B/s" },
     { key: "prompt_utf8_bytes_per_sec", label: "Prompt bytes/s", unit: "B/s" },
+    { key: "generation_chars_per_sec", label: "Gen chars/s", unit: "chars/s" },
+    { key: "prompt_chars_per_sec", label: "Prompt chars/s", unit: "chars/s" },
     { key: "peak_memory_gb", label: "Peak memory", unit: "GB" },
     { key: "host_memory_gb", label: "Host RAM", unit: "GB" },
     { key: "kv_cache_gb", label: "KV cache", unit: "GB" },
@@ -78,6 +81,25 @@
   function ctxNum(ctx) {
     const v = parseFloat(String(ctx).replace(/k$/i, ""));
     return isFinite(v) ? v : 0;
+  }
+
+  // KV-cache-reuse runs (MLX --cached) carry warm re-prompt measurements in
+  // cached_results; these map onto the cold metrics as dashed overlays.
+  const CACHED_METRIC_FIELDS = {
+    prompt_tps: "incremental_prompt_tps",
+    generation_tps: "generation_tps",
+    time_to_first_token: "time_to_first_token",
+  };
+
+  function cachedSeriesPoints(detail, metricKey) {
+    const field = CACHED_METRIC_FIELDS[metricKey];
+    const rows = detail.cached_results;
+    if (!field || !rows || !rows.length) return null;
+    const points = rows
+      .map(r => [ctxNum(r.context_size), r[field]])
+      .filter(p => p[1] != null && isFinite(p[1]) && p[1] > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return points.length ? points : null;
   }
 
   function fmtDate(iso) {
@@ -320,7 +342,7 @@
   window.CB = {
     state, METRICS, metricsForKeys,
     esc, fmt, api, toast,
-    seriesColor, ctxNum, fmtDate, fmtDuration,
+    seriesColor, ctxNum, cachedSeriesPoints, fmtDate, fmtDuration,
     pageHead, resultName, resultSubtitle, seriesLabel, matchesFilter, engineById, endpointTarget,
     ensureResults, ensureDetail, toggleCompare,
     openModal, closeModal, initTheme,

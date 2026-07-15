@@ -179,6 +179,28 @@
     return lines.join("\n") + "\n";
   }
 
+  function buildCachedCsv(entries) {
+    const withCached = entries.filter(e => e.detail.cached_results && e.detail.cached_results.length);
+    if (!withCached.length) return null;
+    const dataCols = [];
+    for (const e of withCached) {
+      for (const row of e.detail.cached_results) {
+        for (const key of Object.keys(row)) {
+          if (key !== "generated_text" && key !== "reasoning_text" && !dataCols.includes(key)) dataCols.push(key);
+        }
+      }
+    }
+    const lines = [["run", "engine", "model"].concat(dataCols).join(",")];
+    for (const e of withCached) {
+      const s = e.detail.summary;
+      for (const row of e.detail.cached_results) {
+        lines.push([csvEscape(e.name), csvEscape(s.engine), csvEscape(s.model)]
+          .concat(dataCols.map(c => csvEscape(row[c]))).join(","));
+      }
+    }
+    return lines.join("\n") + "\n";
+  }
+
   function pad(value, width) {
     const s = value == null ? "–" : String(value);
     return s.length >= width ? s : s + " ".repeat(width - s.length);
@@ -698,7 +720,7 @@ ${tablesHtml}
 
   window.CBExport = {
     makeZip, svgToCanvas, canvasToPngBytes, canvasToJpeg,
-    buildResultsCsv, buildBatchCsv, buildTables, buildComparisonTxt,
+    buildResultsCsv, buildBatchCsv, buildCachedCsv, buildTables, buildComparisonTxt,
     buildHtmlReport, buildPdfReport, composeOverview, download,
   };
 })();

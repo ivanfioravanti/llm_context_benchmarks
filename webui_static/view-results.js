@@ -5,7 +5,7 @@
   "use strict";
 
   const {
-    state, METRICS, esc, fmt, api, toast, seriesColor, ctxNum, fmtDate,
+    state, METRICS, esc, fmt, api, toast, seriesColor, ctxNum, cachedSeriesPoints, fmtDate,
     pageHead, resultName, resultSubtitle, seriesLabel, matchesFilter,
     ensureResults, ensureDetail, toggleCompare, openModal,
   } = CB;
@@ -154,18 +154,49 @@
         <tbody>${rows.map(r => `<tr>${cols.map(c =>
           `<td>${c === "context_size" ? esc(r[c]) : esc(fmt(r[c], { seconds: /time|ttft|tpot/.test(c) }))}</td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
+      ${detail.cached_results && detail.cached_results.length ? (() => {
+        const cachedRows = detail.cached_results;
+        const cCols = [
+          ["cached_tokens", "cached tokens", {}],
+          ["delta_tokens", "new tokens", {}],
+          ["incremental_prompt_tps", "incr. prompt t/s", {}],
+          ["generation_tps", "gen t/s", {}],
+          ["time_to_first_token", "ttft", { seconds: true }],
+          ["kv_cache_gb", "kv cache GB", {}],
+        ].filter(([key]) => cachedRows.some(r => r[key] != null));
+        return `
+        <h3 style="font-size:14px;margin:18px 0 4px">Cached re-prompt <span class="unit">KV-cache reuse</span></h3>
+        <p class="hint" style="margin:0 0 8px">Warm runs on top of a stored KV cache — »incr. prompt«
+          only counts the tokens added after the cached prefix.</p>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>context</th>${cCols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
+          <tbody>${cachedRows.map(r => `<tr><td>${esc(r.context_size)}</td>
+            ${cCols.map(([key, , o]) => `<td>${esc(fmt(r[key], o))}</td>`).join("")}
+          </tr>`).join("")}</tbody>
+        </table></div>`;
+      })() : ""}
       ${detail.batch_data && detail.batch_data.length ? (() => {
-        const hasDecode = detail.batch_data.some(b => b.decode_tps_total != null);
+        const batchRows = detail.batch_data;
+        const bCols = [
+          ["prompt_tps", "prompt t/s", {}],
+          ["generation_tps", "e2e gen t/s", {}],
+          ["decode_tps_total", "decode t/s", {}],
+          ["decode_tps_per_client", "decode / client", {}],
+          ["time_to_first_token", "ttft", { seconds: true }],
+          ["time_per_output_token", "tpot", { seconds: true }],
+          ["peak_memory_gb", "peak GB", {}],
+          ["kv_cache_gb", "kv GB", {}],
+          ["host_memory_gb", "host GB", {}],
+        ].filter(([key]) => batchRows.some(b => b[key] != null && b[key] > 0));
+        const hasDecode = bCols.some(([key]) => key === "decode_tps_total");
         return `
         <h3 style="font-size:14px;margin:18px 0 4px">Batch sweep <span class="unit">N parallel clients</span></h3>
         <p class="hint" style="margin:0 0 8px">»E2E gen« = generated tokens ÷ total wall time (prompt
           phase included)${hasDecode ? " — »decode« = pure generation rate, summed across clients" : ""}.</p>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>batch</th><th>prompt t/s</th><th>e2e gen t/s</th>
-            ${hasDecode ? "<th>decode t/s</th><th>decode / client</th>" : ""}</tr></thead>
-          <tbody>${detail.batch_data.map(b => `<tr><td>${esc(b.batch_size)}</td>
-            <td>${esc(fmt(b.prompt_tps))}</td><td>${esc(fmt(b.generation_tps))}</td>
-            ${hasDecode ? `<td>${esc(fmt(b.decode_tps_total))}</td><td>${esc(fmt(b.decode_tps_per_client))}</td>` : ""}
+          <thead><tr><th>batch</th>${bCols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
+          <tbody>${batchRows.map(b => `<tr><td>${esc(b.batch_size)}</td>
+            ${bCols.map(([key, , o]) => `<td>${esc(fmt(b[key], o))}</td>`).join("")}
           </tr>`).join("")}</tbody>
         </table></div>`;
       })() : ""}
@@ -190,13 +221,15 @@
     for (const key of chartKeys) {
       const node = modal.querySelector(`[data-chart="${key}"]`);
       const metric = METRICS.find(m => m.key === key) || {};
+      const series = [{
+        name: seriesLabel(summary), color,
+        points: rows.map(r => [ctxNum(r.context_size), r[key]]),
+      }];
+      const cached = cachedSeriesPoints(detail, key);
+      if (cached) series.push({ name: "cached (incremental)", color, dash: true, points: cached });
       Charts.lineChart(node, {
-        series: [{
-          name: seriesLabel(summary), color,
-          points: rows.map(r => [ctxNum(r.context_size), r[key]]),
-        }],
-        logX: true, height: 190, seconds: metric.seconds,
-        xLabel: "context", yLabel: metric.unit || "", legend: false,
+        series, logX: true, height: 190, seconds: metric.seconds,
+        xLabel: "context", yLabel: metric.unit || "", legend: !!cached,
       });
     }
   }
