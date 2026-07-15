@@ -138,7 +138,7 @@
   }
 
   function buildResultsCsv(entries) {
-    const metaCols = ["run", "engine", "model", "machine", "folder"];
+    const metaCols = ["run", "engine", "model", "endpoint", "folder"];
     const dataCols = [];
     for (const e of entries) {
       for (const row of e.detail.results) {
@@ -152,7 +152,7 @@
       const s = e.detail.summary;
       for (const row of e.detail.results) {
         lines.push(metaCols.map(c => csvEscape({
-          run: e.name, engine: s.engine, model: s.model, machine: s.machine, folder: s.folder,
+          run: e.name, engine: s.engine, model: s.model, endpoint: s.endpoint, folder: s.folder,
         }[c])).concat(dataCols.map(c => csvEscape(row[c]))).join(","));
       }
     }
@@ -296,8 +296,9 @@
     entries.forEach((e, i) => {
       const s = e.detail.summary;
       lines.push(`  [${i + 1}] ${e.name}`);
-      lines.push(`      ${s.engine} · ${s.model}${s.machine ? " · " + s.machine : ""}`);
-      if (s.hardware) lines.push(`      ${s.hardware}`);
+      // deliberately no local hardware info: for endpoint runs the inference
+      // ran elsewhere — the endpoint name is the machine that matters
+      lines.push(`      ${s.engine} · ${s.model}${s.endpoint ? " · " + s.endpoint : ""}`);
       lines.push(`      ${s.folder}`);
     });
     lines.push("");
@@ -327,7 +328,7 @@
       const s = e.detail.summary;
       return `<tr><td class="idx">${i + 1}</td><td><strong>${h(e.name)}</strong></td>
         <td>${h(s.engine)}</td><td class="mono">${h(s.model)}</td>
-        <td>${h(s.machine || "–")}</td><td class="mono small">${h(s.folder)}</td></tr>`;
+        <td>${h(s.endpoint || "–")}</td><td class="mono small">${h(s.folder)}</td></tr>`;
     }).join("");
     const legendHtml = (legend || []).length < 2 ? "" :
       `<div class="legend">${legend.map(l =>
@@ -443,7 +444,7 @@
 </header>
 <h2>Runs</h2>
 <table><thead><tr><th class="left"></th><th class="left">Run</th><th class="left">Engine</th>
-<th class="left">Model</th><th class="left">Machine</th><th class="left">Folder</th></tr></thead>
+<th class="left">Model</th><th class="left">Endpoint</th><th class="left">Folder</th></tr></thead>
 <tbody>${runsHtml}</tbody></table>
 ${chartsHtml}
 ${tablesHtml}
@@ -711,9 +712,10 @@ ${tablesHtml}
       const s = e.detail.summary;
       pdf.text(M, y, `${i + 1}.  ${e.name}`, { bold: true, size: 11 });
       y += 15;
-      pdf.text(M + 16, y, `${s.engine} · ${s.model}${s.machine ? " · " + s.machine : ""}`, { size: 9.5, color: [0.32, 0.32, 0.3] });
+      // deliberately no local hardware info: for endpoint runs the inference
+      // ran elsewhere — the endpoint name is the machine that matters
+      pdf.text(M + 16, y, `${s.engine} · ${s.model}${s.endpoint ? " · " + s.endpoint : ""}`, { size: 9.5, color: [0.32, 0.32, 0.3] });
       y += 13;
-      if (s.hardware) { pdf.text(M + 16, y, s.hardware, { size: 9, color: [0.55, 0.53, 0.5] }); y += 13; }
       pdf.text(M + 16, y, s.folder, { mono: true, size: 8, color: [0.55, 0.53, 0.5] });
       y += 20;
     });

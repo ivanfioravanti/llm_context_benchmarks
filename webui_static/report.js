@@ -167,10 +167,12 @@
         const overview = CBExport.composeOverview({
           title,
           // entry names already carry the model, so the sub only adds context
+          // no local machine info here: for endpoint runs the inference ran
+          // elsewhere — the endpoint name is the machine that matters
           runs: entries.map(e => ({
             name: e.name,
             color: seriesColor(e.slot || 0),
-            sub: [e.detail.summary.engine, e.detail.summary.machine].filter(Boolean).join(" · "),
+            sub: [e.detail.summary.engine, e.detail.summary.endpoint].filter(Boolean).join(" · "),
           })),
           charts,
           tokens: themeTokens(),
