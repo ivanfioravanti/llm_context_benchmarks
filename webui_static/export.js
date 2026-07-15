@@ -160,19 +160,25 @@
     return lines.join("\n") + "\n";
   }
 
-  function buildBatchCsv(entries) {
-    const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
-    if (!withBatch.length) return null;
+  // batch and cached CSVs share this shape: run/engine/model meta columns
+  // plus the union of every row key across the selected runs
+  function buildRunRowsCsv(entries, getRows) {
+    const withRows = entries
+      .map(e => ({ e, rows: getRows(e.detail) || [] }))
+      .filter(x => x.rows.length);
+    if (!withRows.length) return null;
     const dataCols = [];
-    for (const e of withBatch) {
-      for (const row of e.detail.batch_data) {
-        for (const key of Object.keys(row)) if (!dataCols.includes(key)) dataCols.push(key);
+    for (const { rows } of withRows) {
+      for (const row of rows) {
+        for (const key of Object.keys(row)) {
+          if (key !== "generated_text" && key !== "reasoning_text" && !dataCols.includes(key)) dataCols.push(key);
+        }
       }
     }
     const lines = [["run", "engine", "model"].concat(dataCols).join(",")];
-    for (const e of withBatch) {
+    for (const { e, rows } of withRows) {
       const s = e.detail.summary;
-      for (const row of e.detail.batch_data) {
+      for (const row of rows) {
         lines.push([csvEscape(e.name), csvEscape(s.engine), csvEscape(s.model)]
           .concat(dataCols.map(c => csvEscape(row[c]))).join(","));
       }
@@ -180,27 +186,8 @@
     return lines.join("\n") + "\n";
   }
 
-  function buildCachedCsv(entries) {
-    const withCached = entries.filter(e => e.detail.cached_results && e.detail.cached_results.length);
-    if (!withCached.length) return null;
-    const dataCols = [];
-    for (const e of withCached) {
-      for (const row of e.detail.cached_results) {
-        for (const key of Object.keys(row)) {
-          if (key !== "generated_text" && key !== "reasoning_text" && !dataCols.includes(key)) dataCols.push(key);
-        }
-      }
-    }
-    const lines = [["run", "engine", "model"].concat(dataCols).join(",")];
-    for (const e of withCached) {
-      const s = e.detail.summary;
-      for (const row of e.detail.cached_results) {
-        lines.push([csvEscape(e.name), csvEscape(s.engine), csvEscape(s.model)]
-          .concat(dataCols.map(c => csvEscape(row[c]))).join(","));
-      }
-    }
-    return lines.join("\n") + "\n";
-  }
+  const buildBatchCsv = entries => buildRunRowsCsv(entries, d => d.batch_data);
+  const buildCachedCsv = entries => buildRunRowsCsv(entries, d => d.cached_results);
 
   function pad(value, width) {
     const s = value == null ? "–" : String(value);
@@ -219,8 +206,9 @@
   }
 
   // shared tabular model for TXT / HTML / PDF: one table per metric, plus
-  // cached re-prompt tables and one table per batch chart
-  function buildTables(entries, metrics, fmt, batchDefs) {
+  // cached re-prompt tables and one table per batch chart (the def lists —
+  // titles, fields, descriptions — come from the caller, see report.js)
+  function buildTables(entries, metrics, fmt, batchDefs, cachedDefs) {
     const contexts = [...new Set(entries.flatMap(e => e.detail.results.map(r => r.context_size)))]
       .sort((a, b) => parseFloat(a) - parseFloat(b));
     const tables = [];
@@ -239,52 +227,31 @@
       });
     }
 
-    const withCached = entries.filter(e => e.detail.cached_results && e.detail.cached_results.length);
-    if (withCached.length) {
-      const cachedDefs = [
-        { key: "incremental_prompt_tps", title: "Cached re-prompt — incremental prompt [tok/s]",
-          desc: "Prefill speed on top of a stored KV cache, counting only the tokens added after the cached prefix." },
-        { key: "generation_tps", title: "Cached re-prompt — generation [tok/s]",
-          desc: "Decode speed of the warm run that reused the stored KV cache." },
-        { key: "time_to_first_token", title: "Cached re-prompt — TTFT [s]", seconds: true,
-          desc: "Time to first token when the context prefix is already cached. Lower is better." },
-      ];
-      const cachedContexts = [...new Set(withCached.flatMap(e => e.detail.cached_results.map(r => r.context_size)))]
-        .sort((a, b) => parseFloat(a) - parseFloat(b));
-      for (const def of cachedDefs) {
-        const rows = cachedContexts.map(ctx => [ctx].concat(entries.map(e => {
-          const row = (e.detail.cached_results || []).find(r => r.context_size === ctx);
-          return row && row[def.key] != null && isFinite(row[def.key]) && row[def.key] > 0
-            ? fmt(row[def.key], { seconds: def.seconds }) : null;
+    // cached and batch tables share one shape: a table per def, rows keyed by
+    // an x column (context or batch size) across all runs. Zero/absent values
+    // mean »not recorded« and stay empty.
+    const pushDefTables = (defs, getRows, xField, xHeader, xSort) => {
+      const withRows = entries.filter(e => (getRows(e.detail) || []).length);
+      if (!withRows.length || !defs) return;
+      const xs = [...new Set(withRows.flatMap(e => getRows(e.detail).map(r => r[xField])))].sort(xSort);
+      for (const def of defs) {
+        const field = def.field || def.key;
+        const rows = xs.map(x => [x].concat(entries.map(e => {
+          const row = (getRows(e.detail) || []).find(r => r[xField] === x);
+          const value = row ? row[field] : null;
+          return value > 0 && isFinite(value) ? fmt(value, { seconds: def.seconds }) : null;
         })));
         if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
         tables.push({
-          title: def.title,
+          title: `${def.title} [${def.unit}]`,
           desc: def.desc,
-          headers: ["context"].concat(entries.map(e => e.name)),
+          headers: [xHeader].concat(entries.map(e => e.name)),
           rows,
         });
       }
-    }
-
-    const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
-    if (withBatch.length && batchDefs) {
-      const batchSizes = [...new Set(withBatch.flatMap(e => e.detail.batch_data.map(b => b.batch_size)))]
-        .sort((a, b) => a - b);
-      for (const def of batchDefs) {
-        const rows = batchSizes.map(bs => [bs].concat(entries.map(e => {
-          const row = (e.detail.batch_data || []).find(b => b.batch_size === bs);
-          return row && row[def.field] > 0 ? fmt(row[def.field], { seconds: def.seconds }) : null;
-        })));
-        if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
-        tables.push({
-          title: def.title,
-          desc: def.desc,
-          headers: ["batch"].concat(entries.map(e => e.name)),
-          rows,
-        });
-      }
-    }
+    };
+    pushDefTables(cachedDefs, d => d.cached_results, "context_size", "context", (a, b) => parseFloat(a) - parseFloat(b));
+    pushDefTables(batchDefs, d => d.batch_data, "batch_size", "batch", (a, b) => a - b);
     return tables;
   }
 

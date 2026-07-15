@@ -15,9 +15,20 @@
   function chartChoices(entries) {
     return [
       ...metricsForEntries(entries).map(m => ({ key: m.key, label: `${m.label} (${m.unit})`, desc: m.desc })),
-      ...batchChartDefs(entries).map(d => ({ key: d.key, label: d.title.replace(/ \[.+\]$/, ""), desc: d.desc })),
+      ...batchChartDefs(entries).map(d => ({ key: d.key, label: d.title, desc: d.desc })),
     ];
   }
+
+  // table companions to the cached chart overlays (see core.js
+  // CACHED_METRIC_FIELDS): what a KV-cache-reuse run gets tabulated as
+  const CACHED_TABLE_DEFS = [
+    { key: "incremental_prompt_tps", title: "Cached re-prompt — incremental prompt", unit: "tok/s",
+      desc: "Prefill speed on top of a stored KV cache, counting only the tokens added after the cached prefix." },
+    { key: "generation_tps", title: "Cached re-prompt — generation", unit: "tok/s",
+      desc: "Decode speed of the warm run that reused the stored KV cache." },
+    { key: "time_to_first_token", title: "Cached re-prompt — TTFT", unit: "s", seconds: true,
+      desc: "Time to first token when the context prefix is already cached. Lower is better." },
+  ];
 
   // deselected chart keys survive across exports (stored as the off-list so
   // metrics that appear later default to on)
@@ -36,33 +47,33 @@
     if (!withBatch.length) return [];
     const has = field => withBatch.some(e => e.detail.batch_data.some(b => b[field] != null && b[field] > 0));
     const defs = [
-      { key: "batch_prompt", title: "Batch — prompt throughput [tok/s]", field: "prompt_tps",
+      { key: "batch_prompt", title: "Batch — prompt throughput", unit: "tok/s", field: "prompt_tps",
         desc: "Prompt (prefill) throughput summed across N parallel clients. Higher is better." },
-      { key: "batch_e2e", title: "Batch — end-to-end gen throughput [tok/s]", field: "generation_tps",
+      { key: "batch_e2e", title: "Batch — end-to-end gen throughput", unit: "tok/s", field: "generation_tps",
         desc: "End-to-end generation throughput: generated tokens ÷ total wall time including the prompt phase, summed across clients." },
     ];
     if (has("decode_tps_total")) {
-      defs.push({ key: "batch_decode", title: "Batch — decode throughput [tok/s]", field: "decode_tps_total",
+      defs.push({ key: "batch_decode", title: "Batch — decode throughput", unit: "tok/s", field: "decode_tps_total",
         desc: "Pure generation rate the server reported, summed across clients — prompt phase excluded." });
     }
     if (has("time_to_first_token")) {
-      defs.push({ key: "batch_ttft", title: "Batch — TTFT [s]", field: "time_to_first_token", seconds: true,
+      defs.push({ key: "batch_ttft", title: "Batch — TTFT", unit: "s", field: "time_to_first_token", seconds: true,
         desc: "Time to first token at this concurrency — the wait each client sees under load. Lower is better." });
     }
     if (has("time_per_output_token")) {
-      defs.push({ key: "batch_tpot", title: "Batch — TPOT [s]", field: "time_per_output_token", seconds: true,
+      defs.push({ key: "batch_tpot", title: "Batch — TPOT", unit: "s", field: "time_per_output_token", seconds: true,
         desc: "Average gap between two generated tokens at this concurrency. Lower is better." });
     }
     if (has("peak_memory_gb")) {
-      defs.push({ key: "batch_peak_mem", title: "Batch — peak memory [GB]", field: "peak_memory_gb",
+      defs.push({ key: "batch_peak_mem", title: "Batch — peak memory", unit: "GB", field: "peak_memory_gb",
         desc: "Peak accelerator/unified memory while serving N clients in parallel." });
     }
     if (has("kv_cache_gb")) {
-      defs.push({ key: "batch_kv", title: "Batch — KV cache [GB]", field: "kv_cache_gb",
+      defs.push({ key: "batch_kv", title: "Batch — KV cache", unit: "GB", field: "kv_cache_gb",
         desc: "Key-value-cache size with N concurrent sequences — grows with concurrency." });
     }
     if (has("host_memory_gb")) {
-      defs.push({ key: "batch_host_mem", title: "Batch — host RAM [GB]", field: "host_memory_gb",
+      defs.push({ key: "batch_host_mem", title: "Batch — host RAM", unit: "GB", field: "host_memory_gb",
         desc: "Resident memory of the server process while serving N clients in parallel." });
     }
     return defs;
@@ -128,9 +139,9 @@
         await render(
           // engines write 0 when a batch metric is unavailable — not a data point
           seriesFor(e => (e.detail.batch_data || []).map(b => [b.batch_size, b[def.field] > 0 ? b[def.field] : null])),
-          { height: batchHeight, seconds: def.seconds, xLabel: "batch size (parallel clients)", yLabel: def.title.match(/\[(.+)\]/)[1], xTickFormat: v => String(v) },
+          { height: batchHeight, seconds: def.seconds, xLabel: "batch size (parallel clients)", yLabel: def.unit, xTickFormat: v => String(v) },
           def.key,
-          def.title,
+          `${def.title} [${def.unit}]`,
           def.desc,
         );
       }
@@ -157,7 +168,7 @@
   // charts are rendered; tables and CSVs always keep the full data
   async function exportRuns(entries, format, baseName, title, only) {
     const metrics = metricsForEntries(entries);
-    const tables = CBExport.buildTables(entries, metrics, fmt, batchChartDefs(entries));
+    const tables = CBExport.buildTables(entries, metrics, fmt, batchChartDefs(entries), CACHED_TABLE_DEFS);
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
 
     if (format === "zip") {

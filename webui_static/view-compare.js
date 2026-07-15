@@ -255,7 +255,7 @@
     const batchEntries = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
     wrap.innerHTML = "";
     for (const def of defs) {
-      const unit = (def.title.match(/\[(.+)\]/) || [])[1] || "";
+      const unit = def.unit || "";
       const series = batchEntries.map(e => ({
         name: e.name,
         color: seriesColor(e.slot),
@@ -265,7 +265,7 @@
       if (!series.length) continue;
       const panel = document.createElement("div");
       panel.className = "panel";
-      panel.innerHTML = `<div class="chart-title">${esc(def.title.replace(/ \[.+\]$/, ""))}
+      panel.innerHTML = `<div class="chart-title">${esc(def.title)}
         <span class="unit">${esc(unit)}</span>${qmarkHtml(def.desc)}</div><div></div>`;
       wrap.appendChild(panel);
       Charts.lineChart(panel.lastElementChild, {

@@ -166,8 +166,6 @@ def summarize_result_folder(folder: Path):
         "gen_series": gen_series,
         "columns": sorted({k for r in rows for k in r.keys()}),
         "has_batch": bool(parsed["batch_data"]),
-        "has_perplexity": bool(parsed["perplexity_data"]),
-        "has_cached": bool(parsed["cached_results"]),
         "charts": charts,
     }
 
