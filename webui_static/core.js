@@ -31,7 +31,7 @@
   const METRICS = [
     { key: "generation_tps", label: "Generation", unit: "tok/s",
       desc: "Decode speed: generated tokens per second of pure generation time. Higher is better." },
-    { key: "prompt_tps", label: "Prompt", unit: "tok/s",
+    { key: "prompt_tps", label: "Prompt processing", unit: "tok/s",
       desc: "Prefill speed: prompt tokens processed per second before generation starts. Higher is better." },
     { key: "time_to_first_token", label: "TTFT", unit: "s", seconds: true,
       desc: "Time to first token: how long from sending the request until the first generated token arrives — dominated by prompt processing. Lower is better." },
