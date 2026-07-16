@@ -95,6 +95,7 @@ omlx-benchmark = "omlx_benchmark:main"
 mtplx-benchmark = "mtplx_benchmark:main"
 dflash-mlx-benchmark = "dflash_benchmark:main"
 vmlx-benchmark = "vmlx_benchmark:main"
+mlxserve-benchmark = "mlxserve_benchmark:main"
 regen-charts = "regen_charts:main"
 
 [build-system]
@@ -127,6 +128,7 @@ py-modules = [
   "mtplx_benchmark",
   "dflash_benchmark",
   "vmlx_benchmark",
+  "mlxserve_benchmark",
   "regen_charts",
   "paroquant_benchmark",
   "vllm_benchmark",

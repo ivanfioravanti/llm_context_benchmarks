@@ -21,7 +21,7 @@ from pathlib import Path
 # Engines whose benchmark script can auto-detect the model from the server
 # when no model is explicitly provided. For these, the dispatcher may invoke
 # the script without a leading positional model argument.
-AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai", "afms", "unsloth"}
+AUTO_MODEL_ENGINES = {"lmstudio", "mtplx", "dflash-mlx", "mlx-vlm-server", "openai", "afms", "unsloth", "mlx-serve"}
 
 
 def get_available_engines():
@@ -117,6 +117,11 @@ def get_available_engines():
             "script": "vmlx_benchmark.py",
             "description": "vMLX / MLX Studio server (Apple Silicon, OpenAI-compatible)",
             "example": "mlx-community/Qwen3-8B-4bit",
+        },
+        "mlx-serve": {
+            "script": "mlxserve_benchmark.py",
+            "description": "mlx-serve server (Apple Silicon, OpenAI-compatible + server timings + batch)",
+            "example": "Qwen3.6-27B-MTPLX-Optimized-Quality",
         },
     }
     return engines
