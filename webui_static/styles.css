@@ -377,6 +377,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   white-space: nowrap;
 }
 .tbl tbody tr:hover { background: var(--raised); }
+.tbl tr.delta td {
+  border-top: 2px solid var(--axis);
+  color: var(--ink-2);
+  font-family: var(--mono); font-size: 11.5px;
+}
 
 /* ---------- results list ---------- */
 .results-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
@@ -460,6 +465,12 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 }
 .metric-tab.active .unit { color: var(--accent); }
 .chart-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-controls select {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 4px 8px; font-size: 12.5px; max-width: 260px;
+}
+.chart-controls select:hover { border-color: var(--border); }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 1250px) { .chart-grid { grid-template-columns: 1fr; } }
 
@@ -469,6 +480,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .viz .gridline { stroke: var(--grid); stroke-width: 1; }
 .viz .axisline { stroke: var(--axis); stroke-width: 1; }
 .viz .tick-label { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+.viz .point-label {
+  font-family: var(--mono); font-size: 8.5px; font-weight: 600;
+  /* surface-colored halo keeps the value readable where lines cross it */
+  paint-order: stroke; stroke: var(--surface); stroke-width: 2.5px;
+}
 .viz .axis-title { fill: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; }
 .viz .series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .viz .series-dot { stroke: var(--surface); stroke-width: 2; }
@@ -494,6 +510,27 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
 .legend-swatch { width: 14px; height: 3px; border-radius: 2px; }
 .chart-title { font-size: 13px; font-weight: 600; margin: 2px 0 12px; }
+
+/* hoverable »what does this metric mean« marker */
+.qmark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; margin-left: 7px; vertical-align: 1px;
+  border: 1px solid var(--axis); border-radius: 50%;
+  color: var(--muted); font: 600 9.5px/1 var(--mono);
+  cursor: help; position: relative;
+}
+.qmark:hover, .qmark:focus-visible { color: var(--ink); border-color: var(--muted); outline: none; }
+.qmark::after {
+  content: attr(data-tip);
+  position: absolute; left: -20px; top: calc(100% + 8px);
+  width: 300px; max-width: 60vw;
+  background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 8px 11px; font: 400 12px/1.5 var(--sans, system-ui, sans-serif); color: var(--ink-2);
+  text-align: left; text-transform: none; letter-spacing: normal; white-space: normal;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35); z-index: 80;
+  opacity: 0; visibility: hidden; transition: opacity 120ms ease; pointer-events: none;
+}
+.qmark:hover::after, .qmark:focus::after { opacity: 1; visibility: visible; }
 .chart-empty { color: var(--muted); font-size: 12.5px; padding: 30px 0; text-align: center; }
 
 /* ---------- endpoints ---------- */
@@ -592,7 +629,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .model-row { display: flex; gap: 6px; }
 .model-row select, .model-row input { flex: 1; min-width: 0; }
 .model-row .btn { flex: none; padding-left: 9px; padding-right: 9px; }
-.export-group { display: flex; gap: 0; align-items: center; }
+.export-group { display: flex; gap: 0; align-items: center; position: relative; }
 .export-group .export-label {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--muted); margin-right: 8px;
@@ -600,3 +637,22 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .export-group .btn { border-radius: 0; margin-left: -1px; }
 .export-group .btn:first-of-type { border-radius: 8px 0 0 8px; margin-left: 0; }
 .export-group .btn:last-of-type { border-radius: 0 8px 8px 0; }
+
+/* chart picker popover under the clicked export button */
+.export-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 70;
+  min-width: 260px; padding: 12px 14px; text-align: left; cursor: default;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+}
+.export-pop .pop-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 10px; white-space: nowrap;
+}
+.export-pop .pop-list {
+  display: flex; flex-direction: column; gap: 7px;
+  max-height: 280px; overflow: auto; margin-bottom: 12px;
+}
+.export-pop .pop-list .check { white-space: nowrap; }
+.export-pop .pop-actions { display: flex; gap: 6px; align-items: center; }
+.export-pop .btn { border-radius: 8px; margin-left: 0; }

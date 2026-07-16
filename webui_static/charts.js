@@ -139,7 +139,9 @@
       const y = height - legendHeight + 14 + r * 20;
       for (const item of legendRows[r]) {
         const x = margin.left + item.x;
-        el("line", { x1: x, x2: x + 14, y1: y - 4, y2: y - 4, stroke: item.s.color, "stroke-width": 3 }, svg);
+        const swatch = { x1: x, x2: x + 14, y1: y - 4, y2: y - 4, stroke: item.s.color, "stroke-width": 3 };
+        if (item.s.dash) swatch["stroke-dasharray"] = "4 3";
+        el("line", swatch, svg);
         const t = el("text", {
           x: x + 20, y, fill: tok("--ink-2") || "#555",
           "font-family": "system-ui, sans-serif", "font-size": 11,
@@ -189,7 +191,9 @@
     // (standalone) SVGs can offer point tooltips without re-plumbing data
     for (const s of series) {
       const d = s.points.map((p, i) => `${i ? "L" : "M"}${px(p[0]).toFixed(1)},${py(p[1]).toFixed(1)}`).join("");
-      el("path", { d, class: "series-line", stroke: s.color }, svg);
+      const attrs = { d, class: "series-line", stroke: s.color };
+      if (s.dash) attrs["stroke-dasharray"] = "6 5";
+      el("path", attrs, svg);
       for (const p of s.points) {
         el("circle", {
           cx: px(p[0]), cy: py(p[1]), r: 4, fill: s.color, class: "series-dot",
@@ -197,6 +201,37 @@
           "data-x": opts.xTickFormat ? opts.xTickFormat(p[0]) : ctxLabel(p[0]),
           "data-v": fmtNum(p[1], opts),
         }, svg);
+      }
+    }
+
+    // static value labels at each point — for rasterized exports (PNG, PDF)
+    // where there is no hover tooltip. Labels sharing an x position are
+    // de-overlapped vertically, keeping the dots' top-to-bottom order so the
+    // color association stays readable.
+    if (opts.pointLabels) {
+      const GAP = 11;
+      const yTop = margin.top + 9;
+      const yBottom = margin.top + ih - 4;
+      const perX = new Map();
+      for (const s of series) {
+        for (const p of s.points) {
+          if (!perX.has(p[0])) perX.set(p[0], []);
+          perX.get(p[0]).push({ color: s.color, value: p[1], y: py(p[1]) - 8 });
+        }
+      }
+      for (const [xv, labels] of perX) {
+        const x = Math.min(Math.max(px(xv), margin.left + 16), width - margin.right - 16);
+        labels.sort((a, b) => a.y - b.y);
+        for (let i = 0; i < labels.length; i++) {
+          labels[i].y = Math.max(labels[i].y, yTop, i ? labels[i - 1].y + GAP : yTop);
+        }
+        // pushed past the plot bottom? shift the column back up
+        const overflow = labels[labels.length - 1].y - yBottom;
+        if (overflow > 0) for (const l of labels) l.y -= overflow;
+        for (const l of labels) {
+          const t = el("text", { x, y: l.y, "text-anchor": "middle", class: "point-label", fill: l.color }, svg);
+          t.textContent = fmtNum(l.value, opts);
+        }
       }
     }
 

@@ -81,7 +81,8 @@
   // --------------------------------------------------------- SVG -> canvas
 
   const INLINE_PROPS = ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
-    "opacity", "font-family", "font-size", "font-weight", "letter-spacing", "visibility"];
+    "stroke-dasharray", "paint-order", "opacity", "font-family", "font-size", "font-weight",
+    "letter-spacing", "visibility"];
 
   async function svgToCanvas(svgEl, scale, background) {
     const clone = svgEl.cloneNode(true);
@@ -138,7 +139,7 @@
   }
 
   function buildResultsCsv(entries) {
-    const metaCols = ["run", "engine", "model", "machine", "folder"];
+    const metaCols = ["run", "engine", "model", "endpoint", "folder"];
     const dataCols = [];
     for (const e of entries) {
       for (const row of e.detail.results) {
@@ -152,26 +153,32 @@
       const s = e.detail.summary;
       for (const row of e.detail.results) {
         lines.push(metaCols.map(c => csvEscape({
-          run: e.name, engine: s.engine, model: s.model, machine: s.machine, folder: s.folder,
+          run: e.name, engine: s.engine, model: s.model, endpoint: s.endpoint, folder: s.folder,
         }[c])).concat(dataCols.map(c => csvEscape(row[c]))).join(","));
       }
     }
     return lines.join("\n") + "\n";
   }
 
-  function buildBatchCsv(entries) {
-    const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
-    if (!withBatch.length) return null;
+  // batch and cached CSVs share this shape: run/engine/model meta columns
+  // plus the union of every row key across the selected runs
+  function buildRunRowsCsv(entries, getRows) {
+    const withRows = entries
+      .map(e => ({ e, rows: getRows(e.detail) || [] }))
+      .filter(x => x.rows.length);
+    if (!withRows.length) return null;
     const dataCols = [];
-    for (const e of withBatch) {
-      for (const row of e.detail.batch_data) {
-        for (const key of Object.keys(row)) if (!dataCols.includes(key)) dataCols.push(key);
+    for (const { rows } of withRows) {
+      for (const row of rows) {
+        for (const key of Object.keys(row)) {
+          if (key !== "generated_text" && key !== "reasoning_text" && !dataCols.includes(key)) dataCols.push(key);
+        }
       }
     }
     const lines = [["run", "engine", "model"].concat(dataCols).join(",")];
-    for (const e of withBatch) {
+    for (const { e, rows } of withRows) {
       const s = e.detail.summary;
-      for (const row of e.detail.batch_data) {
+      for (const row of rows) {
         lines.push([csvEscape(e.name), csvEscape(s.engine), csvEscape(s.model)]
           .concat(dataCols.map(c => csvEscape(row[c]))).join(","));
       }
@@ -179,13 +186,29 @@
     return lines.join("\n") + "\n";
   }
 
+  const buildBatchCsv = entries => buildRunRowsCsv(entries, d => d.batch_data);
+  const buildCachedCsv = entries => buildRunRowsCsv(entries, d => d.cached_results);
+
   function pad(value, width) {
     const s = value == null ? "–" : String(value);
     return s.length >= width ? s : s + " ".repeat(width - s.length);
   }
 
-  // shared tabular model for TXT / HTML / PDF: one table per metric
-  function buildTables(entries, metrics, fmt) {
+  function wrapText(text, max) {
+    const lines = [];
+    let line = "";
+    for (const word of String(text).split(/\s+/)) {
+      if (line && (line + " " + word).length > max) { lines.push(line); line = word; }
+      else line = line ? line + " " + word : word;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // shared tabular model for TXT / HTML / PDF: one table per metric, plus
+  // cached re-prompt tables and one table per batch chart (the def lists —
+  // titles, fields, descriptions — come from the caller, see report.js)
+  function buildTables(entries, metrics, fmt, batchDefs, cachedDefs) {
     const contexts = [...new Set(entries.flatMap(e => e.detail.results.map(r => r.context_size)))]
       .sort((a, b) => parseFloat(a) - parseFloat(b));
     const tables = [];
@@ -198,26 +221,37 @@
       if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
       tables.push({
         title: `${metric.label} [${metric.unit}]`,
+        desc: metric.desc,
         headers: ["context"].concat(entries.map(e => e.name)),
         rows,
       });
     }
-    const withBatch = entries.filter(e => e.detail.batch_data && e.detail.batch_data.length);
-    if (withBatch.length) {
-      const batchSizes = [...new Set(withBatch.flatMap(e => e.detail.batch_data.map(b => b.batch_size)))]
-        .sort((a, b) => a - b);
-      const hasDecode = withBatch.some(e => e.detail.batch_data.some(b => b.decode_tps_total != null));
-      tables.push({
-        title: `Batch sweep [prompt / e2e-gen${hasDecode ? " / decode" : ""} tok/s, N parallel clients]`,
-        headers: ["batch"].concat(withBatch.map(e => e.name)),
-        rows: batchSizes.map(bs => [bs].concat(withBatch.map(e => {
-          const row = e.detail.batch_data.find(b => b.batch_size === bs);
-          if (!row) return null;
-          const cell = `${fmt(row.prompt_tps)} / ${fmt(row.generation_tps)}`;
-          return row.decode_tps_total != null ? `${cell} / ${fmt(row.decode_tps_total)}` : cell;
-        }))),
-      });
-    }
+
+    // cached and batch tables share one shape: a table per def, rows keyed by
+    // an x column (context or batch size) across all runs. Zero/absent values
+    // mean »not recorded« and stay empty.
+    const pushDefTables = (defs, getRows, xField, xHeader, xSort) => {
+      const withRows = entries.filter(e => (getRows(e.detail) || []).length);
+      if (!withRows.length || !defs) return;
+      const xs = [...new Set(withRows.flatMap(e => getRows(e.detail).map(r => r[xField])))].sort(xSort);
+      for (const def of defs) {
+        const field = def.field || def.key;
+        const rows = xs.map(x => [x].concat(entries.map(e => {
+          const row = (getRows(e.detail) || []).find(r => r[xField] === x);
+          const value = row ? row[field] : null;
+          return value > 0 && isFinite(value) ? fmt(value, { seconds: def.seconds }) : null;
+        })));
+        if (!rows.some(r => r.slice(1).some(v => v != null))) continue;
+        tables.push({
+          title: `${def.title} [${def.unit}]`,
+          desc: def.desc,
+          headers: [xHeader].concat(entries.map(e => e.name)),
+          rows,
+        });
+      }
+    };
+    pushDefTables(cachedDefs, d => d.cached_results, "context_size", "context", (a, b) => parseFloat(a) - parseFloat(b));
+    pushDefTables(batchDefs, d => d.batch_data, "batch_size", "batch", (a, b) => a - b);
     return tables;
   }
 
@@ -230,13 +264,15 @@
     entries.forEach((e, i) => {
       const s = e.detail.summary;
       lines.push(`  [${i + 1}] ${e.name}`);
-      lines.push(`      ${s.engine} · ${s.model}${s.machine ? " · " + s.machine : ""}`);
-      if (s.hardware) lines.push(`      ${s.hardware}`);
+      // deliberately no local hardware info: for endpoint runs the inference
+      // ran elsewhere — the endpoint name is the machine that matters
+      lines.push(`      ${s.engine} · ${s.model}${s.endpoint ? " · " + s.endpoint : ""}`);
       lines.push(`      ${s.folder}`);
     });
     lines.push("");
     for (const table of tables) {
       lines.push(`== ${table.title} ==`);
+      if (table.desc) lines.push(`   ${table.desc}`);
       const widths = table.headers.map((h, i) =>
         Math.max(h.length, ...table.rows.map(r => (r[i] == null ? 1 : String(r[i]).length))) + 2);
       lines.push(table.headers.map((h, i) => pad(h, widths[i])).join(""));
@@ -260,18 +296,19 @@
       const s = e.detail.summary;
       return `<tr><td class="idx">${i + 1}</td><td><strong>${h(e.name)}</strong></td>
         <td>${h(s.engine)}</td><td class="mono">${h(s.model)}</td>
-        <td>${h(s.machine || "–")}</td><td class="mono small">${h(s.folder)}</td></tr>`;
+        <td>${h(s.endpoint || "–")}</td><td class="mono small">${h(s.folder)}</td></tr>`;
     }).join("");
     const legendHtml = (legend || []).length < 2 ? "" :
       `<div class="legend">${legend.map(l =>
         `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${h(l.name)}</span>`).join("")}</div>`;
+    const qmark = desc => (desc ? `<span class="qmark" tabindex="0" data-tip="${h(desc)}">?</span>` : "");
     const chartsHtml = charts.map(c => `<figure>
-      <figcaption>${h(c.title)}</figcaption>
+      <figcaption>${h(c.title)}${qmark(c.desc)}</figcaption>
       <div class="viz">${c.svg}</div>
       ${legendHtml}
     </figure>`).join("\n");
     const tablesHtml = tables.map(t => `
-      <h2>${h(t.title)}</h2>
+      <h2>${h(t.title)}${qmark(t.desc)}</h2>
       <table><thead><tr>${t.headers.map((x, i) =>
         `<th${i ? "" : ' class="left"'}>${h(x)}</th>`).join("")}</tr></thead>
       <tbody>${t.rows.map(r => `<tr>${r.map((v, i) =>
@@ -341,6 +378,19 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 10px; }
   .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
   .legend-swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .qmark { display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; margin-left: 7px; vertical-align: 1px;
+    border: 1px solid var(--axis); border-radius: 50%;
+    color: var(--muted); font: 600 9.5px/1 ui-monospace, Menlo, monospace;
+    cursor: help; position: relative; }
+  .qmark:hover { color: var(--ink); border-color: var(--muted); }
+  .qmark::after { content: attr(data-tip); position: absolute; left: -20px; top: calc(100% + 8px);
+    width: 300px; background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px;
+    padding: 8px 11px; font: 400 12px/1.5 system-ui, sans-serif; color: var(--ink-2);
+    text-align: left; text-transform: none; letter-spacing: normal; white-space: normal;
+    box-shadow: 0 8px 30px rgba(0,0,0,.35); z-index: 20;
+    opacity: 0; visibility: hidden; transition: opacity 120ms ease; pointer-events: none; }
+  .qmark:hover::after, .qmark:focus::after { opacity: 1; visibility: visible; }
   .pt-tip { position: fixed; z-index: 10; pointer-events: none;
     background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px;
     padding: 7px 10px; font-size: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.35); max-width: 320px; }
@@ -362,7 +412,7 @@
 </header>
 <h2>Runs</h2>
 <table><thead><tr><th class="left"></th><th class="left">Run</th><th class="left">Engine</th>
-<th class="left">Model</th><th class="left">Machine</th><th class="left">Folder</th></tr></thead>
+<th class="left">Model</th><th class="left">Endpoint</th><th class="left">Folder</th></tr></thead>
 <tbody>${runsHtml}</tbody></table>
 ${chartsHtml}
 ${tablesHtml}
@@ -630,9 +680,10 @@ ${tablesHtml}
       const s = e.detail.summary;
       pdf.text(M, y, `${i + 1}.  ${e.name}`, { bold: true, size: 11 });
       y += 15;
-      pdf.text(M + 16, y, `${s.engine} · ${s.model}${s.machine ? " · " + s.machine : ""}`, { size: 9.5, color: [0.32, 0.32, 0.3] });
+      // deliberately no local hardware info: for endpoint runs the inference
+      // ran elsewhere — the endpoint name is the machine that matters
+      pdf.text(M + 16, y, `${s.engine} · ${s.model}${s.endpoint ? " · " + s.endpoint : ""}`, { size: 9.5, color: [0.32, 0.32, 0.3] });
       y += 13;
-      if (s.hardware) { pdf.text(M + 16, y, s.hardware, { size: 9, color: [0.55, 0.53, 0.5] }); y += 13; }
       pdf.text(M + 16, y, s.folder, { mono: true, size: 8, color: [0.55, 0.53, 0.5] });
       y += 20;
     });
@@ -642,12 +693,20 @@ ${tablesHtml}
       pdf.addPage();
       pdf.text(M, 44, chart.title, { bold: true, size: 13 });
       pdf.line(M, 56, pdf.W - M, 56, 0.2);
+      let iy = 72;
+      if (chart.desc) {
+        for (const line of wrapText(chart.desc, 100)) {
+          pdf.text(M, iy, line, { size: 9, color: [0.45, 0.44, 0.4] });
+          iy += 12;
+        }
+        iy += 6;
+      }
       const maxW = pdf.W - 2 * M;
-      const maxH = pdf.H - 100;
+      const maxH = pdf.H - iy - 40;
       const ratio = Math.min(maxW / chart.jpeg.width, maxH / chart.jpeg.height);
       const w = chart.jpeg.width * ratio;
       const h = chart.jpeg.height * ratio;
-      pdf.image(chart.jpeg, M + (maxW - w) / 2, 72, w, h);
+      pdf.image(chart.jpeg, M + (maxW - w) / 2, iy, w, h);
     }
 
     // --- data tables (monospace) ---
@@ -668,6 +727,13 @@ ${tablesHtml}
       if (ty === Infinity || room() < Math.min(neededRows, 6) * lineHeight) newDataPage();
       pdf.text(M, ty, table.title, { bold: true, size: 10.5 });
       ty += 16;
+      if (table.desc) {
+        for (const line of wrapText(table.desc, 110)) {
+          pdf.text(M, ty, line, { size: 8, color: [0.45, 0.44, 0.4] });
+          ty += 11;
+        }
+        ty += 2;
+      }
       pdf.text(M, ty, headerLine, { mono: true, size: 8.5, color: [0.45, 0.44, 0.4] });
       ty += 4;
       pdf.line(M, ty, pdf.W - M, ty, 0.6);
@@ -698,7 +764,7 @@ ${tablesHtml}
 
   window.CBExport = {
     makeZip, svgToCanvas, canvasToPngBytes, canvasToJpeg,
-    buildResultsCsv, buildBatchCsv, buildTables, buildComparisonTxt,
+    buildResultsCsv, buildBatchCsv, buildCachedCsv, buildTables, buildComparisonTxt,
     buildHtmlReport, buildPdfReport, composeOverview, download,
   };
 })();

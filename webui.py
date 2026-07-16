@@ -73,6 +73,38 @@ def save_endpoints(endpoints: list):
         os.close(fd)
 
 
+def normalize_base_url(base_url: str, engine_id: str, api_key: str = "") -> tuple[str, bool]:
+    """Append /v1 to a path-less base URL when the engine expects an OpenAI-style
+    /v1 root and the server actually answers there (probed, never guessed).
+
+    Returns (url, corrected). URLs that already carry a path, engines that
+    handle the prefix themselves (lmstudio, exo, mtplx, ...) and unreachable
+    servers are left untouched.
+    """
+    url = (base_url or "").strip().rstrip("/")
+    # engines whose script wants the /v1 root advertise that via their default
+    info = get_engine_catalog().get(engine_id) or {}
+    if not url or not (info.get("default_base_url") or "").rstrip("/").endswith("/v1"):
+        return base_url, False
+    from urllib.parse import urlparse
+
+    if (urlparse(url).path or "").strip("/"):
+        return base_url, False
+    headers = {"User-Agent": "context-bench-webui"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        import httpx
+
+        if httpx.get(url + "/models", timeout=3.0, headers=headers).status_code < 400:
+            return base_url, False  # server genuinely serves at the root
+        if httpx.get(url + "/v1/models", timeout=3.0, headers=headers).status_code < 400:
+            return url + "/v1", True
+    except Exception:
+        pass  # unreachable right now — keep what the user entered
+    return base_url, False
+
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
@@ -134,8 +166,6 @@ def summarize_result_folder(folder: Path):
         "gen_series": gen_series,
         "columns": sorted({k for r in rows for k in r.keys()}),
         "has_batch": bool(parsed["batch_data"]),
-        "has_perplexity": bool(parsed["perplexity_data"]),
-        "has_cached": bool(parsed["cached_results"]),
         "charts": charts,
     }
 
@@ -217,9 +247,10 @@ def api_endpoints_create(payload: dict):
         "port": payload.get("port") or "",
         "notes": payload.get("notes") or "",
     }
+    entry["base_url"], corrected = normalize_base_url(entry["base_url"], entry["engine"], entry["api_key"])
     endpoints.append(entry)
     save_endpoints(endpoints)
-    return entry
+    return {**entry, "base_url_corrected": corrected}
 
 
 @app.put("/api/endpoints/{endpoint_id}")
@@ -232,8 +263,11 @@ def api_endpoints_update(endpoint_id: str, payload: dict):
                     entry[key] = payload[key]
             if not (entry.get("name") or "").strip():
                 raise HTTPException(400, "Endpoint name is required")
+            entry["base_url"], corrected = normalize_base_url(
+                entry.get("base_url") or "", entry.get("engine") or "", entry.get("api_key") or ""
+            )
             save_endpoints(endpoints)
-            return entry
+            return {**entry, "base_url_corrected": corrected}
     raise HTTPException(404, "Endpoint not found")
 
 
@@ -334,6 +368,25 @@ def api_runs_start(payload: dict):
         endpoint = next((e for e in load_endpoints() if e["id"] == endpoint_id), None)
         if endpoint:
             endpoint_name = endpoint["name"]
+
+    # safety net for endpoints saved while their server was offline: probe a
+    # path-less base URL once more and self-heal the stored endpoint
+    connection = payload.get("connection") or {}
+    base_url = (connection.get("base_url") or "").strip()
+    if base_url:
+        corrected_url, corrected = normalize_base_url(base_url, engine_id, (connection.get("api_key") or "").strip())
+        if corrected:
+            connection["base_url"] = corrected_url
+            payload["connection"] = connection
+            if endpoint_id:
+                endpoints = load_endpoints()
+                for entry in endpoints:
+                    if entry["id"] == endpoint_id and (entry.get("base_url") or "").strip().rstrip(
+                        "/"
+                    ) == base_url.rstrip("/"):
+                        entry["base_url"] = corrected_url
+                        save_endpoints(endpoints)
+                        break
 
     argv, contexts = build_command(engine_id, payload)
     label = (payload.get("label") or "").strip() or endpoint_name
