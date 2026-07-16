@@ -15,6 +15,8 @@ from fastapi import HTTPException
 from webui_common import OUTPUT_DIR, ROOT, RUN_META_FILE
 
 PROGRESS_RE = re.compile(r"Benchmarking\s+([\d.]+k)\.txt")
+BATCH_PROGRESS_RE = re.compile(r"^\s*Batch size\s+(\d+)\s*\(")
+BATCH_COMPLETE_RE = re.compile(r"^\s*Batch benchmark complete:\s+(\d+)\s+sizes tested")
 GEN_TPS_RES = [
     re.compile(r"Generation:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
     re.compile(r"Generation TPS:\s+([\d.]+)"),
@@ -30,6 +32,25 @@ TTFT_RES = [
 ]
 
 SECRET_FLAGS = {"--api-key"}
+
+
+def batch_sizes_from_argv(argv: list) -> list[int]:
+    """Return the effective batch sweep, or none when this run skips it."""
+    if "--no-batch" in argv:
+        return []
+
+    value = None
+    for index, arg in enumerate(argv):
+        if arg == "--batch-sizes" and index + 1 < len(argv):
+            value = argv[index + 1]
+        elif arg.startswith("--batch-sizes="):
+            value = arg.split("=", 1)[1]
+    if value is None:
+        return []
+    try:
+        return [int(size.strip()) for size in value.split(",") if size.strip()]
+    except ValueError:
+        return []
 
 
 def redact_argv(argv: list) -> list:
@@ -61,6 +82,11 @@ class BenchmarkRun:
         self.stop_requested = False
         self.current_context = None
         self.contexts_done = 0
+        self.batch_sizes = batch_sizes_from_argv(argv)
+        self.current_batch_size = None
+        self.current_batch_index = None
+        self.batch_sizes_done = 0
+        self.phase = None
         self.live = {}
         self.result_folders = []
         self.error = None
@@ -83,6 +109,11 @@ class BenchmarkRun:
                 "contexts": self.contexts,
                 "current_context": self.current_context,
                 "contexts_done": self.contexts_done,
+                "batch_sizes": self.batch_sizes,
+                "current_batch_size": self.current_batch_size,
+                "current_batch_index": self.current_batch_index,
+                "batch_sizes_done": self.batch_sizes_done,
+                "phase": self.phase,
                 "live": dict(self.live),
                 "result_folders": list(self.result_folders),
                 "error": self.error,
@@ -163,10 +194,42 @@ class RunManager:
                 match = PROGRESS_RE.search(line)
                 if match:
                     ctx = match.group(1)
+                    if run.current_batch_index is not None:
+                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
+                        run.current_batch_size = None
+                        run.current_batch_index = None
                     if run.current_context and run.current_context not in seen_contexts:
                         seen_contexts.add(run.current_context)
                     run.current_context = ctx
                     run.contexts_done = len(seen_contexts)
+                    run.phase = "context"
+                batch_match = BATCH_PROGRESS_RE.search(line)
+                if batch_match:
+                    batch_size = int(batch_match.group(1))
+                    if run.current_context and run.current_context not in seen_contexts:
+                        seen_contexts.add(run.current_context)
+                        run.contexts_done = len(seen_contexts)
+                    run.current_context = None
+                    if run.current_batch_index is not None:
+                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
+                    run.current_batch_index = next(
+                        (
+                            index
+                            for index in range(run.batch_sizes_done, len(run.batch_sizes))
+                            if run.batch_sizes[index] == batch_size
+                        ),
+                        None,
+                    )
+                    run.current_batch_size = batch_size
+                    run.phase = "batch"
+                batch_complete_match = BATCH_COMPLETE_RE.search(line)
+                if batch_complete_match:
+                    tested = min(int(batch_complete_match.group(1)), len(run.batch_sizes))
+                    if run.current_batch_index is not None:
+                        tested = max(tested, run.current_batch_index + 1)
+                    run.batch_sizes_done = max(run.batch_sizes_done, tested)
+                    run.current_batch_size = None
+                    run.current_batch_index = None
                 for regex in GEN_TPS_RES:
                     m = regex.search(line)
                     if m:
@@ -212,10 +275,14 @@ class RunManager:
             run.finished = time.time()
             run.result_folders = folders
             run.current_context = None
+            run.current_batch_size = None
+            run.current_batch_index = None
+            run.phase = None
             if run.stop_requested:
                 run.status = "stopped"
             elif proc.returncode == 0:
                 run.status = "done"
                 run.contexts_done = len(run.contexts)
+                run.batch_sizes_done = len(run.batch_sizes)
             else:
                 run.status = "failed"

@@ -318,7 +318,8 @@
         <div class="readout-cell"><span class="eyebrow">Elapsed</span>
           <span class="readout-value" data-f="elapsed">–</span></div>
       </div>
-      <div class="ctx-lane" data-f="lane"></div>
+      <div class="ctx-lane" data-f="batch-lane" hidden></div>
+      <div class="ctx-lane" data-f="context-lane"></div>
       <pre class="console" data-f="log" hidden></pre>`;
     card.querySelector('[data-act="stop"]').addEventListener("click", async () => {
       try { await api(`/api/runs/${run.id}/stop`, { method: "POST" }); } catch (e) { toast(e.message, true); }
@@ -350,16 +351,30 @@
     if (run.live.ttft != null)
       card.querySelector('[data-f="ttft"]').innerHTML = `${esc(run.live.ttft.toFixed(2))}<span class="unit"> s</span>`;
 
-    const lane = card.querySelector('[data-f="lane"]');
+    const batchLane = card.querySelector('[data-f="batch-lane"]');
+    if (run.batch_sizes && run.batch_sizes.length) {
+      batchLane.hidden = false;
+      batchLane.innerHTML = `<span class="progress-label">Batch inference</span>` + run.batch_sizes.map((size, i) => {
+        let cls = "";
+        if (run.status === "done" || i < run.batch_sizes_done) cls = "done";
+        else if (run.phase === "batch" && run.current_batch_index === i) cls = "active";
+        return `<span class="ctx-step ${cls}">${esc(size)}×</span>`;
+      }).join("");
+    } else {
+      batchLane.hidden = true;
+    }
+
+    const contextLane = card.querySelector('[data-f="context-lane"]');
     if (run.contexts.length) {
-      lane.innerHTML = run.contexts.map((ctx, i) => {
+      contextLane.hidden = false;
+      contextLane.innerHTML = `<span class="progress-label">Context</span>` + run.contexts.map((ctx, i) => {
         const name = /k$/.test(ctx) ? ctx : ctx + "k";
         let cls = "";
         if (run.status === "done" || i < run.contexts_done) cls = "done";
-        else if (run.current_context && run.current_context.replace(/k$/, "") === String(ctx).replace(/k$/, "")) cls = "active";
+        else if (run.phase === "context" && run.current_context && run.current_context.replace(/k$/, "") === String(ctx).replace(/k$/, "")) cls = "active";
         return `<span class="ctx-step ${cls}">${esc(name)}</span>`;
       }).join("");
-    } else lane.hidden = true;
+    } else contextLane.hidden = true;
 
     const stopBtn = card.querySelector('[data-act="stop"]');
     stopBtn.disabled = !(run.status === "running" || run.status === "starting");

@@ -333,7 +333,11 @@ details.advanced > div { margin-top: 14px; }
 }
 .readout-value .unit { font-size: 11px; }
 
-.ctx-lane { display: flex; gap: 5px; flex-wrap: wrap; padding: 11px 17px; border-bottom: 1px solid var(--hairline); }
+.ctx-lane { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 11px 17px; border-bottom: 1px solid var(--hairline); }
+.progress-label {
+  min-width: 90px; color: var(--muted); font-size: 10px;
+  font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+}
 .ctx-step {
   font-family: var(--mono); font-size: 10.5px;
   padding: 2px 8px; border-radius: 5px;
