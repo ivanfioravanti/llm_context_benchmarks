@@ -56,6 +56,36 @@ uv run benchmark-webui --host 0.0.0.0 --port 9000 --no-open
 - **Compare** — select up to 8 runs and compare any metric (generation/prompt
   t/s, TTFT, TPOT, memory, KV cache, batch sweeps) in interactive charts.
 
+### Docker
+
+The web UI can also run in a container — no local Python or `uv` needed:
+
+```bash
+docker compose up -d              # build + start, UI on http://127.0.0.1:8321
+docker compose logs -f webui      # follow server + benchmark logs
+docker compose down               # stop
+docker compose up -d --build      # rebuild after pulling code changes
+```
+
+The container is a pure benchmark *client* (~400 MB): it only ships the web UI
+and the HTTP client libraries, so it benchmarks remote endpoints you add in
+the UI (Ollama, llama.cpp, LM Studio, vLLM, MLX-Serve, any OpenAI-compatible
+server). Nothing runs models inside the container — mlx/torch/transformers are
+deliberately not installed (`requirements-docker.txt`), and the local-MLX
+engines are disabled in the engine picker.
+
+Notes:
+
+- The project directory is bind-mounted, so results (`output/`), generated
+  context files, and saved endpoints (`webui_endpoints.json`) live on the host
+  and survive rebuilds.
+- To benchmark a server running on the Docker host itself, use
+  `http://host.docker.internal:<port>` as the endpoint URL instead of
+  `localhost`.
+- The port is bound to `127.0.0.1` on purpose (the UI has no auth and the
+  endpoint store holds API keys). Edit `docker-compose.yml` to expose it on
+  the LAN.
+
 ## Running Benchmarks
 
 ```bash
@@ -183,6 +213,7 @@ llm_context_benchmarks/
 - Python 3.13+
 - `uv` for dependency management
 - Engine-specific runtime (see Installation table)
+- Or just Docker, for the web UI against remote endpoints (see [Docker](#docker))
 
 ## Contributing
 
