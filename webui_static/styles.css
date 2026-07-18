@@ -221,6 +221,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible,
   outline-offset: 1px;
 }
 .field .hint { font-size: 11px; color: var(--muted); }
+.field .hint.warn { color: var(--warning); }
 .field input::placeholder, .field textarea::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
 .form-row { display: grid; gap: 12px; margin-bottom: 12px; }
 .form-row.cols-2 { grid-template-columns: 1fr 1fr; }

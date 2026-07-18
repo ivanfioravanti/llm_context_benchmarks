@@ -6,7 +6,9 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_SYSTEM_PYTHON=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    # tells the web UI to show container-specific hints (host.docker.internal)
+    CONTEXT_BENCH_CONTAINER=1
 
 WORKDIR /app
 

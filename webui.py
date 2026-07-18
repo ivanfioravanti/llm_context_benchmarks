@@ -186,6 +186,15 @@ def resolve_result_folder(name: str) -> Path:
 app = FastAPI(title="LLM Context Bench", docs_url=None, redoc_url=None)
 
 
+def in_container() -> bool:
+    """True when the server runs inside a container (Docker/Podman)."""
+    return (
+        os.environ.get("CONTEXT_BENCH_CONTAINER") == "1"
+        or Path("/.dockerenv").exists()
+        or Path("/run/.containerenv").exists()
+    )
+
+
 @app.get("/api/meta")
 def api_meta():
     catalog = get_engine_catalog()
@@ -217,6 +226,7 @@ def api_meta():
     hw = benchmark_common.get_hardware_info()
     return {
         "engines": engines,
+        "in_container": in_container(),
         "mlx_available": is_apple_silicon(),
         "hardware": hw,
         "hardware_string": benchmark_common.format_hardware_string(hw),
