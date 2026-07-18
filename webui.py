@@ -323,7 +323,10 @@ def api_endpoints_ping(endpoint_id: str):
     endpoint = next((e for e in load_endpoints() if e["id"] == endpoint_id), None)
     if endpoint is None:
         raise HTTPException(404, "Endpoint not found")
-    url = (endpoint.get("base_url") or "").strip()
+    url = (endpoint.get("base_url") or "").strip().rstrip("/")
+    if url.endswith("/v1"):
+        # OpenAI-style servers don't serve the bare /v1 root; probe the real route
+        url += "/models"
     if not url and endpoint.get("host"):
         url = f"http://{endpoint['host']}:{endpoint.get('port') or 8080}/health"
     if not url:
