@@ -14,6 +14,9 @@ services:
       # so the whole project is mounted: results and endpoints are shared
       # with the host and survive rebuilds. Dependencies live in the image.
       - .:/app
+    environment:
+      # result folders are timestamped with local time, not UTC
+      TZ: Europe/Berlin
     extra_hosts:
       # Reach servers running on the host (Ollama, llama.cpp, LM Studio, …)
       # via http://host.docker.internal:<port> in endpoint URLs.
