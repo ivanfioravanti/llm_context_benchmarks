@@ -529,6 +529,16 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), na
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.middleware("http")
+async def revalidate_app_assets(request: Request, call_next):
+    """App JS/CSS changes with every update; no-cache makes browsers revalidate
+    instead of heuristically reusing stale files (ETag 304s keep it cheap)."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
