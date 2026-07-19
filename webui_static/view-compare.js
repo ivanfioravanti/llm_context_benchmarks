@@ -18,8 +18,7 @@
       <div class="panel">
         <div class="panel-head"><span class="panel-title">Runs</span>
           <button class="btn small" id="cmpClear">Clear</button></div>
-        <input type="text" id="cmpFilter" placeholder="Filter…" style="width:100%;margin-bottom:8px"
-          class="num">
+        <input type="text" id="cmpFilter" placeholder="Filter…" class="text-input" style="margin-bottom:10px">
         <div class="pick-list" id="cmpPickList"></div>
       </div>
       <div>

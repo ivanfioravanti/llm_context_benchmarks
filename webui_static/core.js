@@ -133,6 +133,27 @@
     return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
   }
 
+  // log-scale sweep rule — ticks at the context sizes the toolkit sweeps
+  // through (doubling steps), on a shared 0.5k…256k scale
+  function sweepRuleHtml() {
+    const sizes = [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256];
+    const min = Math.log2(sizes[0]);
+    const max = Math.log2(sizes[sizes.length - 1]);
+    const pos = s => 2 + ((Math.log2(s) - min) / (max - min)) * 996;
+    const ticks = sizes.map(s => {
+      const x = pos(s).toFixed(1);
+      return `<line x1="${x}" y1="1" x2="${x}" y2="7" vector-effect="non-scaling-stroke"/>`;
+    }).join("");
+    return `<div class="sweep-rule" aria-hidden="true">
+      <svg viewBox="0 0 1000 9" preserveAspectRatio="none">
+        <line class="sweep-base" x1="0" y1="1" x2="1000" y2="1" vector-effect="non-scaling-stroke"/>
+        ${ticks}
+      </svg>
+      <span class="sweep-lab" style="left:0">0.5k</span>
+      <span class="sweep-lab" style="right:0">256k</span>
+    </div>`;
+  }
+
   function pageHead(eyebrow, title, sub, actionsHtml) {
     return `<div class="page-head">
       <div>
@@ -141,7 +162,7 @@
         ${sub ? `<div class="page-sub">${sub}</div>` : ""}
       </div>
       ${actionsHtml || ""}
-    </div>`;
+    </div>${sweepRuleHtml()}`;
   }
 
   function resultName(summary) {

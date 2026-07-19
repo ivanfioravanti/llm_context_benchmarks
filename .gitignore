@@ -120,3 +120,5 @@ $RECYCLE.BIN/
 
 # Web UI
 webui_endpoints.json
+
+.playwright-cli/

@@ -108,7 +108,7 @@
               <input type="number" id="rfRuns" value="2" min="1"></div>
             <div class="field"><label for="rfTimeout">Timeout <span class="unit">s</span></label>
               <input type="number" id="rfTimeout" value="3600" min="10"></div>
-            <div class="field"><label>&nbsp;</label>
+            <div class="field field-check">
               <label class="check"><input type="checkbox" id="rfSaveResponses"> Save responses</label></div>
           </div>
           ${engine.cold_prefill ? `<label class="check" style="margin-bottom:4px">
