@@ -17,6 +17,13 @@ from webui_common import OUTPUT_DIR, ROOT, RUN_META_FILE
 PROGRESS_RE = re.compile(r"Benchmarking\s+([\d.]+k)\.txt")
 BATCH_PROGRESS_RE = re.compile(r"^\s*Batch size\s+(\d+)\s*\(")
 BATCH_COMPLETE_RE = re.compile(r"^\s*Batch benchmark complete:\s+(\d+)\s+sizes tested")
+# Warmup / decode failures across engines, e.g.:
+#   "Warmup failed for batch size 8: ... — skipping"
+#   "Failed to decode random prompts: ... — skipping batch size 4"
+BATCH_SKIP_RE = re.compile(
+    r"(?:Warmup failed for batch size|skipping batch size)\s+(\d+)",
+    re.IGNORECASE,
+)
 GEN_TPS_RES = [
     re.compile(r"Generation:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
     re.compile(r"Generation TPS:\s+([\d.]+)"),
@@ -86,6 +93,7 @@ class BenchmarkRun:
         self.current_batch_size = None
         self.current_batch_index = None
         self.batch_sizes_done = 0
+        self.batch_skipped = []  # indices into batch_sizes that failed/skipped
         self.phase = None
         self.live = {}
         self.result_folders = []
@@ -113,6 +121,7 @@ class BenchmarkRun:
                 "current_batch_size": self.current_batch_size,
                 "current_batch_index": self.current_batch_index,
                 "batch_sizes_done": self.batch_sizes_done,
+                "batch_skipped": list(self.batch_skipped),
                 "phase": self.phase,
                 "live": dict(self.live),
                 "result_folders": list(self.result_folders),
@@ -220,31 +229,70 @@ class RunManager:
                         ),
                         None,
                     )
+                    # Fall back to any matching chip if the remaining-range lookup misses
+                    # (e.g. duplicate sizes or a size already marked done).
+                    if run.current_batch_index is None:
+                        try:
+                            run.current_batch_index = run.batch_sizes.index(batch_size)
+                        except ValueError:
+                            run.current_batch_index = None
                     run.current_batch_size = batch_size
                     run.phase = "batch"
+                skip_match = BATCH_SKIP_RE.search(line)
+                if skip_match and run.batch_sizes:
+                    skipped_size = int(skip_match.group(1))
+                    idx = run.current_batch_index
+                    if idx is None or run.batch_sizes[idx] != skipped_size:
+                        idx = next(
+                            (
+                                index
+                                for index in range(len(run.batch_sizes))
+                                if run.batch_sizes[index] == skipped_size and index not in run.batch_skipped
+                            ),
+                            None,
+                        )
+                    if idx is not None:
+                        if idx not in run.batch_skipped:
+                            run.batch_skipped.append(idx)
+                        run.batch_sizes_done = max(run.batch_sizes_done, idx + 1)
+                        if run.current_batch_index == idx:
+                            run.current_batch_size = None
+                            run.current_batch_index = None
                 batch_complete_match = BATCH_COMPLETE_RE.search(line)
                 if batch_complete_match:
-                    tested = min(int(batch_complete_match.group(1)), len(run.batch_sizes))
+                    # Sweep finished — advance past every planned size. Skipped
+                    # indices stay in batch_skipped so chips don't look successful.
                     if run.current_batch_index is not None:
-                        tested = max(tested, run.current_batch_index + 1)
-                    run.batch_sizes_done = max(run.batch_sizes_done, tested)
+                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
+                    run.batch_sizes_done = max(run.batch_sizes_done, len(run.batch_sizes))
                     run.current_batch_size = None
                     run.current_batch_index = None
+                    run.phase = None
+                live_updated = False
                 for regex in GEN_TPS_RES:
                     m = regex.search(line)
                     if m:
                         run.live["generation_tps"] = float(m.group(1))
+                        live_updated = True
                         break
                 for regex in PROMPT_TPS_RES:
                     m = regex.search(line)
                     if m:
                         run.live["prompt_tps"] = float(m.group(1))
+                        live_updated = True
                         break
                 for regex in TTFT_RES:
                     m = regex.search(line)
                     if m:
                         run.live["ttft"] = float(m.group(1))
+                        live_updated = True
                         break
+                if live_updated and run.phase:
+                    run.live["source"] = run.phase
+                    if run.phase == "batch" and run.current_batch_size is not None:
+                        run.live["source_batch_size"] = run.current_batch_size
+                    elif run.phase == "context" and run.current_context:
+                        run.live["source_context"] = run.current_context
         proc.wait()
 
         folders = []

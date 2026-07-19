@@ -335,7 +335,7 @@ details.advanced > div { margin-top: 14px; }
 
 .ctx-lane { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 11px 17px; border-bottom: 1px solid var(--hairline); }
 .progress-label {
-  min-width: 90px; color: var(--muted); font-size: 10px;
+  min-width: 110px; color: var(--muted); font-size: 10px;
   font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
 }
 .ctx-step {
@@ -346,6 +346,12 @@ details.advanced > div { margin-top: 14px; }
 }
 .ctx-step.done { border-color: color-mix(in srgb, var(--good) 55%, var(--hairline)); color: var(--good); }
 .ctx-step.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.ctx-step.skipped {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--hairline));
+  color: var(--warning);
+  text-decoration: line-through;
+  opacity: 0.9;
+}
 
 .console {
   font-family: var(--mono);

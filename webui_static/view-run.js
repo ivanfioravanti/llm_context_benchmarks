@@ -1,5 +1,5 @@
 /* Run view: endpoint-driven benchmark launcher plus the live run list
-   (status LEDs, live readout, context progress lane, streaming log). */
+   (status LEDs, live readout, context/batch progress lanes, streaming log). */
 
 (function () {
   "use strict";
@@ -292,6 +292,39 @@
     if (anyActive) startRunsPolling(); else stopRunsPolling();
   }
 
+  function runProgressSummary(run, statusText) {
+    const parts = [statusText];
+    if (run.contexts && run.contexts.length) {
+      const done = Math.min(run.contexts_done || 0, run.contexts.length);
+      let bit = `context ${done}/${run.contexts.length}`;
+      if (run.phase === "context" && run.current_context) bit += ` (${run.current_context})`;
+      parts.push(bit);
+    }
+    if (run.batch_sizes && run.batch_sizes.length) {
+      const done = Math.min(run.batch_sizes_done || 0, run.batch_sizes.length);
+      let bit = `batch ${done}/${run.batch_sizes.length}`;
+      if (run.phase === "batch" && run.current_batch_size != null) bit += ` (${run.current_batch_size}×)`;
+      parts.push(bit);
+    }
+    if (run.error) parts.push(run.error);
+    return parts.join(" · ");
+  }
+
+  function setLaneHtml(node, signature, html, hidden) {
+    if (hidden) {
+      node.hidden = true;
+      if (node.dataset.sig) {
+        node.dataset.sig = "";
+        node.innerHTML = "";
+      }
+      return;
+    }
+    node.hidden = false;
+    if (node.dataset.sig === signature) return;
+    node.dataset.sig = signature;
+    node.innerHTML = html;
+  }
+
   function createRunCard(container, run) {
     const card = document.createElement("div");
     card.className = "run-card";
@@ -309,17 +342,17 @@
         <button class="btn small danger" data-act="stop">Stop</button>
       </div>
       <div class="readout">
-        <div class="readout-cell"><span class="eyebrow">Prompt</span>
+        <div class="readout-cell"><span class="eyebrow" data-f="prompt-label">Prompt</span>
           <span class="readout-value" data-f="prompt">–<span class="unit"> t/s</span></span></div>
-        <div class="readout-cell"><span class="eyebrow">Generation</span>
+        <div class="readout-cell"><span class="eyebrow" data-f="gen-label">Generation</span>
           <span class="readout-value" data-f="gen">–<span class="unit"> t/s</span></span></div>
-        <div class="readout-cell"><span class="eyebrow">TTFT</span>
+        <div class="readout-cell"><span class="eyebrow" data-f="ttft-label">TTFT</span>
           <span class="readout-value" data-f="ttft">–<span class="unit"> s</span></span></div>
         <div class="readout-cell"><span class="eyebrow">Elapsed</span>
           <span class="readout-value" data-f="elapsed">–</span></div>
       </div>
-      <div class="ctx-lane" data-f="batch-lane" hidden></div>
       <div class="ctx-lane" data-f="context-lane"></div>
+      <div class="ctx-lane" data-f="batch-lane" hidden></div>
       <pre class="console" data-f="log" hidden></pre>`;
     card.querySelector('[data-act="stop"]').addEventListener("click", async () => {
       try { await api(`/api/runs/${run.id}/stop`, { method: "POST" }); } catch (e) { toast(e.message, true); }
@@ -341,9 +374,19 @@
       (run.label ? run.label + " — " : "") + run.engine + " · " + run.model;
     const statusText = { starting: "starting", running: "running", done: "completed",
       failed: "failed (exit " + run.returncode + ")", stopped: "stopped" }[run.status] || run.status;
-    card.querySelector(".run-card-meta").textContent =
-      statusText + (run.error ? " — " + run.error : "");
+    const meta = card.querySelector(".run-card-meta");
+    meta.textContent = runProgressSummary(run, statusText);
+    meta.setAttribute("aria-live", "polite");
     card.querySelector('[data-f="elapsed"]').textContent = fmtDuration(run.elapsed);
+
+    const liveSource = run.live.source || run.phase;
+    const batchTag = liveSource === "batch" && (run.live.source_batch_size ?? run.current_batch_size) != null
+      ? ` · ${(run.live.source_batch_size ?? run.current_batch_size)}×`
+      : (liveSource === "batch" ? " · batch" : "");
+    card.querySelector('[data-f="prompt-label"]').textContent = "Prompt" + batchTag;
+    card.querySelector('[data-f="gen-label"]').textContent = "Generation" + batchTag;
+    card.querySelector('[data-f="ttft-label"]').textContent = "TTFT" + batchTag;
+
     if (run.live.prompt_tps != null)
       card.querySelector('[data-f="prompt"]').innerHTML = `${esc(fmt(run.live.prompt_tps))}<span class="unit"> t/s</span>`;
     if (run.live.generation_tps != null)
@@ -351,30 +394,43 @@
     if (run.live.ttft != null)
       card.querySelector('[data-f="ttft"]').innerHTML = `${esc(run.live.ttft.toFixed(2))}<span class="unit"> s</span>`;
 
-    const batchLane = card.querySelector('[data-f="batch-lane"]');
-    if (run.batch_sizes && run.batch_sizes.length) {
-      batchLane.hidden = false;
-      batchLane.innerHTML = `<span class="progress-label">Batch inference</span>` + run.batch_sizes.map((size, i) => {
-        let cls = "";
-        if (run.status === "done" || i < run.batch_sizes_done) cls = "done";
-        else if (run.phase === "batch" && run.current_batch_index === i) cls = "active";
-        return `<span class="ctx-step ${cls}">${esc(size)}×</span>`;
-      }).join("");
-    } else {
-      batchLane.hidden = true;
-    }
-
     const contextLane = card.querySelector('[data-f="context-lane"]');
     if (run.contexts.length) {
-      contextLane.hidden = false;
-      contextLane.innerHTML = `<span class="progress-label">Context</span>` + run.contexts.map((ctx, i) => {
+      const ctxSig = [run.status, run.phase, run.contexts_done, run.current_context, run.contexts.join(",")].join("|");
+      const ctxHtml = `<span class="progress-label">Context</span>` + run.contexts.map((ctx, i) => {
         const name = /k$/.test(ctx) ? ctx : ctx + "k";
         let cls = "";
         if (run.status === "done" || i < run.contexts_done) cls = "done";
         else if (run.phase === "context" && run.current_context && run.current_context.replace(/k$/, "") === String(ctx).replace(/k$/, "")) cls = "active";
         return `<span class="ctx-step ${cls}">${esc(name)}</span>`;
       }).join("");
-    } else contextLane.hidden = true;
+      setLaneHtml(contextLane, ctxSig, ctxHtml, false);
+    } else setLaneHtml(contextLane, "", "", true);
+
+    const batchLane = card.querySelector('[data-f="batch-lane"]');
+    if (run.batch_sizes && run.batch_sizes.length) {
+      const skipped = new Set(run.batch_skipped || []);
+      const activeBatchIndex = run.current_batch_index != null
+        ? run.current_batch_index
+        : (run.phase === "batch" && run.current_batch_size != null
+          ? run.batch_sizes.findIndex((size, i) => i >= (run.batch_sizes_done || 0) && size === run.current_batch_size)
+          : -1);
+      const batchSig = [
+        run.status, run.phase, run.batch_sizes_done, run.current_batch_index,
+        run.current_batch_size, [...skipped].join(","), run.batch_sizes.join(","),
+      ].join("|");
+      const batchHtml = `<span class="progress-label">Batch sweep</span>` + run.batch_sizes.map((size, i) => {
+        let cls = "";
+        let title = "";
+        if (skipped.has(i)) { cls = "skipped"; title = ' title="skipped"'; }
+        else if (run.status === "done" || i < run.batch_sizes_done) cls = "done";
+        else if (run.phase === "batch" && (i === activeBatchIndex || (activeBatchIndex < 0 && size === run.current_batch_size))) cls = "active";
+        return `<span class="ctx-step ${cls}"${title}>${esc(size)}×</span>`;
+      }).join("");
+      setLaneHtml(batchLane, batchSig, batchHtml, false);
+    } else {
+      setLaneHtml(batchLane, "", "", true);
+    }
 
     const stopBtn = card.querySelector('[data-act="stop"]');
     stopBtn.disabled = !(run.status === "running" || run.status === "starting");
