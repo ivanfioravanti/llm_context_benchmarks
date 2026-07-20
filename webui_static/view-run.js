@@ -340,6 +340,7 @@
         <div class="run-card-spacer"></div>
         <button class="btn small" data-act="toggle-log">Log</button>
         <button class="btn small danger" data-act="stop">Stop</button>
+        <button class="btn small danger" data-act="delete" hidden>Delete</button>
       </div>
       <div class="readout">
         <div class="readout-cell"><span class="eyebrow" data-f="prompt-label">Prompt</span>
@@ -357,6 +358,13 @@
     card.querySelector('[data-act="stop"]').addEventListener("click", async () => {
       try { await api(`/api/runs/${run.id}/stop`, { method: "POST" }); } catch (e) { toast(e.message, true); }
     });
+    card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
+      if (!confirm("Remove this run from the list?")) return;
+      try {
+        await api(`/api/runs/${run.id}`, { method: "DELETE" });
+        card.remove();
+      } catch (e) { toast(e.message, true); }
+    });
     card.querySelector('[data-act="toggle-log"]').addEventListener("click", () => {
       const log = card.querySelector('[data-f="log"]');
       log.hidden = !log.hidden;
@@ -370,6 +378,9 @@
   async function updateRunCard(card, run) {
     const dot = card.querySelector(".led");
     dot.className = "led " + run.status;
+    const active = run.status === "running" || run.status === "starting";
+    card.querySelector('[data-act="stop"]').hidden = !active;
+    card.querySelector('[data-act="delete"]').hidden = active;
     card.querySelector(".run-card-title").textContent =
       (run.label ? run.label + " — " : "") + run.engine + " · " + run.model;
     const statusText = { starting: "starting", running: "running", done: "completed",

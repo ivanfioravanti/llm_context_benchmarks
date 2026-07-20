@@ -485,6 +485,12 @@ def api_runs_stop(run_id: str):
     return run_manager.stop(run_id).snapshot()
 
 
+@app.delete("/api/runs/{run_id}")
+def api_runs_delete(run_id: str):
+    run_manager.delete(run_id)
+    return {"ok": True}
+
+
 @app.get("/api/results")
 def api_results_list():
     if not OUTPUT_DIR.is_dir():
