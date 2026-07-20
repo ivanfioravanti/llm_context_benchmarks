@@ -67,8 +67,10 @@
     grid.querySelectorAll(".ep-card").forEach(card => {
       const ep = state.endpoints.find(x => x.id === card.dataset.id);
       card.querySelector('[data-act="bench"]').addEventListener("click", () => {
-        state.runFormEndpoint = ep.id;
-        if (ep.engine) state.runFormEngine = ep.engine;
+        state.runForm.endpoint = ep.id;
+        if (ep.engine) state.runForm.engine = ep.engine;
+        state.runForm.model = ep.model || "";
+        state.runForm.label = ep.name || "";
         location.hash = "run";
         render();
       });

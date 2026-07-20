@@ -9,6 +9,7 @@ OUTPUT_DIR = ROOT / "output"
 STATIC_DIR = ROOT / "webui_static"
 ENDPOINTS_FILE = ROOT / "webui_endpoints.json"
 RUN_META_FILE = "webui_run.json"
+SUMMARY_CACHE_FILE = "webui_summary.json"
 
 CONTEXT_FILE_RE = re.compile(r"^(\d+(?:\.\d+)?)k$")
 FOLDER_TS_RE = re.compile(r"_(\d{8}_\d{6})$")

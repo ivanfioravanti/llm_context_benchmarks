@@ -9,39 +9,90 @@
     attachModelPicker, modelPickerHtml, currentView,
   } = CB;
 
-  // connection values for the run: from the endpoint, else the manual fields
+  // connection values for the run: from the endpoint, else the draft / DOM
   function readConnection(ep) {
-    const connection = {};
+    const draft = state.runForm;
     if (ep) {
-      connection.base_url = ep.base_url || "";
-      connection.api_key = ep.api_key || "";
-      connection.host = ep.host || "";
-      connection.port = ep.port || "";
-    } else {
-      const field = id => document.getElementById(id);
-      if (field("rfBaseUrl")) connection.base_url = field("rfBaseUrl").value.trim();
-      if (field("rfApiKey")) connection.api_key = field("rfApiKey").value;
-      if (field("rfHost")) connection.host = field("rfHost").value.trim();
-      if (field("rfPort")) connection.port = field("rfPort").value;
+      return {
+        base_url: ep.base_url || "",
+        api_key: ep.api_key || "",
+        host: ep.host || "",
+        port: ep.port || "",
+      };
     }
-    return connection;
+    const field = id => document.getElementById(id);
+    return {
+      base_url: field("rfBaseUrl") ? field("rfBaseUrl").value.trim() : (draft.baseUrl || ""),
+      api_key: field("rfApiKey") ? field("rfApiKey").value : (draft.apiKey || ""),
+      host: field("rfHost") ? field("rfHost").value.trim() : (draft.host || "localhost"),
+      port: field("rfPort") ? field("rfPort").value : (draft.port || "8080"),
+    };
   }
 
-  function renderRunView() {
+  // Pull the live form into state.runForm before a re-render wipes the DOM.
+  function captureRunForm() {
+    if (!document.getElementById("rfMaxTokens")) return;
+    const draft = state.runForm;
+    draft.endpoint = document.getElementById("rfEndpoint").value;
+    const engineSel = document.getElementById("rfEngine");
+    if (engineSel) draft.engine = engineSel.value;
+    draft.model = state.runModelPicker
+      ? state.runModelPicker.value()
+      : (document.getElementById("rfModel") || {}).value || "";
+    draft.label = document.getElementById("rfLabel").value;
+    draft.contexts = [...document.querySelectorAll("#rfContexts input:checked")].map(i => i.value);
+    draft.maxTokens = document.getElementById("rfMaxTokens").value;
+    draft.runs = document.getElementById("rfRuns").value;
+    draft.timeout = document.getElementById("rfTimeout").value;
+    draft.saveResponses = document.getElementById("rfSaveResponses").checked;
+    const cold = document.getElementById("rfColdPrefill");
+    if (cold) draft.coldPrefill = cold.checked;
+    const options = {};
+    document.querySelectorAll("#view-run [data-optkey]").forEach(node => {
+      options[node.dataset.optkey] = node.type === "checkbox" ? node.checked : node.value;
+    });
+    draft.options = options;
+    const extra = document.getElementById("rfExtraArgs");
+    if (extra) draft.extraArgs = extra.value;
+    const baseUrl = document.getElementById("rfBaseUrl");
+    if (baseUrl) draft.baseUrl = baseUrl.value;
+    const apiKey = document.getElementById("rfApiKey");
+    if (apiKey) draft.apiKey = apiKey.value;
+    const host = document.getElementById("rfHost");
+    if (host) draft.host = host.value;
+    const port = document.getElementById("rfPort");
+    if (port) draft.port = port.value;
+  }
+
+  function optionValue(opt, draftOpts) {
+    if (draftOpts && Object.prototype.hasOwnProperty.call(draftOpts, opt.key)) {
+      return draftOpts[opt.key];
+    }
+    return opt.default;
+  }
+
+  function renderRunView(opts) {
+    const keepDraft = opts && opts.keepDraft;
+    if (!keepDraft) captureRunForm();
+
     const root = document.getElementById("view-run");
     const engines = state.meta.engines;
+    const draft = state.runForm;
 
     // endpoint-first: the endpoint carries engine + connection + default model
-    const ep = state.endpoints.find(x => x.id === state.runFormEndpoint) || null;
-    if (ep && ep.engine && engineById(ep.engine)) state.runFormEngine = ep.engine;
-    if (!state.runFormEngine || !engineById(state.runFormEngine)) {
-      state.runFormEngine = (engines.find(e => e.available) || engines[0]).id;
+    const ep = state.endpoints.find(x => x.id === draft.endpoint) || null;
+    if (ep && ep.engine && engineById(ep.engine)) draft.engine = ep.engine;
+    if (!draft.engine || !engineById(draft.engine)) {
+      draft.engine = (engines.find(e => e.available) || engines[0]).id;
     }
-    const engine = engineById(state.runFormEngine);
+    const engine = engineById(draft.engine);
     const engineLocked = !!(ep && ep.engine);
     const manual = !ep;
     const defaultCtx = engine.default_contexts.split(",").map(s => s.trim());
+    const selectedCtx = draft.contexts || defaultCtx;
     const target = ep ? (endpointTarget(ep) || "local") : "";
+    const modelValue = draft.model || (ep ? ep.model : "") || "";
+    const labelValue = draft.label || (ep ? ep.name : "") || "";
 
     root.innerHTML = `
       ${pageHead("Bench · Launch", "Run sweep",
@@ -80,43 +131,48 @@
           <div class="form-row cols-2">
             <div class="field">
               <label for="rfModel">Model ${engine.model === "auto" ? "(optional, auto-detected)" : ""}</label>
-              ${modelPickerHtml("rfModel", ep ? ep.model : "", engine.example)}
+              ${modelPickerHtml("rfModel", modelValue, engine.example)}
               <span class="hint" id="rfModelHint"></span>
             </div>
             <div class="field">
               <label for="rfLabel">Run label</label>
-              <input type="text" id="rfLabel" value="${esc(ep ? ep.name : "")}" placeholder="e.g. M3 Ultra · speculative on">
+              <input type="text" id="rfLabel" value="${esc(labelValue)}" placeholder="e.g. M3 Ultra · speculative on">
               <span class="hint">Shown in results & comparison charts.</span>
             </div>
           </div>
-          ${manual ? renderConnectionFields(engine) : ""}
+          ${manual ? renderConnectionFields(engine, draft) : ""}
           ${!engine.available ? `<p class="hint" style="color:var(--critical)">
             This engine needs Apple Silicon (MLX) and is disabled on this machine.</p>` : ""}
           <div class="field" style="margin-bottom:12px">
             <label>Context sizes <span class="unit">tokens ×1000</span></label>
             <div class="ctx-chips" id="rfContexts">
-              ${state.meta.context_files.map(c => `
-                <label class="ctx-chip"><input type="checkbox" value="${esc(c.name.replace(/k$/, ""))}"
-                  ${defaultCtx.includes(String(c.name.replace(/k$/, ""))) ? "checked" : ""}>
-                  <span>${esc(c.name)}</span></label>`).join("")}
+              ${state.meta.context_files.map(c => {
+                const size = c.name.replace(/k$/, "");
+                return `<label class="ctx-chip"><input type="checkbox" value="${esc(size)}"
+                  ${selectedCtx.includes(String(size)) ? "checked" : ""}>
+                  <span>${esc(c.name)}</span></label>`;
+              }).join("")}
             </div>
           </div>
           <div class="form-row cols-4">
             <div class="field"><label for="rfMaxTokens">Max tokens</label>
-              <input type="number" id="rfMaxTokens" value="128" min="1"></div>
+              <input type="number" id="rfMaxTokens" value="${esc(draft.maxTokens)}" min="1"></div>
             <div class="field"><label for="rfRuns">Runs / context</label>
-              <input type="number" id="rfRuns" value="2" min="1"></div>
+              <input type="number" id="rfRuns" value="${esc(draft.runs)}" min="1"></div>
             <div class="field"><label for="rfTimeout">Timeout <span class="unit">s</span></label>
-              <input type="number" id="rfTimeout" value="3600" min="10"></div>
+              <input type="number" id="rfTimeout" value="${esc(draft.timeout)}" min="10"></div>
             <div class="field field-check">
-              <label class="check"><input type="checkbox" id="rfSaveResponses"> Save responses</label></div>
+              <label class="check"><input type="checkbox" id="rfSaveResponses"
+                ${draft.saveResponses ? "checked" : ""}> Save responses</label></div>
           </div>
           ${engine.cold_prefill ? `<label class="check" style="margin-bottom:4px">
-            <input type="checkbox" id="rfColdPrefill" checked> Cold prefill (clear cache between contexts)</label>` : ""}
-          ${renderEngineOptions(engine)}
+            <input type="checkbox" id="rfColdPrefill" ${draft.coldPrefill ? "checked" : ""}>
+            Cold prefill (clear cache between contexts)</label>` : ""}
+          ${renderEngineOptions(engine, draft.options)}
           <details class="advanced">
             <summary>Extra CLI arguments</summary>
-            <div class="field"><input type="text" id="rfExtraArgs" placeholder="--some-flag value"></div>
+            <div class="field"><input type="text" id="rfExtraArgs" value="${esc(draft.extraArgs)}"
+              placeholder="--some-flag value"></div>
           </details>
           <div class="btn-row" style="margin-top:16px">
             <button class="btn primary" id="rfStart" ${engine.available ? "" : "disabled"}>Start benchmark</button>
@@ -131,13 +187,23 @@
       </div>`;
 
     document.getElementById("rfEndpoint").addEventListener("change", e => {
-      state.runFormEndpoint = e.target.value;
-      renderRunView();
+      captureRunForm();
+      draft.endpoint = e.target.value;
+      const next = state.endpoints.find(x => x.id === draft.endpoint) || null;
+      if (next) {
+        if (next.engine && engineById(next.engine)) draft.engine = next.engine;
+        draft.model = next.model || "";
+        draft.label = next.name || "";
+      }
+      renderRunView({ keepDraft: true });
     });
     const engineSelect = document.getElementById("rfEngine");
     if (engineSelect) engineSelect.addEventListener("change", e => {
-      state.runFormEngine = e.target.value;
-      renderRunView();
+      captureRunForm();
+      draft.engine = e.target.value;
+      // engine-specific defaults — keep shared knobs (max tokens, contexts, …)
+      draft.options = null;
+      renderRunView({ keepDraft: true });
     });
 
     // like readConnection, but with the engine defaults filled in so model
@@ -168,7 +234,7 @@
     }
     if (runConnection() || localEngine) {
       state.runModelPicker.load(true).then(() => {
-        if (ep && ep.model) state.runModelPicker.set(ep.model);
+        if (draft.model) state.runModelPicker.set(draft.model);
       });
     }
     document.getElementById("rfStart").addEventListener("click", startRun);
@@ -177,41 +243,43 @@
     startRunsPolling();
   }
 
-  function renderConnectionFields(engine) {
+  function renderConnectionFields(engine, draft) {
     if (engine.connection === "base_url") {
       return `<div class="form-row cols-2">
         <div class="field"><label for="rfBaseUrl">Base URL</label>
-          <input type="text" id="rfBaseUrl" placeholder="${esc(engine.default_base_url || "http://host:port/v1")}"></div>
+          <input type="text" id="rfBaseUrl" value="${esc(draft.baseUrl || "")}"
+            placeholder="${esc(engine.default_base_url || "http://host:port/v1")}"></div>
         <div class="field"><label for="rfApiKey">API key (optional)</label>
-          <input type="password" id="rfApiKey" autocomplete="off"></div>
+          <input type="password" id="rfApiKey" value="${esc(draft.apiKey || "")}" autocomplete="off"></div>
       </div>`;
     }
     if (engine.connection === "hostport") {
       return `<div class="form-row cols-2">
         <div class="field"><label for="rfHost">Host</label>
-          <input type="text" id="rfHost" value="localhost"></div>
+          <input type="text" id="rfHost" value="${esc(draft.host || "localhost")}"></div>
         <div class="field"><label for="rfPort">Port</label>
-          <input type="number" id="rfPort" value="8080"></div>
+          <input type="number" id="rfPort" value="${esc(draft.port || "8080")}"></div>
       </div>`;
     }
     return "";
   }
 
-  function renderEngineOptions(engine) {
+  function renderEngineOptions(engine, draftOpts) {
     if (!engine.options.length) return "";
     const fields = engine.options.map(opt => {
       const id = "opt_" + opt.key;
+      const saved = optionValue(opt, draftOpts);
       if (opt.type === "flag" || opt.type === "invflag" || opt.type === "optbool") {
         return `<label class="check"><input type="checkbox" id="${id}" data-optkey="${esc(opt.key)}"
-          ${opt.default ? "checked" : ""}> ${esc(opt.label)}</label>`;
+          ${saved ? "checked" : ""}> ${esc(opt.label)}</label>`;
       }
       if (opt.type === "choice") {
         return `<div class="field"><label for="${id}">${esc(opt.label)}</label>
           <select id="${id}" data-optkey="${esc(opt.key)}">
-            ${opt.choices.map(c => `<option value="${esc(c)}" ${c === opt.default ? "selected" : ""}>${esc(c || "default")}</option>`).join("")}
+            ${opt.choices.map(c => `<option value="${esc(c)}" ${c === saved ? "selected" : ""}>${esc(c || "default")}</option>`).join("")}
           </select></div>`;
       }
-      const value = opt.default == null ? "" : opt.default;
+      const value = saved == null ? "" : saved;
       const type = (opt.type === "int" || opt.type === "float") ? "number" : "text";
       const step = opt.type === "float" ? ` step="any"` : "";
       return `<div class="field"><label for="${id}">${esc(opt.label)}${opt.required ? " *" : ""}</label>
@@ -225,34 +293,35 @@
   }
 
   async function startRun() {
-    const engine = engineById(state.runFormEngine);
-    const ep = state.endpoints.find(x => x.id === state.runFormEndpoint) || null;
-    const contexts = [...document.querySelectorAll("#rfContexts input:checked")].map(i => i.value);
+    captureRunForm();
+    const draft = state.runForm;
+    const engine = engineById(draft.engine);
+    const ep = state.endpoints.find(x => x.id === draft.endpoint) || null;
+    const contexts = draft.contexts || [];
     if (!contexts.length) { toast("Select at least one context size.", true); return; }
 
     const options = {};
-    document.querySelectorAll("#view-run [data-optkey]").forEach(node => {
-      const key = node.dataset.optkey;
-      if (node.type === "checkbox") options[key] = node.checked;
-      else if (node.value !== "") options[key] = node.value;
-    });
+    const draftOpts = draft.options || {};
+    for (const [key, value] of Object.entries(draftOpts)) {
+      if (typeof value === "boolean") options[key] = value;
+      else if (value !== "") options[key] = value;
+    }
 
     const connection = readConnection(ep);
-    const cold = document.getElementById("rfColdPrefill");
     const payload = {
       engine: engine.id,
-      model: state.runModelPicker ? state.runModelPicker.value() : document.getElementById("rfModel").value,
-      label: document.getElementById("rfLabel").value,
+      model: draft.model,
+      label: draft.label,
       endpoint_id: ep ? ep.id : null,
       contexts: contexts.join(","),
-      max_tokens: document.getElementById("rfMaxTokens").value,
-      runs: document.getElementById("rfRuns").value,
-      timeout: document.getElementById("rfTimeout").value,
-      save_responses: document.getElementById("rfSaveResponses").checked,
-      cold_prefill: cold ? cold.checked : undefined,
+      max_tokens: draft.maxTokens,
+      runs: draft.runs,
+      timeout: draft.timeout,
+      save_responses: draft.saveResponses,
+      cold_prefill: engine.cold_prefill ? draft.coldPrefill : undefined,
       connection,
       options,
-      extra_args: document.getElementById("rfExtraArgs").value,
+      extra_args: draft.extraArgs,
     };
     try {
       const run = await api("/api/runs", { body: payload });

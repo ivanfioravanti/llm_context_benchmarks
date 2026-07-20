@@ -41,6 +41,7 @@ from webui_common import (
     ROOT,
     RUN_META_FILE,
     STATIC_DIR,
+    SUMMARY_CACHE_FILE,
     is_apple_silicon,
 )
 from webui_engines import build_command, cached_mlx_models, engine_available, get_engine_catalog
@@ -137,11 +138,33 @@ def folder_timestamp(name: str):
     return None
 
 
-def summarize_result_folder(folder: Path):
-    parsed, _ = parse_benchmark_folder(folder)
-    if not parsed:
-        return None
-    meta = read_run_meta(folder)
+def folder_data_sig(folder: Path) -> str:
+    """Fingerprint of files that feed a result summary (not label/meta)."""
+    parts = []
+    for name in ("benchmark_results.csv", "hardware_info.json", "batch_benchmark.json"):
+        path = folder / name
+        if path.is_file():
+            st = path.stat()
+            parts.append(f"{name}:{st.st_mtime_ns}:{st.st_size}")
+    for path in sorted(folder.glob("*.png")):
+        st = path.stat()
+        parts.append(f"{path.name}:{st.st_mtime_ns}:{st.st_size}")
+    return "|".join(parts)
+
+
+def apply_meta_to_summary(summary: dict, meta: dict) -> dict:
+    """Overlay live webui_run.json fields onto a cached/parsed summary."""
+    out = dict(summary)
+    out["label"] = meta.get("label") or ""
+    out["endpoint"] = meta.get("endpoint") or ""
+    out["endpoint_hardware"] = meta.get("endpoint_hardware") or ""
+    # Endpoint hardware (user-provided) beats the locally captured chip string.
+    out["machine"] = out["endpoint_hardware"] or out.get("machine") or ""
+    return out
+
+
+def build_result_summary(folder: Path, parsed: dict) -> dict:
+    """Build the archive-list summary from an already-parsed folder (no meta)."""
     rows = sorted(parsed["results"], key=lambda r: context_sort_key(r.get("context_size", "0")))
     hw = parsed["hardware_info"] or {}
     gen_series = [
@@ -156,18 +179,8 @@ def summarize_result_folder(folder: Path):
         "engine": parsed["engine"],
         "model": parsed["model"],
         "cache_mode": parsed["cache_mode"],
-        "label": meta.get("label") or "",
-        "endpoint": meta.get("endpoint") or "",
         "timestamp": folder_timestamp(folder.name),
-        # The endpoint's server hardware (user-provided) is the machine that
-        # produced the numbers; the locally captured specs only describe the
-        # benchmark client when the endpoint is remote.
-        "machine": meta.get("endpoint_hardware")
-        or hw.get("chip")
-        or hw.get("machine_label")
-        or hw.get("processor")
-        or "",
-        "endpoint_hardware": meta.get("endpoint_hardware") or "",
+        "machine": hw.get("chip") or hw.get("machine_label") or hw.get("processor") or "",
         "hardware": benchmark_common.format_hardware_string(hw) if hw else "",
         "contexts": [r.get("context_size") for r in rows],
         "peak_generation_tps": max(gen_values) if gen_values else None,
@@ -176,6 +189,35 @@ def summarize_result_folder(folder: Path):
         "has_batch": bool(parsed["batch_data"]),
         "charts": charts,
     }
+
+
+def summarize_result_folder(folder: Path, parsed: dict | None = None):
+    """List/detail summary for a result folder. Cached in webui_summary.json
+    keyed by a fingerprint of the CSV/hardware/batch/chart files; label and
+    endpoint fields are always overlaid from webui_run.json so renames stay cheap.
+    Pass ``parsed`` to skip a second parse when the caller already has it.
+    """
+    meta = read_run_meta(folder)
+    sig = folder_data_sig(folder)
+    cache_path = folder / SUMMARY_CACHE_FILE
+    if parsed is None and cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text())
+            if cached.get("sig") == sig and isinstance(cached.get("summary"), dict):
+                return apply_meta_to_summary(cached["summary"], meta)
+        except (json.JSONDecodeError, OSError, TypeError):
+            pass
+
+    if parsed is None:
+        parsed, _ = parse_benchmark_folder(folder)
+    if not parsed:
+        return None
+    summary = build_result_summary(folder, parsed)
+    try:
+        cache_path.write_text(json.dumps({"sig": sig, "summary": summary}, indent=2))
+    except OSError:
+        pass
+    return apply_meta_to_summary(summary, meta)
 
 
 def resolve_result_folder(name: str) -> Path:
@@ -514,7 +556,7 @@ def api_results_detail(name: str):
     parsed, _ = parse_benchmark_folder(folder)
     if not parsed:
         raise HTTPException(404, f"'{name}' has no benchmark_results.csv")
-    summary = summarize_result_folder(folder)
+    summary = summarize_result_folder(folder, parsed=parsed)
     files = sorted(p.name for p in folder.iterdir() if p.is_file())
     return {
         "summary": summary,
