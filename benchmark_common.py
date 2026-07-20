@@ -6,6 +6,7 @@ import json
 import platform
 import re
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -118,7 +119,185 @@ def format_hardware_string(hw_info):
     if "gpu_cores" in hw_info:
         parts.append(f"{hw_info['gpu_cores']} GPU cores")
 
-    return ", ".join(parts) if parts else "Unknown hardware"
+    formatted = ", ".join(parts) if parts else "Unknown hardware"
+    # Remote endpoint: these are the benchmark client's specs, not the
+    # server's — label them so results don't misattribute the hardware.
+    if hw_info.get("role") == "client":
+        return f"client: {formatted}"
+    return formatted
+
+
+def is_local_base_url(base_url: str) -> bool:
+    """True when the endpoint URL points at this machine."""
+    import socket
+    from urllib.parse import urlparse
+
+    host = (urlparse(base_url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        return True
+    try:
+        return host in (socket.gethostname().lower(), socket.getfqdn().lower())
+    except OSError:
+        return False
+
+
+def mark_client_hardware(hw_info: Dict, base_url: str) -> Dict:
+    """Tag hardware info as describing the benchmark client, not the server.
+
+    For a remote endpoint the machine running this script has nothing to do
+    with the measured numbers — format_hardware_string() then labels it so
+    result folders and charts don't claim client specs as server hardware.
+    """
+    if base_url and not is_local_base_url(base_url):
+        hw_info["role"] = "client"
+    return hw_info
+
+
+def _reasoning_delta_text(reasoning_delta) -> str:
+    """Normalize a reasoning delta (str, or list of str/dict parts) to text."""
+    if isinstance(reasoning_delta, str):
+        return reasoning_delta
+    if isinstance(reasoning_delta, list):
+        parts = []
+        for item in reasoning_delta:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return ""
+
+
+def warn_if_empty_stream(usage: Dict, generated_text: str, reasoning_text: str = "") -> bool:
+    """Warn loudly when a stream reported tokens but carried no readable text.
+
+    This is the signature of a server streaming tokens in a delta field this
+    client doesn't know: every client-side timing (TTFT, prompt TPS, decode
+    window) silently degrades to 0/total_time. Returns True when it fired.
+    """
+    reported = 0
+    if isinstance(usage, dict):
+        reported = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+    if reported and not (generated_text or reasoning_text):
+        print(
+            f"  WARNING: server reported {reported} completion tokens but no token text "
+            "was captured from the stream — the server is probably using a delta field "
+            "this client doesn't read. TTFT, prompt TPS and decode metrics for this row "
+            "are NOT trustworthy."
+        )
+        return True
+    return False
+
+
+def stream_chat(
+    client,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float = 0.7,
+    top_p: Optional[float] = None,
+    timeout: int = 3600,
+    chunk_hook=None,
+) -> Dict[str, object]:
+    """Stream one chat completion via an OpenAI-SDK client and measure it.
+
+    The one shared streaming loop for every OpenAI-compatible engine: collects
+    answer text, reasoning/thinking text (servers stream it as
+    ``reasoning_content`` — DeepSeek, most local servers — or ``reasoning`` —
+    vLLM >= 0.23; either can be a string or a list of parts), the final
+    ``usage`` block, and the client-side timing anchors.
+
+    ``chunk_hook``, when given, is called with every raw chunk so engines can
+    pull server-specific extras (e.g. a top-level ``timings`` block).
+
+    Returns a dict with: ``generated_text``, ``reasoning_text``, ``usage``,
+    ``total_time``, ``time_to_first_token`` (0.0 when no token text arrived),
+    ``prompt_eval_duration`` (alias of TTFT — the client-side prefill proxy),
+    ``decode_window`` (first→last token span, falling back to total-TTFT,
+    then total_time) and ``content_chunks`` (chunks that carried token text).
+    """
+    request_args = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "timeout": timeout,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if top_p is not None:
+        request_args["top_p"] = top_p
+
+    message_parts: List[str] = []
+    reasoning_parts: List[str] = []
+    usage: Dict = {}
+    content_chunks = 0
+    first_token_time: Optional[float] = None
+    last_token_time: Optional[float] = None
+
+    start_time = time.time()
+    stream = client.chat.completions.create(**request_args)
+
+    for chunk in stream:
+        if chunk_hook is not None:
+            chunk_hook(chunk)
+
+        choices = getattr(chunk, "choices", None)
+        if choices:
+            delta = choices[0].delta
+            content = getattr(delta, "content", None) or ""
+            reasoning = _reasoning_delta_text(
+                getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            )
+            if content or reasoning:
+                now = time.time()
+                if first_token_time is None:
+                    first_token_time = now
+                last_token_time = now
+                content_chunks += 1
+            if content:
+                message_parts.append(str(content))
+            if reasoning:
+                reasoning_parts.append(reasoning)
+
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage:
+            if hasattr(chunk_usage, "model_dump"):
+                usage = chunk_usage.model_dump()
+            else:
+                usage = {
+                    "prompt_tokens": getattr(chunk_usage, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(chunk_usage, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(chunk_usage, "total_tokens", 0) or 0,
+                }
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    ttft = (first_token_time - start_time) if first_token_time else 0.0
+
+    if first_token_time and last_token_time and last_token_time > first_token_time:
+        decode_window = last_token_time - first_token_time
+    elif first_token_time:
+        decode_window = max(end_time - first_token_time, 0.0)
+    else:
+        decode_window = total_time
+
+    generated_text = "".join(message_parts)
+    reasoning_text = "".join(reasoning_parts)
+    warn_if_empty_stream(usage, generated_text, reasoning_text)
+
+    return {
+        "generated_text": generated_text,
+        "reasoning_text": reasoning_text,
+        "usage": usage,
+        "total_time": total_time,
+        "time_to_first_token": ttft,
+        "prompt_eval_duration": ttft,
+        "decode_window": decode_window,
+        "content_chunks": content_chunks,
+    }
 
 
 def find_warmup_file() -> Optional[Path]:
@@ -217,6 +396,12 @@ def save_generated_text(result, model_name, output_path, framework=""):
         if "peak_memory_gb" in result:
             f.write(f"Peak memory: {result['peak_memory_gb']:.1f} GB\n")
 
+        reasoning_text = result.get("reasoning_text", "")
+        if reasoning_text:
+            f.write("-" * 80 + "\n")
+            f.write("Reasoning / thinking:\n\n")
+            f.write(reasoning_text + "\n\n")
+
         f.write("-" * 80 + "\n\n")
         f.write(result.get("generated_text", ""))
     print(f"Generated text saved to {output_path}")
@@ -305,12 +490,14 @@ def save_results_csv(results, csv_path, exclude_fields=None):
     Args:
         results: List of result dictionaries
         csv_path: Path to save CSV file
-        exclude_fields: List of field names to exclude from CSV (default: ['generated_text'])
+        exclude_fields: List of field names to exclude from CSV
+            (default: ['generated_text', 'reasoning_text'] — multi-line text
+            blobs belong in the response files, not in the metrics CSV)
     """
     import csv
 
     if exclude_fields is None:
-        exclude_fields = ["generated_text"]
+        exclude_fields = ["generated_text", "reasoning_text"]
 
     if not results:
         print("Warning: No results to save to CSV")

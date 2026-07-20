@@ -604,6 +604,7 @@ def call_vllm_streaming(
                 usage.update(alt_usage)
 
     total_time = time.time() - request_start
+    common.warn_if_empty_stream(usage, generated_text)
     return generated_text, usage, total_time, timings["eval_duration"], first_token_time
 
 
@@ -1134,7 +1135,7 @@ def main() -> int:
     except requests.exceptions.RequestException as exc:
         print(f"Warning: could not query /v1/models ({exc}).")
 
-    hardware_info = common.get_hardware_info()
+    hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_info["vllm_endpoint"] = base_url
 
     if args.stream:

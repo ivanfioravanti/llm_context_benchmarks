@@ -94,60 +94,29 @@ def run_benchmark(
     elif _run_idx is not None:
         prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
-    start_time = time.time()
-    first_token_time: Optional[float] = None
-    last_token_time: Optional[float] = None
-    generated_text = ""
-    reasoning_text = ""
-    prompt_tokens = 0
-    completion_tokens = 0
     timings: Dict = {}
 
+    def _capture_timings(chunk):
+        # `timings` is a top-level sibling of `usage`; pydantic keeps it as
+        # model_extra and exposes it as a plain attribute.
+        t = getattr(chunk, "timings", None)
+        if isinstance(t, dict) and t:
+            timings.update(t)
+
     try:
-        stream = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.7,
-            stream=True,
-            stream_options={"include_usage": True},
-            timeout=timeout,
+        stream_result = common.stream_chat(
+            client, model, prompt, max_tokens, temperature=0.7, timeout=timeout, chunk_hook=_capture_timings
         )
-
-        for chunk in stream:
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                # Reasoning models stream thinking tokens via reasoning_content;
-                # count them so TTFT/decode windows anchor at the first token.
-                content_piece = getattr(delta, "content", None)
-                reasoning_piece = getattr(delta, "reasoning_content", None)
-
-                if (content_piece or reasoning_piece) and first_token_time is None:
-                    first_token_time = time.time()
-                if content_piece or reasoning_piece:
-                    last_token_time = time.time()
-
-                if content_piece:
-                    generated_text += content_piece
-                if reasoning_piece:
-                    reasoning_text += reasoning_piece
-
-            # Final chunk carries usage + the Unsloth `timings` block.
-            if chunk.usage:
-                prompt_tokens = chunk.usage.prompt_tokens or 0
-                completion_tokens = chunk.usage.completion_tokens or 0
-            # `timings` is a top-level sibling of `usage`; pydantic keeps it as
-            # model_extra and exposes it as a plain attribute.
-            t = getattr(chunk, "timings", None)
-            if isinstance(t, dict) and t:
-                timings = t
-
     except Exception as e:
         print(f"Error during benchmark: {e}")
         return None
 
-    end_time = time.time()
-    total_time = end_time - start_time
+    generated_text = stream_result["generated_text"]
+    reasoning_text = stream_result["reasoning_text"]
+    total_time = stream_result["total_time"]
+    usage = stream_result["usage"]
+    prompt_tokens = usage.get("prompt_tokens") or 0
+    completion_tokens = usage.get("completion_tokens") or 0
 
     # Server-reported prefill/decode (ms -> s). prompt_ms is pure prefill time,
     # which is the time-to-first-token for a cold prompt; predicted_ms is the
@@ -164,19 +133,10 @@ def run_benchmark(
     if completion_tokens == 0 and timings:
         completion_tokens = timings.get("predicted_n", 0)
 
-    # TTFT: prefer server prefill time, then client first-token time.
-    ttft = server_ttft if server_ttft > 0 else ((first_token_time - start_time) if first_token_time else 0.0)
-
-    # Decode window: prefer server-reported decode duration, then client
-    # inter-token span, then total - ttft as a last resort.
-    if server_decode > 0:
-        generation_time = server_decode
-    elif first_token_time and last_token_time and last_token_time > first_token_time:
-        generation_time = last_token_time - first_token_time
-    elif first_token_time:
-        generation_time = max(end_time - first_token_time, 0.0)
-    else:
-        generation_time = total_time
+    # TTFT / decode window: prefer server-reported values, then the
+    # client-side anchors measured by stream_chat.
+    ttft = server_ttft if server_ttft > 0 else stream_result["time_to_first_token"]
+    generation_time = server_decode if server_decode > 0 else stream_result["decode_window"]
 
     # Fallback token counts from text.
     if prompt_tokens == 0:
@@ -286,7 +246,7 @@ def main() -> int:
             return 1
         print(f"Auto-detected model: {model}")
 
-    hardware_info = common.get_hardware_info()
+    hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_str = common.format_hardware_string(hardware_info)
 
     print(f"\nUnsloth Studio Benchmark")

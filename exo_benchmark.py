@@ -138,94 +138,31 @@ def call_exo_streaming(
     timeout: int,
 ) -> Dict[str, object]:
     """Stream a chat completion from Exo, capturing time-to-first-token."""
-
-    message_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    usage: Dict[str, int] = {}
-    token_count: int = 0  # Count tokens client-side like dashboard does
-
-    start_time = time.time()
-    first_token_time: Optional[float] = None
-
-    stream = client.chat.completions.create(
-        model=request_model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
+    result = common.stream_chat(
+        client,
+        request_model,
+        prompt,
+        max_tokens,
         temperature=temperature,
         top_p=top_p,
         timeout=timeout,
-        stream=True,
-        stream_options={"include_usage": True},
     )
 
-    for chunk in stream:
-        chunk_choices = getattr(chunk, "choices", None)
-        if chunk_choices:
-            delta = chunk_choices[0].delta
-
-            content = getattr(delta, "content", None)
-            if content is not None:
-                # Count all non-None chunks; exo sends empty strings for some tokens
-                token_count += 1
-                if content:
-                    if first_token_time is None:
-                        first_token_time = time.time()
-                    message_parts.append(content)
-
-            reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
-                if first_token_time is None:
-                    first_token_time = time.time()
-                if isinstance(reasoning_delta, list):
-                    for item in reasoning_delta:
-                        if isinstance(item, dict):
-                            text = item.get("text") or item.get("content")
-                            if text:
-                                reasoning_parts.append(text)
-                                token_count += 1
-                        elif isinstance(item, str):
-                            reasoning_parts.append(item)
-                            token_count += 1
-                elif isinstance(reasoning_delta, str):
-                    reasoning_parts.append(reasoning_delta)
-                    token_count += 1
-
-        chunk_usage = getattr(chunk, "usage", None)
-        if chunk_usage:
-            if hasattr(chunk_usage, "model_dump"):
-                usage = chunk_usage.model_dump()
-            else:
-                usage = {
-                    "prompt_tokens": getattr(chunk_usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(chunk_usage, "completion_tokens", 0),
-                    "total_tokens": getattr(chunk_usage, "total_tokens", 0),
-                }
-
-    total_time = time.time() - start_time
-    prompt_eval_duration = (first_token_time - start_time) if first_token_time else 0.0
-    generated_text = "".join(message_parts)
-    reasoning_text = "".join(reasoning_parts)
-
     # If API didn't provide usage, calculate client-side.
+    usage = result["usage"]
     if not usage or usage.get("completion_tokens", 0) == 0:
         prompt_tokens = count_tokens_tiktoken(prompt, request_model)
-        completion_tokens = count_tokens_tiktoken(generated_text + reasoning_text, request_model)
-        if completion_tokens == 0 and token_count > 0:
+        completion_tokens = count_tokens_tiktoken(result["generated_text"] + result["reasoning_text"], request_model)
+        if completion_tokens == 0 and result["content_chunks"] > 0:
             # Fall back to chunk count when tokenizer isn't available.
-            completion_tokens = token_count
-        usage = {
+            completion_tokens = result["content_chunks"]
+        result["usage"] = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    return {
-        "generated_text": generated_text,
-        "reasoning_text": reasoning_text,
-        "usage": usage,
-        "total_time": total_time,
-        "prompt_eval_duration": prompt_eval_duration,
-    }
+    return result
 
 
 def run_benchmark(
@@ -500,7 +437,7 @@ def main() -> int:
         return 1
 
     print("\nCollecting hardware information...")
-    hardware_info = common.get_hardware_info()
+    hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_str = common.format_hardware_string(hardware_info)
     print(f"Hardware: {hardware_str}")
 
