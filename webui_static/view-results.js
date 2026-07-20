@@ -147,7 +147,9 @@
       <span class="modal-close" style="margin-right:10px">${CB.report.exportGroupHtml()}</span>
       <div class="eyebrow">${esc(summary.engine)} · ${esc(fmtDate(summary.timestamp))}</div>
       <h2>${esc(resultName(summary))}</h2>
-      <div class="page-sub">${esc(summary.model)}${summary.hardware ? " — " + esc(summary.hardware) : ""}</div>
+      <div class="page-sub">${esc(summary.model)}${summary.endpoint_hardware
+        ? " — " + esc(summary.endpoint_hardware)
+        : (summary.hardware ? " — " + esc(summary.hardware) : "")}</div>
       <div class="detail-charts">${chartPanels}</div>
       <div class="tbl-wrap"><table class="tbl">
         <thead><tr>${cols.map(c => `<th>${esc(c.replace(/_/g, " "))}</th>`).join("")}</tr></thead>

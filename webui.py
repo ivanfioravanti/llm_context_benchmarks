@@ -159,7 +159,15 @@ def summarize_result_folder(folder: Path):
         "label": meta.get("label") or "",
         "endpoint": meta.get("endpoint") or "",
         "timestamp": folder_timestamp(folder.name),
-        "machine": hw.get("chip") or hw.get("machine_label") or hw.get("processor") or "",
+        # The endpoint's server hardware (user-provided) is the machine that
+        # produced the numbers; the locally captured specs only describe the
+        # benchmark client when the endpoint is remote.
+        "machine": meta.get("endpoint_hardware")
+        or hw.get("chip")
+        or hw.get("machine_label")
+        or hw.get("processor")
+        or "",
+        "endpoint_hardware": meta.get("endpoint_hardware") or "",
         "hardware": benchmark_common.format_hardware_string(hw) if hw else "",
         "contexts": [r.get("context_size") for r in rows],
         "peak_generation_tps": max(gen_values) if gen_values else None,
@@ -255,6 +263,7 @@ def api_endpoints_create(payload: dict):
         "api_key": payload.get("api_key") or "",
         "host": payload.get("host") or "",
         "port": payload.get("port") or "",
+        "hardware": payload.get("hardware") or "",
         "notes": payload.get("notes") or "",
     }
     entry["base_url"], corrected = normalize_base_url(entry["base_url"], entry["engine"], entry["api_key"])
@@ -268,7 +277,7 @@ def api_endpoints_update(endpoint_id: str, payload: dict):
     endpoints = load_endpoints()
     for entry in endpoints:
         if entry["id"] == endpoint_id:
-            for key in ("name", "engine", "model", "base_url", "api_key", "host", "port", "notes"):
+            for key in ("name", "engine", "model", "base_url", "api_key", "host", "port", "hardware", "notes"):
                 if key in payload:
                     entry[key] = payload[key]
             if not (entry.get("name") or "").strip():
@@ -376,11 +385,13 @@ def api_runs_start(payload: dict):
         raise HTTPException(400, f"Unknown engine '{engine_id}'")
 
     endpoint_name = ""
+    endpoint_hardware = ""
     endpoint_id = payload.get("endpoint_id")
     if endpoint_id:
         endpoint = next((e for e in load_endpoints() if e["id"] == endpoint_id), None)
         if endpoint:
             endpoint_name = endpoint["name"]
+            endpoint_hardware = endpoint.get("hardware") or ""
 
     # safety net for endpoints saved while their server was offline: probe a
     # path-less base URL once more and self-heal the stored endpoint
@@ -412,6 +423,7 @@ def api_runs_start(payload: dict):
         endpoint_name,
         argv,
         contexts,
+        endpoint_hardware=endpoint_hardware,
     )
     return run.snapshot()
 

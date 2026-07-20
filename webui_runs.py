@@ -69,7 +69,7 @@ def redact_argv(argv: list) -> list:
 
 
 class BenchmarkRun:
-    def __init__(self, run_id, kind, engine_id, tag, model, label, endpoint_name, argv, contexts):
+    def __init__(self, run_id, kind, engine_id, tag, model, label, endpoint_name, argv, contexts, endpoint_hardware=""):
         self.id = run_id
         self.kind = kind  # "benchmark" | "ctxgen"
         self.engine = engine_id
@@ -77,6 +77,7 @@ class BenchmarkRun:
         self.model = model
         self.label = label
         self.endpoint_name = endpoint_name
+        self.endpoint_hardware = endpoint_hardware
         self.argv = argv
         self.contexts = contexts
         self.status = "starting"
@@ -139,8 +140,19 @@ class RunManager:
         self.runs = {}
         self.lock = threading.Lock()
 
-    def start(self, kind, engine_id, tag, model, label, endpoint_name, argv, contexts):
-        run = BenchmarkRun(uuid.uuid4().hex[:12], kind, engine_id, tag, model, label, endpoint_name, argv, contexts)
+    def start(self, kind, engine_id, tag, model, label, endpoint_name, argv, contexts, endpoint_hardware=""):
+        run = BenchmarkRun(
+            uuid.uuid4().hex[:12],
+            kind,
+            engine_id,
+            tag,
+            model,
+            label,
+            endpoint_name,
+            argv,
+            contexts,
+            endpoint_hardware=endpoint_hardware,
+        )
         with self.lock:
             self.runs[run.id] = run
         thread = threading.Thread(target=self._execute, args=(run,), daemon=True)
@@ -311,6 +323,7 @@ class RunManager:
                         "engine_id": run.engine,
                         "label": run.label or "",
                         "endpoint": run.endpoint_name or "",
+                        "endpoint_hardware": run.endpoint_hardware or "",
                         "created": datetime.now().isoformat(timespec="seconds"),
                     }
                     meta_path.write_text(json.dumps(meta, indent=2))

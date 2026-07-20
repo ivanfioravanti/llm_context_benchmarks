@@ -49,6 +49,7 @@
           ${engine ? `<dt>Engine</dt><dd>${esc(engine.label)}</dd>` : `<dt>Engine</dt><dd>any</dd>`}
           ${connection ? `<dt>Target</dt><dd class="mono">${esc(connection)}</dd>` : ""}
           ${ep.model ? `<dt>Model</dt><dd class="mono">${esc(ep.model)}</dd>` : ""}
+          ${ep.hardware ? `<dt>Hardware</dt><dd>${esc(ep.hardware)}</dd>` : ""}
           ${ep.api_key ? `<dt>Auth</dt><dd class="mono">API key set</dd>` : ""}
           ${stats ? `<dt>Runs</dt><dd>${stats.count} saved${stats.last ? ` · last ${esc(fmtDate(stats.last))}` : ""}</dd>` : ""}
         </dl>
@@ -125,6 +126,11 @@
         <div class="field"><label for="epName">Name *</label>
           <input type="text" id="epName" value="${esc(ep.name || "")}" placeholder="M3 Ultra · llama.cpp">
           <span class="hint">Labels every run in results & comparison charts.</span></div>
+        <div class="field"><label for="epHardware">Server hardware</label>
+          <input type="text" id="epHardware" value="${esc(ep.hardware || "")}" placeholder="e.g. DGX Spark · 128GB unified">
+          <span class="hint">The machine the numbers belong to — recorded with every run.</span></div>
+      </div>
+      <div class="form-row">
         <div class="field"><label for="epNotes">Notes</label>
           <input type="text" id="epNotes" value="${esc(ep.notes || "")}" placeholder="e.g. speculative decoding on"></div>
       </div>
@@ -235,6 +241,7 @@
         host: modal.querySelector("#epHost").value,
         port: modal.querySelector("#epPort").value,
         model: epModelPicker.value(),
+        hardware: modal.querySelector("#epHardware").value,
         notes: modal.querySelector("#epNotes").value,
       };
       try {
