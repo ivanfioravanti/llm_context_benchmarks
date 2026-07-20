@@ -259,7 +259,9 @@ def add_throughput_metrics(result: Dict, prompt_text: str = "") -> Dict:
     These metrics complement the tokenizer-dependent ``*_tps`` fields and let
     different tokenizers be compared on the same textual workload.
     """
-    gen_text = result.get("generated_text", "") or ""
+    # Reasoning/thinking text is generated in the same decode window but some
+    # engines store it separately from generated_text — count both.
+    gen_text = (result.get("generated_text", "") or "") + (result.get("reasoning_text", "") or "")
     prompt_text = prompt_text or ""
     eval_dur = result.get("eval_duration", 0) or 0
     p_eval_dur = result.get("prompt_eval_duration", 0) or 0

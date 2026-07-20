@@ -171,12 +171,12 @@ def run_benchmark(
         for chunk in stream:
             if chunk.choices:
                 delta = chunk.choices[0].delta
-                # Reasoning models (DeepSeek, etc.) stream thinking tokens via
-                # `reasoning_content` — count them too so TTFT/decode windows
-                # are anchored at the first generated token, not the first
-                # post-thinking answer token.
+                # Reasoning models stream thinking tokens via `reasoning_content`
+                # (DeepSeek, older vLLM) or `reasoning` (vLLM >= 0.23) — count
+                # them too so TTFT/decode windows are anchored at the first
+                # generated token, not the first post-thinking answer token.
                 content_piece = getattr(delta, "content", None)
-                reasoning_piece = getattr(delta, "reasoning_content", None)
+                reasoning_piece = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
 
                 if (content_piece or reasoning_piece) and first_token_time is None:
                     first_token_time = time.time()
