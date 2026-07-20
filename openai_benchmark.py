@@ -62,7 +62,7 @@ class HostMemorySampler:
     """Samples system RAM while a request runs. On Apple Silicon the unified
     memory is also the GPU memory, so for a locally hosted server this is the
     closest thing to server RAM/VRAM a client can observe. Only meaningful
-    when the endpoint runs on this machine (see is_local_base_url)."""
+    when the endpoint runs on this machine (see common.is_local_base_url)."""
 
     def __init__(self, interval: float = 0.2):
         self.interval = interval
@@ -99,20 +99,6 @@ class HostMemorySampler:
         return round(self.peak_bytes / (1024**3), 2)
 
 
-def is_local_base_url(base_url: str) -> bool:
-    """True when the server runs on this machine (so host RAM sampling is meaningful)."""
-    import socket
-    from urllib.parse import urlparse
-
-    host = (urlparse(base_url).hostname or "").lower()
-    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
-        return True
-    try:
-        return host in (socket.gethostname().lower(), socket.getfqdn().lower())
-    except OSError:
-        return False
-
-
 # Set from main() when the endpoint is local; run_benchmark/run_batch_benchmark
 # then record host_memory_gb (peak system RAM during the request).
 SAMPLE_HOST_MEMORY = False
@@ -141,87 +127,11 @@ def run_benchmark(
     elif _run_idx is not None:
         prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
-    start_time = time.time()
-    first_token_time: Optional[float] = None
-    last_token_time: Optional[float] = None
-    generated_text = ""
-    reasoning_text = ""
-    prompt_tokens = 0
-    completion_tokens = 0
-    server_prompt_tps = 0.0
-    server_generation_tps = 0.0
-    server_prompt_eval = 0.0
-    server_gen_duration = 0.0
-    peak_memory_gb = 0.0
-
     host_mem_sampler = HostMemorySampler() if SAMPLE_HOST_MEMORY else None
     if host_mem_sampler:
         host_mem_sampler.__enter__()
     try:
-        stream = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.7,
-            stream=True,
-            stream_options={"include_usage": True},
-            timeout=timeout,
-        )
-
-        for chunk in stream:
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                # Reasoning models (DeepSeek, etc.) stream thinking tokens via
-                # `reasoning_content` — count them too so TTFT/decode windows
-                # are anchored at the first generated token, not the first
-                # post-thinking answer token.
-                content_piece = getattr(delta, "content", None)
-                reasoning_piece = getattr(delta, "reasoning_content", None)
-
-                if (content_piece or reasoning_piece) and first_token_time is None:
-                    first_token_time = time.time()
-                if content_piece or reasoning_piece:
-                    last_token_time = time.time()
-
-                if content_piece:
-                    generated_text += content_piece
-                if reasoning_piece:
-                    reasoning_text += reasoning_piece
-
-            # Final chunk may carry usage stats
-            if chunk.usage:
-                prompt_tokens = chunk.usage.prompt_tokens or 0
-                completion_tokens = chunk.usage.completion_tokens or 0
-
-                # Extract server-reported stats; key names vary by server.
-                usage_extra = chunk.usage.model_dump() if hasattr(chunk.usage, "model_dump") else {}
-                if prompt_tokens == 0:
-                    prompt_tokens = usage_extra.get("input_tokens", 0) or 0
-                if completion_tokens == 0:
-                    completion_tokens = usage_extra.get("output_tokens", 0) or 0
-                # TPS keys: mlx-vlm uses *_tps, oMLX uses *_tokens_per_second,
-                # mtplx uses prefill_tps/decode_tps.
-                server_prompt_tps = (
-                    usage_extra.get("prompt_tps")
-                    or usage_extra.get("prompt_tokens_per_second")
-                    or usage_extra.get("prefill_tps")
-                    or 0.0
-                )
-                server_generation_tps = (
-                    usage_extra.get("generation_tps")
-                    or usage_extra.get("generation_tokens_per_second")
-                    or usage_extra.get("decode_tps")
-                    or 0.0
-                )
-                server_prompt_eval = (
-                    usage_extra.get("prompt_eval_duration")
-                    or usage_extra.get("prefill_time_s")
-                    or usage_extra.get("ttft_s")
-                    or 0.0
-                )
-                server_gen_duration = usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
-                peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
-
+        stream_result = common.stream_chat(client, model, prompt, max_tokens, temperature=0.7, timeout=timeout)
     except Exception as e:
         print(f"Error during benchmark: {e}")
         return None
@@ -229,23 +139,39 @@ def run_benchmark(
         if host_mem_sampler:
             host_mem_sampler.__exit__()
 
-    end_time = time.time()
-    total_time = end_time - start_time
+    generated_text = stream_result["generated_text"]
+    reasoning_text = stream_result["reasoning_text"]
+    total_time = stream_result["total_time"]
 
-    ttft = (
-        server_prompt_eval if server_prompt_eval > 0 else ((first_token_time - start_time) if first_token_time else 0.0)
+    usage_extra = stream_result["usage"]
+    prompt_tokens = usage_extra.get("prompt_tokens") or usage_extra.get("input_tokens") or 0
+    completion_tokens = usage_extra.get("completion_tokens") or usage_extra.get("output_tokens") or 0
+
+    # Extract server-reported stats; key names vary by server.
+    # TPS keys: mlx-vlm uses *_tps, oMLX uses *_tokens_per_second,
+    # mtplx uses prefill_tps/decode_tps.
+    server_prompt_tps = (
+        usage_extra.get("prompt_tps")
+        or usage_extra.get("prompt_tokens_per_second")
+        or usage_extra.get("prefill_tps")
+        or 0.0
     )
+    server_generation_tps = (
+        usage_extra.get("generation_tps")
+        or usage_extra.get("generation_tokens_per_second")
+        or usage_extra.get("decode_tps")
+        or 0.0
+    )
+    server_prompt_eval = (
+        usage_extra.get("prompt_eval_duration") or usage_extra.get("prefill_time_s") or usage_extra.get("ttft_s") or 0.0
+    )
+    server_gen_duration = usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
+    peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
 
-    # Decode window: prefer server-reported duration, then time between first
-    # and last streamed token, then total - ttft as a last resort.
-    if server_gen_duration > 0:
-        generation_time = server_gen_duration
-    elif first_token_time and last_token_time and last_token_time > first_token_time:
-        generation_time = last_token_time - first_token_time
-    elif first_token_time:
-        generation_time = max(end_time - first_token_time, 0.0)
-    else:
-        generation_time = total_time
+    # TTFT / decode window: prefer server-reported values, then the
+    # client-side anchors measured by stream_chat.
+    ttft = server_prompt_eval if server_prompt_eval > 0 else stream_result["time_to_first_token"]
+    generation_time = server_gen_duration if server_gen_duration > 0 else stream_result["decode_window"]
 
     # Fallback: approximate prompt token count from word count
     if prompt_tokens == 0:
@@ -520,7 +446,7 @@ def main() -> int:
 
     # host RAM/VRAM sampling is only meaningful when the server is local
     global SAMPLE_HOST_MEMORY
-    SAMPLE_HOST_MEMORY = is_local_base_url(base_url)
+    SAMPLE_HOST_MEMORY = common.is_local_base_url(base_url)
     if SAMPLE_HOST_MEMORY:
         print("Local endpoint detected — sampling host memory (RAM/VRAM) during requests.")
     client = build_client(base_url, args.api_key)
@@ -541,7 +467,7 @@ def main() -> int:
             return 1
         print(f"Auto-detected model: {model}")
 
-    hardware_info = common.get_hardware_info()
+    hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_str = common.format_hardware_string(hardware_info)
 
     print(f"\nOpenAI-compatible Endpoint Benchmark")

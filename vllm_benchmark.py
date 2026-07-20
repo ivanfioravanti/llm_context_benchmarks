@@ -580,10 +580,11 @@ def call_vllm_streaming(
             delta = first_choice.get("delta", {}) if isinstance(first_choice, dict) else {}
             if isinstance(delta, dict):
                 content_piece = delta.get("content") or ""
-                # Reasoning models stream thinking via reasoning_content; capture
-                # it too so TTFT/throughput anchor on the first generated token
-                # and generated_text isn't empty for thinking-only responses.
-                reasoning_piece = delta.get("reasoning_content") or ""
+                # Reasoning models stream thinking via reasoning_content (older
+                # vLLM) or reasoning (vLLM >= 0.23); capture both so
+                # TTFT/throughput anchor on the first generated token and
+                # generated_text isn't empty for thinking-only responses.
+                reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning") or ""
 
                 if content_piece or reasoning_piece:
                     if math.isnan(first_token_time):
@@ -603,6 +604,7 @@ def call_vllm_streaming(
                 usage.update(alt_usage)
 
     total_time = time.time() - request_start
+    common.warn_if_empty_stream(usage, generated_text)
     return generated_text, usage, total_time, timings["eval_duration"], first_token_time
 
 
@@ -686,7 +688,9 @@ def run_benchmark(
             first_choice = choices[0] if isinstance(choices[0], dict) else {}
             if isinstance(first_choice, dict):
                 message = first_choice.get("message", {})
-                generated_text = message.get("content", "")
+                generated_text = (
+                    message.get("content") or message.get("reasoning_content") or message.get("reasoning") or ""
+                )
 
                 stats_payload = result
                 stats = _collect_timings(stats_payload)
@@ -1131,7 +1135,7 @@ def main() -> int:
     except requests.exceptions.RequestException as exc:
         print(f"Warning: could not query /v1/models ({exc}).")
 
-    hardware_info = common.get_hardware_info()
+    hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_info["vllm_endpoint"] = base_url
 
     if args.stream:

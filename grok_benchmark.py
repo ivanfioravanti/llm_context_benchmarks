@@ -71,84 +71,6 @@ def call_grok(
     }
 
 
-def call_grok_streaming(
-    client: OpenAI,
-    request_model: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-    top_p: float,
-    timeout: int,
-) -> Dict[str, object]:
-    """Stream a chat completion, capturing time-to-first-token metrics."""
-
-    message_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    usage: Dict[str, int] = {}
-
-    start_time = time.time()
-    first_token_time: Optional[float] = None
-
-    stream = client.chat.completions.create(
-        model=request_model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        timeout=timeout,
-        stream=True,
-        stream_options={"include_usage": True},
-    )
-
-    for chunk in stream:
-        chunk_choices = getattr(chunk, "choices", None)
-        if chunk_choices:
-            delta = chunk_choices[0].delta
-
-            content = getattr(delta, "content", None)
-            if content:
-                if first_token_time is None:
-                    first_token_time = time.time()
-                message_parts.append(content)
-
-            reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
-                if first_token_time is None:
-                    first_token_time = time.time()
-                if isinstance(reasoning_delta, list):
-                    for item in reasoning_delta:
-                        if isinstance(item, dict):
-                            text = item.get("text") or item.get("content")
-                            if text:
-                                reasoning_parts.append(text)
-                        elif isinstance(item, str):
-                            reasoning_parts.append(item)
-                elif isinstance(reasoning_delta, str):
-                    reasoning_parts.append(reasoning_delta)
-
-        chunk_usage = getattr(chunk, "usage", None)
-        if chunk_usage:
-            if hasattr(chunk_usage, "model_dump"):
-                usage = chunk_usage.model_dump()
-            else:
-                usage = {
-                    "prompt_tokens": getattr(chunk_usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(chunk_usage, "completion_tokens", 0),
-                    "total_tokens": getattr(chunk_usage, "total_tokens", 0),
-                }
-
-    total_time = time.time() - start_time
-    prompt_eval_duration = (first_token_time - start_time) if first_token_time else 0.0
-
-    return {
-        "generated_text": "".join(message_parts),
-        "reasoning_text": "".join(reasoning_parts),
-        "usage": usage,
-        "total_time": total_time,
-        "prompt_eval_duration": prompt_eval_duration,
-    }
-
-
 def run_benchmark(
     model_name: str,
     context_file: Path,
@@ -175,11 +97,11 @@ def run_benchmark(
 
     try:
         if stream:
-            stream_result = call_grok_streaming(
-                client=client,
-                request_model=request_model,
-                prompt=prompt,
-                max_tokens=max_tokens,
+            stream_result = common.stream_chat(
+                client,
+                request_model,
+                prompt,
+                max_tokens,
                 temperature=temperature,
                 top_p=top_p,
                 timeout=timeout,
