@@ -71,27 +71,6 @@ def call_grok(
     }
 
 
-def call_grok_streaming(
-    client: OpenAI,
-    request_model: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-    top_p: float,
-    timeout: int,
-) -> Dict[str, object]:
-    """Stream a chat completion, capturing time-to-first-token metrics."""
-    return common.stream_chat(
-        client,
-        request_model,
-        prompt,
-        max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        timeout=timeout,
-    )
-
-
 def run_benchmark(
     model_name: str,
     context_file: Path,
@@ -118,11 +97,11 @@ def run_benchmark(
 
     try:
         if stream:
-            stream_result = call_grok_streaming(
-                client=client,
-                request_model=request_model,
-                prompt=prompt,
-                max_tokens=max_tokens,
+            stream_result = common.stream_chat(
+                client,
+                request_model,
+                prompt,
+                max_tokens,
                 temperature=temperature,
                 top_p=top_p,
                 timeout=timeout,

@@ -62,7 +62,7 @@ class HostMemorySampler:
     """Samples system RAM while a request runs. On Apple Silicon the unified
     memory is also the GPU memory, so for a locally hosted server this is the
     closest thing to server RAM/VRAM a client can observe. Only meaningful
-    when the endpoint runs on this machine (see is_local_base_url)."""
+    when the endpoint runs on this machine (see common.is_local_base_url)."""
 
     def __init__(self, interval: float = 0.2):
         self.interval = interval
@@ -97,11 +97,6 @@ class HostMemorySampler:
     @property
     def peak_gb(self) -> float:
         return round(self.peak_bytes / (1024**3), 2)
-
-
-def is_local_base_url(base_url: str) -> bool:
-    """True when the server runs on this machine (so host RAM sampling is meaningful)."""
-    return common.is_local_base_url(base_url)
 
 
 # Set from main() when the endpoint is local; run_benchmark/run_batch_benchmark
@@ -451,7 +446,7 @@ def main() -> int:
 
     # host RAM/VRAM sampling is only meaningful when the server is local
     global SAMPLE_HOST_MEMORY
-    SAMPLE_HOST_MEMORY = is_local_base_url(base_url)
+    SAMPLE_HOST_MEMORY = common.is_local_base_url(base_url)
     if SAMPLE_HOST_MEMORY:
         print("Local endpoint detected — sampling host memory (RAM/VRAM) during requests.")
     client = build_client(base_url, args.api_key)
