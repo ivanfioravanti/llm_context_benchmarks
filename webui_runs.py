@@ -181,6 +181,15 @@ class RunManager:
             threading.Timer(10, lambda: proc.poll() is None and proc.kill()).start()
         return run
 
+    def delete(self, run_id):
+        run = self.get(run_id)
+        # stop an in-flight run first so its subprocess doesn't outlive the card
+        if run.status in ("starting", "running"):
+            self.stop(run_id)
+        with self.lock:
+            self.runs.pop(run_id, None)
+        return run
+
     def _execute(self, run: BenchmarkRun):
         OUTPUT_DIR.mkdir(exist_ok=True)
         before = {p.name for p in OUTPUT_DIR.iterdir() if p.is_dir()}
