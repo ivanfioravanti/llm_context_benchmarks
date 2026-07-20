@@ -23,8 +23,26 @@
       baseline: null,      // folder shown as 100% — null = absolute values
     },
     resultsFilter: "",
-    runFormEngine: null,
-    runFormEndpoint: "",
+    // Draft for the Run form — survives view switches, theme toggles and
+    // engine/endpoint re-renders. `contexts`/`options` null means "use engine defaults".
+    runForm: {
+      endpoint: "",
+      engine: null,
+      model: "",
+      label: "",
+      contexts: null,
+      maxTokens: "128",
+      runs: "2",
+      timeout: "3600",
+      saveResponses: false,
+      coldPrefill: true,
+      options: null,
+      extraArgs: "",
+      baseUrl: "",
+      apiKey: "",
+      host: "localhost",
+      port: "8080",
+    },
     runModelPicker: null,
   };
 
