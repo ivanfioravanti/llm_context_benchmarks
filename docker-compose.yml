@@ -1,0 +1,29 @@
+services:
+  webui:
+    build: .
+    container_name: llm-context-bench
+    # Reaps finished benchmark subprocesses (they run as children of the server)
+    init: true
+    # Bound to loopback on purpose: the UI has no auth and the endpoint store
+    # holds API keys. Change to "8321:8321" to expose it on the LAN.
+    ports:
+      - "127.0.0.1:8321:8321"
+    volumes:
+      # The app keeps all mutable state flat in the project root (results in
+      # output/, generated {size}k.txt context files, webui_endpoints.json),
+      # so the whole project is mounted: results and endpoints are shared
+      # with the host and survive rebuilds. Dependencies live in the image.
+      - .:/app
+    environment:
+      # result folders are timestamped with local time, not UTC
+      TZ: Europe/Berlin
+    extra_hosts:
+      # Reach servers running on the host (Ollama, llama.cpp, LM Studio, …)
+      # via http://host.docker.internal:<port> in endpoint URLs.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8321/api/meta', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s

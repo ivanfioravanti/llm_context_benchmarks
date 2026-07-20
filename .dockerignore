@@ -1,0 +1,28 @@
+# VCS / editor / local tooling
+.git
+.claude
+.vscode
+.idea
+.DS_Store
+
+# Python build artifacts and the host virtualenv
+.venv
+__pycache__
+*.pyc
+*.egg-info
+build/
+dist/
+
+# Local state — mounted as volumes, never baked into the image
+output/
+comparison_results/
+old/
+*.log
+
+# Endpoint store contains API keys — must never end up in an image layer
+webui_endpoints.json
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

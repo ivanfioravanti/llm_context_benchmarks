@@ -186,6 +186,15 @@ def resolve_result_folder(name: str) -> Path:
 app = FastAPI(title="LLM Context Bench", docs_url=None, redoc_url=None)
 
 
+def in_container() -> bool:
+    """True when the server runs inside a container (Docker/Podman)."""
+    return (
+        os.environ.get("CONTEXT_BENCH_CONTAINER") == "1"
+        or Path("/.dockerenv").exists()
+        or Path("/run/.containerenv").exists()
+    )
+
+
 @app.get("/api/meta")
 def api_meta():
     catalog = get_engine_catalog()
@@ -217,6 +226,7 @@ def api_meta():
     hw = benchmark_common.get_hardware_info()
     return {
         "engines": engines,
+        "in_container": in_container(),
         "mlx_available": is_apple_silicon(),
         "hardware": hw,
         "hardware_string": benchmark_common.format_hardware_string(hw),
@@ -323,7 +333,10 @@ def api_endpoints_ping(endpoint_id: str):
     endpoint = next((e for e in load_endpoints() if e["id"] == endpoint_id), None)
     if endpoint is None:
         raise HTTPException(404, "Endpoint not found")
-    url = (endpoint.get("base_url") or "").strip()
+    url = (endpoint.get("base_url") or "").strip().rstrip("/")
+    if url.endswith("/v1"):
+        # OpenAI-style servers don't serve the bare /v1 root; probe the real route
+        url += "/models"
     if not url and endpoint.get("host"):
         url = f"http://{endpoint['host']}:{endpoint.get('port') or 8080}/health"
     if not url:
@@ -514,6 +527,16 @@ def api_results_delete(name: str):
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), name="output")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.middleware("http")
+async def revalidate_app_assets(request: Request, call_next):
+    """App JS/CSS changes with every update; no-cache makes browsers revalidate
+    instead of heuristically reusing stale files (ETag 304s keep it cheap)."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/")

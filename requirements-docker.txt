@@ -1,0 +1,16 @@
+# Minimal dependency set for the Docker image: web UI + the HTTP/API-based
+# engines (ollama-api, llamacpp, lmstudio, exo, deepseek, grok, openai,
+# unsloth, vllm, mlx-serve, mtplx, omlx, ...). Local-MLX engines are
+# Apple-Silicon-only and disabled inside the container, so mlx*, torch*,
+# transformers, datasets etc. are deliberately absent.
+fastapi>=0.115.0
+uvicorn>=0.30.0
+httpx>=0.28.1
+requests>=2.33.1
+openai>=2.33.0
+ollama>=0.6.2
+numpy>=2.4.4
+pandas>=3.0.2
+matplotlib>=3.10.9
+psutil>=7.2.2
+tiktoken>=0.12.0

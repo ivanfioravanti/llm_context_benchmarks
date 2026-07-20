@@ -137,11 +137,13 @@
           </select>
           <span class="hint" id="epEngineHint"></span></div>
         <div class="field" id="epBaseUrlField"><label for="epBaseUrl">Base URL</label>
-          <input type="text" id="epBaseUrl" value="${esc(ep.base_url || "")}" placeholder="http://192.168.1.20:8000/v1"></div>
+          <input type="text" id="epBaseUrl" value="${esc(ep.base_url || "")}" placeholder="http://192.168.1.20:8000/v1">
+          <span class="hint" id="epBaseUrlHint"></span></div>
       </div>
       <div class="form-row cols-2" id="epHostRow">
         <div class="field"><label for="epHost">Host</label>
-          <input type="text" id="epHost" value="${esc(ep.host || "")}" placeholder="192.168.1.20"></div>
+          <input type="text" id="epHost" value="${esc(ep.host || "")}" placeholder="192.168.1.20">
+          <span class="hint" id="epHostHint"></span></div>
         <div class="field"><label for="epPort">Port</label>
           <input type="number" id="epPort" value="${esc(ep.port || "")}" placeholder="8080"></div>
       </div>
@@ -177,6 +179,27 @@
     };
     modal.querySelector("#epEngine").addEventListener("change", syncConnectionFields);
     syncConnectionFields();
+
+    // Inside Docker, "localhost" is the container itself — servers on the
+    // machine running Docker are reachable via host.docker.internal instead.
+    if (state.meta.in_container) {
+      const LOOPBACK_RE = /localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?/i;
+      const dockerHint = (input, hint) => {
+        const sync = () => {
+          if (LOOPBACK_RE.test(input.value)) {
+            hint.textContent = "This points at the container itself, not this machine — use host.docker.internal instead.";
+            hint.classList.add("warn");
+          } else {
+            hint.textContent = "Running in Docker: for a server on this machine use host.docker.internal, not localhost.";
+            hint.classList.remove("warn");
+          }
+        };
+        input.addEventListener("input", sync);
+        sync();
+      };
+      dockerHint(modal.querySelector("#epBaseUrl"), modal.querySelector("#epBaseUrlHint"));
+      dockerHint(modal.querySelector("#epHost"), modal.querySelector("#epHostHint"));
+    }
 
     const epConnection = () => {
       const engineId = modal.querySelector("#epEngine").value;
