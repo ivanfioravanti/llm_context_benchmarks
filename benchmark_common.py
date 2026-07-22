@@ -1721,7 +1721,14 @@ def _is_degenerate_generation(result: Dict) -> bool:
     return False
 
 
-def run_benchmark_peak(run_fn, *args, n_runs=2, metric="generation_tps", **kwargs):
+def run_benchmark_peak(
+    run_fn,
+    *args,
+    n_runs=2,
+    metric="generation_tps",
+    reject_prefill_cache_hits=False,
+    **kwargs,
+):
     """Run benchmark N times and return the result with peak generation_tps.
 
     Each run gets a unique ``_run_idx`` keyword argument so the engine can
@@ -1738,13 +1745,14 @@ def run_benchmark_peak(run_fn, *args, n_runs=2, metric="generation_tps", **kwarg
         *args: Positional arguments forwarded to run_fn.
         n_runs: Number of runs per context size.
         metric: Metric to maximize when selecting the peak run.
+        reject_prefill_cache_hits: Discard trials whose prompt-evaluation time
+            is over 10x faster than a comparable trial with the same token count.
         **kwargs: Keyword arguments forwarded to run_fn.
 
     Returns:
         Result dict from the run with the highest metric value, or None if all runs fail.
     """
-    best_result = None
-    best_score = -1
+    run_results = []
     for run_idx in range(1, n_runs + 1):
         print(f"  Run {run_idx}/{n_runs}...")
         kwargs["_run_idx"] = run_idx
@@ -1759,9 +1767,37 @@ def run_benchmark_peak(run_fn, *args, n_runs=2, metric="generation_tps", **kwarg
                 continue
             score = result.get(metric, 0)
             print(f"    {metric}: {score:.2f}")
-            if score > best_score:
-                best_score = score
-                best_result = result
+            run_results.append(result)
+
+    # A cached prompt can have nearly the same reported token count but orders
+    # of magnitude less prompt-evaluation time. If requested by an engine that
+    # promises cold prefill, discard those trials before choosing by the normal
+    # peak metric. This is a safety net; engines should still clear their cache
+    # explicitly before every run.
+    if reject_prefill_cache_hits and len(run_results) > 1:
+        reference = max(run_results, key=lambda r: r.get("prompt_eval_duration", 0))
+        reference_duration = reference.get("prompt_eval_duration", 0)
+        reference_tokens = reference.get("prompt_tokens", 0)
+        filtered_results = []
+        for result in run_results:
+            duration = result.get("prompt_eval_duration", 0)
+            tokens = result.get("prompt_tokens", 0)
+            token_delta = abs(tokens - reference_tokens) / max(tokens, reference_tokens, 1)
+            looks_cached = (
+                reference_duration > 0 and duration > 0 and duration * 10 < reference_duration and token_delta < 0.05
+            )
+            if looks_cached:
+                print(
+                    f"    Rejecting likely prompt-cache hit: {tokens} tokens in {duration:.6f}s "
+                    f"vs cold reference {reference_duration:.6f}s"
+                )
+            else:
+                filtered_results.append(result)
+        if filtered_results:
+            run_results = filtered_results
+
+    best_result = max(run_results, key=lambda r: r.get(metric, 0), default=None)
+    best_score = best_result.get(metric, 0) if best_result else -1
     if best_result:
         print(f"  Peak {metric}: {best_score:.2f}")
     # Clean up so the kwarg doesn't leak if the dict is reused
