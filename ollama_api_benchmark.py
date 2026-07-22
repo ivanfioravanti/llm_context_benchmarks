@@ -34,7 +34,7 @@ def _derive_num_ctx(context_file: Path, max_tokens: int) -> tuple[int, int]:
 
 
 def _make_cache_buster(run_idx: Optional[int] = None) -> str:
-    """Generate a prefix to bust Ollama's prompt cache.
+    """Generate a prefix to isolate intentional cache-reuse runs.
 
     Ollama/llama.cpp automatically reuses the KV cache whenever a new prompt
     shares a prefix with the previous request in the same slot.
@@ -43,13 +43,19 @@ def _make_cache_buster(run_idx: Optional[int] = None) -> str:
     all calls within the same run share the same prefix (so KV cache carries
     over across context sizes), while different runs get different prefixes
     (so runs don't interfere). When ``run_idx`` is None, a random UUID is
-    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
+    used to distinguish concurrent batch requests. The main cold-prefill sweep
+    unloads the runner instead because a prefix alone is not reliable.
     """
     if run_idx is not None:
         return f"[run-{run_idx}]\n"
     import uuid
 
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
+
+
+def _unload_model(model_name: str) -> None:
+    """Synchronously unload an Ollama runner and discard its prompt cache."""
+    ollama.generate(model=model_name, prompt="", keep_alive=0)
 
 
 def run_benchmark(
@@ -75,19 +81,29 @@ def run_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    # Bust Ollama's prompt cache by prepending a unique marker. Without this,
-    # the KV cache from a previous warmup or benchmark row that shares a
-    # prefix will be reused, inflating prompt_tps (prompt_eval_count covers
-    # the full prompt but prompt_eval_duration covers only the uncached delta).
-    if cold_prefill:
-        prompt = _make_cache_buster() + prompt
-    elif _run_idx is not None:
+    # A prefix marker is sufficient for the intentional cache-reuse mode, where
+    # it isolates one run from another while preserving reuse across context
+    # sizes inside a run. It is not a reliable way to force cold prefill in
+    # Ollama, especially for long nested prompts; cold mode unloads the runner
+    # below instead.
+    if not cold_prefill and _run_idx is not None:
         prompt = _make_cache_buster(run_idx=_run_idx) + prompt
 
     # Size the KV cache to fit this context file (plus generation headroom).
     # Without this, Ollama silently caps num_ctx at its default (2048), which
     # turns every large-context row into a measurement of ~2k prefill.
     num_ctx, expected_prompt_tokens = _derive_num_ctx(context_file, max_tokens)
+
+    # Ollama owns the KV cache in its persistent daemon, so a new Python call
+    # does not imply a fresh prompt state. Explicitly unload before every cold
+    # trial. keep_alive=0 on the measured request also leaves the next trial
+    # cold even if this process is interrupted between rows.
+    if cold_prefill:
+        try:
+            _unload_model(model_name)
+        except Exception as e:
+            print(f"Error clearing Ollama prompt cache before cold prefill: {e}")
+            return None
 
     # Start timing
     start_time = time.time()
@@ -101,7 +117,7 @@ def run_benchmark(
                 "num_predict": max_tokens,
                 "num_ctx": num_ctx,
             },
-            keep_alive="10m",
+            keep_alive=0 if cold_prefill else "10m",
         )
 
         # Calculate total time
@@ -391,8 +407,8 @@ def main() -> int:
         "--cold-prefill",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Prepend a unique marker to every prompt to bust Ollama's KV "
-        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        help="Unload the Ollama runner before every prompt to discard its KV "
+        "cache, forcing cold prefill on every row (default: enabled; "
         "use --no-cold-prefill for cached/warm-reuse numbers)",
     )
 
@@ -451,7 +467,7 @@ def main() -> int:
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
     print(
-        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+        f"Cold prefill: {'enabled (runner reset per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
 
     # Warmup run — max_tokens=1 is enough to load weights and hit the code
@@ -476,7 +492,13 @@ def main() -> int:
             print(f"{'=' * 50}")
 
             result = common.run_benchmark_peak(
-                run_benchmark, args.model, file, args.max_tokens, cold_prefill=args.cold_prefill, n_runs=args.runs
+                run_benchmark,
+                args.model,
+                file,
+                args.max_tokens,
+                cold_prefill=args.cold_prefill,
+                n_runs=args.runs,
+                reject_prefill_cache_hits=True,
             )
             if result:
                 results.append(result)

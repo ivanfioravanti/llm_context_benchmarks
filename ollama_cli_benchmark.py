@@ -81,8 +81,25 @@ def _remove_temp_model(tag: str) -> None:
         pass
 
 
+def _stop_model(tag: str) -> None:
+    """Stop a daemon-side runner so its KV prompt cache cannot be reused."""
+    result = subprocess.run(
+        ["ollama", "stop", tag],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # `ollama stop` may report that an already-unloaded model was not found;
+    # that is already the desired state. Other daemon failures will surface
+    # again when the measured `ollama run` command is attempted.
+    stderr = result.stderr.lower()
+    already_stopped = "not found" in stderr or "couldn't find model" in stderr
+    if result.returncode != 0 and not already_stopped:
+        raise RuntimeError(f"ollama stop failed for '{tag}': {result.stderr.strip()}")
+
+
 def _make_cache_buster(run_idx: Optional[int] = None) -> str:
-    """Generate a prefix to bust Ollama's prompt cache.
+    """Generate a prefix to isolate intentional cache-reuse runs.
 
     Ollama reuses KV cache whenever a new prompt shares a prefix with the
     previous request.
@@ -91,7 +108,8 @@ def _make_cache_buster(run_idx: Optional[int] = None) -> str:
     all calls within the same run share the same prefix (so KV cache carries
     over across context sizes), while different runs get different prefixes
     (so runs don't interfere). When ``run_idx`` is None, a random UUID is
-    used for full cold-prefill busting. ~10 tokens of overhead per prompt.
+    used to distinguish concurrent batch requests. The main cold-prefill sweep
+    stops the runner instead because a prefix alone is not reliable.
     """
     if run_idx is not None:
         return f"[run-{run_idx}]\n"
@@ -226,8 +244,8 @@ def run_cli_benchmark(
         model_name: Name of the Ollama model (expected to be a temp model with
             num_ctx and num_predict parameters baked in via Modelfile)
         context_file: Path to the context file
-        cold_prefill: If True, prepend a unique cache-buster to the prompt so
-            Ollama's KV cache reuse doesn't inflate prompt-processing numbers
+        cold_prefill: If True, stop the daemon-side runner before the request
+            so Ollama's KV cache reuse cannot inflate prompt-processing numbers
         timeout: subprocess timeout in seconds
 
     Returns:
@@ -239,17 +257,25 @@ def run_cli_benchmark(
     with open(context_file) as f:
         prompt = f.read()
 
-    # Bust Ollama's prompt cache by prepending a unique marker so no two
-    # prompts share a prefix. Adds ~10 tokens of overhead.
-    if cold_prefill:
-        prompt = _make_cache_buster() + prompt
-    elif _run_idx is not None:
+    # Cached mode uses one deterministic prefix per run so different runs are
+    # isolated while nested context sizes within a run can reuse KV state.
+    # Cold mode resets the daemon-side runner instead of relying on a prefix.
+    if not cold_prefill and _run_idx is not None:
         prompt = _make_cache_buster(run_idx=_run_idx) + prompt
 
     # Pipe the prompt via stdin instead of passing it as argv. The old
     # `ollama run model --verbose "prompt"` form hit ARG_MAX (~256KB on macOS)
     # for anything above ~60k tokens. stdin has no size limit.
     cmd = ["ollama", "run", model_name, "--verbose"]
+    if cold_prefill:
+        try:
+            _stop_model(model_name)
+        except Exception as e:
+            print(f"Error clearing Ollama prompt cache before cold prefill: {e}")
+            return None
+        # Ensure the runner is unloaded after this request as well. This makes
+        # isolation robust if the benchmark is interrupted between trials.
+        cmd.extend(["--keepalive", "0"])
 
     start_time = time.time()
 
@@ -535,8 +561,8 @@ def main() -> int:
         "--cold-prefill",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Prepend a unique marker to every prompt to bust Ollama's KV "
-        "cache reuse, forcing cold prefill on every row (default: enabled; "
+        help="Stop the Ollama runner before every prompt to discard its KV "
+        "cache, forcing cold prefill on every row (default: enabled; "
         "use --no-cold-prefill for cached/warm-reuse numbers)",
     )
 
@@ -595,7 +621,7 @@ def main() -> int:
     print(f"Model: {args.model}")
     print(f"Max tokens: {args.max_tokens}")
     print(
-        f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
+        f"Cold prefill: {'enabled (runner reset per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
 
     # Ollama run has no --num-ctx or --num-predict flag, so we create a
@@ -644,6 +670,7 @@ def main() -> int:
                     cold_prefill=args.cold_prefill,
                     timeout=args.timeout,
                     n_runs=args.runs,
+                    reject_prefill_cache_hits=True,
                 )
                 if result:
                     results.append(result)
