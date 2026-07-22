@@ -211,6 +211,7 @@
 
     const epConnection = () => {
       const engineId = modal.querySelector("#epEngine").value;
+      const engine = engineById(engineId);
       const connection = {
         engine: engineId,
         base_url: modal.querySelector("#epBaseUrl").value.trim(),
@@ -218,6 +219,12 @@
         host: modal.querySelector("#epHost").value.trim(),
         port: modal.querySelector("#epPort").value,
       };
+      if (engine && engine.connection === "base_url") {
+        connection.host = "";
+        connection.port = "";
+      } else if (engine && engine.connection === "hostport") {
+        connection.base_url = "";
+      }
       const ollama = engineId === "ollama-api" || engineId === "ollama-cli";
       if (!ollama && !connection.base_url && !connection.host) return null;
       return connection;

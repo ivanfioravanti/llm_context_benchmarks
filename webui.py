@@ -336,6 +336,8 @@ def api_endpoints_update(endpoint_id: str, payload: dict):
 def api_models(payload: dict):
     """Discover available models on an inference server (OpenAI /v1/models or Ollama /api/tags)."""
     engine = payload.get("engine") or ""
+    engine_info = get_engine_catalog().get(engine) or {}
+    connection_kind = engine_info.get("connection")
     base_url = (payload.get("base_url") or "").strip()
     host = (payload.get("host") or "").strip()
     port = payload.get("port") or ""
@@ -343,12 +345,14 @@ def api_models(payload: dict):
 
     if engine in ("ollama-api", "ollama-cli"):
         url, flavor = "http://127.0.0.1:11434/api/tags", "ollama"
-    elif host:
+    elif connection_kind == "hostport" and host:
         url, flavor = f"http://{host}:{port or 8080}/v1/models", "openai"
     elif base_url:
         trimmed = base_url.rstrip("/")
         url = trimmed + "/models" if trimmed.endswith("/v1") else trimmed + "/v1/models"
         flavor = "openai"
+    elif host:
+        url, flavor = f"http://{host}:{port or 8080}/v1/models", "openai"
     else:
         return {"models": [], "detail": "No connection configured"}
 
