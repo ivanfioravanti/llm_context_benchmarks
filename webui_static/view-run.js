@@ -209,10 +209,18 @@
     // like readConnection, but with the engine defaults filled in so model
     // discovery can hit the server before the user typed anything
     const runConnection = () => {
+      // Local engines do not have an HTTP endpoint.  readConnection() still
+      // carries the form's default host/port, which would otherwise make the
+      // model picker probe localhost:8080 instead of using local discovery.
+      if (!engine.connection) return null;
       const connection = { engine: engine.id, ...readConnection(ep) };
-      if (!ep) {
-        if ("base_url" in connection) connection.base_url = connection.base_url || engine.default_base_url || "";
-        if ("host" in connection) connection.host = connection.host || "localhost";
+      if (engine.connection === "base_url") {
+        connection.base_url = connection.base_url || engine.default_base_url || "";
+        connection.host = "";
+        connection.port = "";
+      } else if (engine.connection === "hostport") {
+        connection.base_url = "";
+        connection.host = connection.host || "localhost";
       }
       const ollama = engine.id === "ollama-api" || engine.id === "ollama-cli";
       if (!ollama && !connection.base_url && !connection.host) return null;
