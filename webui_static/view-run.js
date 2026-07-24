@@ -4,6 +4,8 @@
 (function () {
   "use strict";
 
+  let commandPreviewRequestId = 0;
+
   const {
     state, esc, fmt, api, toast, fmtDuration, pageHead, engineById, endpointTarget,
     attachModelPicker, modelPickerHtml, currentView,
@@ -174,6 +176,16 @@
             <div class="field"><input type="text" id="rfExtraArgs" value="${esc(draft.extraArgs)}"
               placeholder="--some-flag value"></div>
           </details>
+          <details class="advanced" id="rfCommandDetails">
+            <summary>Command line</summary>
+            <div>
+              <div class="command-preview-row">
+                <code id="rfCommandPreview">Generating command…</code>
+                <button class="btn small" id="rfCommandCopy" type="button">Copy</button>
+              </div>
+              <span class="hint">Configured API keys are represented by <span class="mono">$OPENAI_API_KEY</span>.</span>
+            </div>
+          </details>
           <div class="btn-row" style="margin-top:16px">
             <button class="btn primary" id="rfStart" ${engine.available ? "" : "disabled"}>Start benchmark</button>
           </div>
@@ -191,7 +203,10 @@
       draft.endpoint = e.target.value;
       const next = state.endpoints.find(x => x.id === draft.endpoint) || null;
       if (next) {
-        if (next.engine && engineById(next.engine)) draft.engine = next.engine;
+        if (next.engine && engineById(next.engine) && next.engine !== draft.engine) {
+          draft.engine = next.engine;
+          draft.options = null;
+        }
         draft.model = next.model || "";
         draft.label = next.name || "";
       }
@@ -245,6 +260,28 @@
         if (draft.model) state.runModelPicker.set(draft.model);
       });
     }
+    const commandDetails = document.getElementById("rfCommandDetails");
+    let commandRefreshTimer = null;
+    const scheduleCommandPreview = () => {
+      clearTimeout(commandRefreshTimer);
+      commandRefreshTimer = setTimeout(refreshCommandPreview, 150);
+    };
+    commandDetails.addEventListener("toggle", () => {
+      if (commandDetails.open) refreshCommandPreview();
+    });
+    root.querySelector(".panel").addEventListener("input", scheduleCommandPreview);
+    root.querySelector(".panel").addEventListener("change", scheduleCommandPreview);
+    document.getElementById("rfCommandCopy").addEventListener("click", async () => {
+      const command = document.getElementById("rfCommandPreview").textContent;
+      if (!command || command.startsWith("Unable") || command.endsWith("…")) return;
+      try {
+        await navigator.clipboard.writeText(command);
+        toast("Command copied.");
+      } catch (err) {
+        toast("Could not copy the command: " + err.message, true);
+      }
+    });
+    refreshCommandPreview();
     document.getElementById("rfStart").addEventListener("click", startRun);
 
     renderRunList();
@@ -300,13 +337,16 @@
     </details>`;
   }
 
-  async function startRun() {
+  function buildRunPayload(requireContexts) {
     captureRunForm();
     const draft = state.runForm;
     const engine = engineById(draft.engine);
     const ep = state.endpoints.find(x => x.id === draft.endpoint) || null;
     const contexts = draft.contexts || [];
-    if (!contexts.length) { toast("Select at least one context size.", true); return; }
+    if (requireContexts && !contexts.length) {
+      toast("Select at least one context size.", true);
+      return null;
+    }
 
     const options = {};
     const draftOpts = draft.options || {};
@@ -316,7 +356,7 @@
     }
 
     const connection = readConnection(ep);
-    const payload = {
+    return {
       engine: engine.id,
       model: draft.model,
       label: draft.label,
@@ -331,6 +371,31 @@
       options,
       extra_args: draft.extraArgs,
     };
+  }
+
+  async function refreshCommandPreview() {
+    const output = document.getElementById("rfCommandPreview");
+    if (!output) return;
+    const payload = buildRunPayload(false);
+    if (!payload.contexts) {
+      output.textContent = "Select at least one context size to generate the command.";
+      return;
+    }
+    const requestId = ++commandPreviewRequestId;
+    output.textContent = "Generating command…";
+    try {
+      const preview = await api("/api/command-preview", { body: payload });
+      if (requestId !== commandPreviewRequestId) return;
+      output.textContent = preview.command;
+    } catch (err) {
+      if (requestId !== commandPreviewRequestId) return;
+      output.textContent = "Unable to generate command: " + err.message;
+    }
+  }
+
+  async function startRun() {
+    const payload = buildRunPayload(true);
+    if (!payload) return;
     try {
       const run = await api("/api/runs", { body: payload });
       toast(`Benchmark started: ${run.engine} · ${run.model}`);

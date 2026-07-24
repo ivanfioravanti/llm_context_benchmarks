@@ -301,6 +301,16 @@ details.advanced summary:hover { color: var(--ink-2); }
 details.advanced summary::before { content: "▸ "; }
 details.advanced[open] summary::before { content: "▾ "; }
 details.advanced > div { margin-top: 14px; }
+.command-preview-row {
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.command-preview-row code {
+  flex: 1; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--hairline); border-radius: 6px;
+  background: var(--sunken); color: var(--ink-2);
+  font-family: var(--mono); font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
 
 /* ---------- LEDs & status ---------- */
 .led {

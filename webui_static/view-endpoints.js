@@ -68,7 +68,10 @@
       const ep = state.endpoints.find(x => x.id === card.dataset.id);
       card.querySelector('[data-act="bench"]').addEventListener("click", () => {
         state.runForm.endpoint = ep.id;
-        if (ep.engine) state.runForm.engine = ep.engine;
+        if (ep.engine && ep.engine !== state.runForm.engine) {
+          state.runForm.engine = ep.engine;
+          state.runForm.options = null;
+        }
         state.runForm.model = ep.model || "";
         state.runForm.label = ep.name || "";
         location.hash = "run";
