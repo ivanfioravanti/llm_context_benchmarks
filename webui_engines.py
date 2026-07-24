@@ -162,7 +162,33 @@ def get_engine_catalog() -> dict:
             "default_base_url": "http://localhost:8080/v1",
             "cold_prefill": True,
             "local_mlx": False,
-            "options": _batch_opts(),
+            "options": [
+                {
+                    "key": "temperature",
+                    "type": "float",
+                    "flag": "--temperature",
+                    "label": "Temperature",
+                    "default": 1.0,
+                    "help": "Some hosted models, including Kimi K3, require exactly 1.0",
+                },
+                {
+                    "key": "latency_adjustment",
+                    "type": "optbool",
+                    "flag": "--latency-adjustment",
+                    "label": "Adjust for endpoint latency",
+                    "default": True,
+                    "help": "Measure warm authenticated round trips and remove their average from client prompt timing",
+                },
+                {
+                    "key": "latency_samples",
+                    "type": "int",
+                    "flag": "--latency-samples",
+                    "label": "Latency samples",
+                    "default": 5,
+                    "help": "Number of warm /models requests used to estimate endpoint overhead",
+                },
+            ]
+            + _batch_opts(),
         },
         "unsloth": {
             "label": "Unsloth",

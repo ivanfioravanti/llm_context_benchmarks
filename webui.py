@@ -45,7 +45,7 @@ from webui_common import (
     is_apple_silicon,
 )
 from webui_engines import build_command, cached_mlx_models, engine_available, get_engine_catalog
-from webui_runs import RunManager
+from webui_runs import RunManager, format_command
 
 run_manager = RunManager()
 
@@ -421,6 +421,16 @@ def api_endpoints_delete(endpoint_id: str):
 @app.get("/api/runs")
 def api_runs_list():
     return run_manager.list_runs()
+
+
+@app.post("/api/command-preview")
+def api_command_preview(payload: dict):
+    """Build the exact launch command without exposing a configured API key."""
+    engine_id = payload.get("engine")
+    if engine_id not in get_engine_catalog():
+        raise HTTPException(400, f"Unknown engine '{engine_id}'")
+    argv, _ = build_command(engine_id, payload)
+    return {"command": format_command(argv, secret_placeholder="$OPENAI_API_KEY")}
 
 
 @app.post("/api/runs")

@@ -4,6 +4,7 @@ captures their output live and claims result folders."""
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -60,12 +61,26 @@ def batch_sizes_from_argv(argv: list) -> list[int]:
         return []
 
 
-def redact_argv(argv: list) -> list:
-    out, hide = [], False
+def format_command(argv: list, secret_placeholder: str = "***") -> str:
+    """Return a shell-safe command while replacing secret flag values."""
+    parts = []
+    hide_next = False
     for arg in argv:
-        out.append("***" if hide else arg)
-        hide = arg in SECRET_FLAGS
-    return out
+        if hide_next:
+            parts.append(secret_placeholder if secret_placeholder.startswith("$") else shlex.quote(secret_placeholder))
+            hide_next = False
+            continue
+        if arg in SECRET_FLAGS:
+            parts.append(shlex.quote(arg))
+            hide_next = True
+            continue
+        matching_flag = next((flag for flag in SECRET_FLAGS if arg.startswith(flag + "=")), None)
+        if matching_flag:
+            value = secret_placeholder if secret_placeholder.startswith("$") else shlex.quote(secret_placeholder)
+            parts.append(f"{shlex.quote(matching_flag)}={value}")
+            continue
+        parts.append(shlex.quote(arg))
+    return " ".join(parts)
 
 
 class BenchmarkRun:
@@ -109,7 +124,7 @@ class BenchmarkRun:
                 "model": self.model,
                 "label": self.label,
                 "endpoint": self.endpoint_name,
-                "command": " ".join(redact_argv(self.argv)),
+                "command": format_command(self.argv),
                 "status": self.status,
                 "returncode": self.returncode,
                 "started": self.started,

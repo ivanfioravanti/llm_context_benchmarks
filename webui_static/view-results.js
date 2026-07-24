@@ -125,7 +125,8 @@
     try { detail = await ensureDetail(folder); } catch (e) { toast(e.message, true); return; }
     const summary = detail.summary;
     const rows = detail.results;
-    const cols = ["context_size", "prompt_tokens", "prompt_tps", "generation_tokens", "generation_tps",
+    const cols = ["context_size", "prompt_tokens", "prompt_tps", "prompt_tps_e2e",
+      "endpoint_latency_ms", "prompt_eval_duration", "generation_tokens", "generation_tps",
       "time_to_first_token", "time_per_output_token", "total_time",
       "peak_memory_gb", "host_memory_gb", "kv_cache_gb"]
       .filter(c => rows.some(r => r[c] != null));
@@ -180,8 +181,11 @@
       ${detail.batch_data && detail.batch_data.length ? (() => {
         const batchRows = detail.batch_data;
         const bCols = [
-          ["prompt_tps", "prompt t/s", {}],
-          ["generation_tps", "e2e gen t/s", {}],
+          ["prompt_tps", "prompt t/s adj.", {}],
+          ["prompt_tps_e2e", "prompt t/s e2e", {}],
+          ["generation_tps", "gen t/s adj.", {}],
+          ["generation_tps_e2e", "gen t/s e2e", {}],
+          ["endpoint_latency_ms", "latency ms", {}],
           ["decode_tps_total", "decode t/s", {}],
           ["decode_tps_per_client", "decode / client", {}],
           ["time_to_first_token", "ttft", { seconds: true }],
@@ -193,8 +197,9 @@
         const hasDecode = bCols.some(([key]) => key === "decode_tps_total");
         return `
         <h3 style="font-size:14px;margin:18px 0 4px">Batch sweep <span class="unit">N parallel clients</span></h3>
-        <p class="hint" style="margin:0 0 8px">»E2E gen« = generated tokens ÷ total wall time (prompt
-          phase included)${hasDecode ? " — »decode« = pure generation rate, summed across clients" : ""}.</p>
+        <p class="hint" style="margin:0 0 8px">»Adjusted« removes one measured endpoint round trip
+          from batch wall time; »E2E« keeps the full observed wall time${hasDecode
+            ? " — »decode« = pure generation rate, summed across clients" : ""}.</p>
         <div class="tbl-wrap"><table class="tbl">
           <thead><tr><th>batch</th>${bCols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
           <tbody>${batchRows.map(b => `<tr><td>${esc(b.batch_size)}</td>

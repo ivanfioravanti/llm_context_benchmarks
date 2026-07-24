@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,34 @@ def test_server_connection(client: OpenAI) -> bool:
     except Exception as e:
         print(f"Error connecting to server: {e}")
         return False
+
+
+def measure_endpoint_latency(client: OpenAI, samples: int = 5) -> Dict[str, float]:
+    """Measure warm authenticated round-trip latency against ``/v1/models``.
+
+    ``test_server_connection`` runs first and warms DNS, TLS, and the client's
+    connection pool. These samples therefore estimate the recurring endpoint
+    overhead present in each benchmark request rather than one-time setup cost.
+    """
+    latencies = []
+    for _ in range(max(samples, 0)):
+        start = time.perf_counter()
+        try:
+            client.models.list()
+        except Exception as exc:
+            print(f"Warning: endpoint latency probe failed: {exc}")
+            break
+        latencies.append(time.perf_counter() - start)
+
+    if not latencies:
+        return {"mean_s": 0.0, "median_s": 0.0, "min_s": 0.0, "max_s": 0.0, "samples": 0}
+    return {
+        "mean_s": statistics.fmean(latencies),
+        "median_s": statistics.median(latencies),
+        "min_s": min(latencies),
+        "max_s": max(latencies),
+        "samples": len(latencies),
+    }
 
 
 def get_available_model(client: OpenAI) -> Optional[str]:
@@ -110,6 +139,8 @@ def run_benchmark(
     context_file: Path,
     max_tokens: int = 128,
     timeout: int = 3600,
+    temperature: float = 1.0,
+    endpoint_latency: Optional[Dict[str, float]] = None,
     cold_prefill: bool = True,
     _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
@@ -131,7 +162,7 @@ def run_benchmark(
     if host_mem_sampler:
         host_mem_sampler.__enter__()
     try:
-        stream_result = common.stream_chat(client, model, prompt, max_tokens, temperature=0.7, timeout=timeout)
+        stream_result = common.stream_chat(client, model, prompt, max_tokens, temperature=temperature, timeout=timeout)
     except Exception as e:
         print(f"Error during benchmark: {e}")
         return None
@@ -168,9 +199,14 @@ def run_benchmark(
     server_gen_duration = usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
     peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
 
-    # TTFT / decode window: prefer server-reported values, then the
-    # client-side anchors measured by stream_chat.
-    ttft = server_prompt_eval if server_prompt_eval > 0 else stream_result["time_to_first_token"]
+    # TTFT is always the end-to-end client observation. For prompt throughput,
+    # prefer server timing; otherwise remove the measured warm endpoint
+    # round-trip baseline from TTFT. Both raw and adjusted values are retained.
+    client_ttft = stream_result["time_to_first_token"]
+    latency_stats = endpoint_latency or {}
+    endpoint_latency_s = latency_stats.get("mean_s", 0.0) or 0.0
+    latency_adjusted_prompt_time = client_ttft - endpoint_latency_s if client_ttft > endpoint_latency_s else client_ttft
+    prompt_duration = server_prompt_eval if server_prompt_eval > 0 else latency_adjusted_prompt_time
     generation_time = server_gen_duration if server_gen_duration > 0 else stream_result["decode_window"]
 
     # Fallback: approximate prompt token count from word count
@@ -184,7 +220,15 @@ def run_benchmark(
     # Prefer server-reported TPS when available; otherwise compute client-side.
     # For decode TPS, use (N - 1) tokens since the first token's generation is
     # already captured in TTFT, leaving N-1 inter-token intervals.
-    prompt_tps = server_prompt_tps if server_prompt_tps > 0 else (prompt_tokens / ttft if ttft > 0 else 0.0)
+    prompt_tps_e2e = prompt_tokens / client_ttft if client_ttft > 0 else 0.0
+    prompt_tps_latency_adjusted = (
+        prompt_tokens / latency_adjusted_prompt_time if latency_adjusted_prompt_time > 0 else 0.0
+    )
+    prompt_tps = (
+        server_prompt_tps
+        if server_prompt_tps > 0
+        else (prompt_tokens / prompt_duration if prompt_duration > 0 else 0.0)
+    )
     if server_generation_tps > 0:
         generation_tps = server_generation_tps
     elif generation_time > 0 and completion_tokens > 1:
@@ -192,17 +236,30 @@ def run_benchmark(
     else:
         generation_tps = 0.0
 
-    tps_source = "server" if server_generation_tps > 0 else "client"
+    if server_prompt_tps > 0:
+        prompt_tps_source = "server"
+    elif server_prompt_eval > 0:
+        prompt_tps_source = "server timing"
+    elif endpoint_latency_s > 0:
+        prompt_tps_source = "client, latency-adjusted"
+    else:
+        prompt_tps_source = "client, end-to-end"
+    generation_tps_source = "server" if server_generation_tps > 0 else "client"
 
     print(f"  Prompt tokens:      {prompt_tokens}")
     print(f"  Completion tokens:  {completion_tokens}")
     if reasoning_text:
         print(f"  Reasoning chars:    {len(reasoning_text)} (counted toward decode window)")
-    print(f"  TTFT:               {ttft:.3f}s")
+    print(f"  TTFT (end-to-end):  {client_ttft:.3f}s")
+    if endpoint_latency_s > 0 and server_prompt_eval <= 0:
+        print(f"  Endpoint latency:   {endpoint_latency_s * 1000:.1f}ms average")
+        print(f"  Prompt time adj.:   {latency_adjusted_prompt_time:.3f}s")
     print(f"  Generation time:    {generation_time:.2f}s")
     print(f"  Total time:         {total_time:.2f}s")
-    print(f"  Prompt TPS:         {prompt_tps:.1f} t/s ({tps_source}-side)")
-    print(f"  Generation TPS:     {generation_tps:.1f} t/s ({tps_source}-side)")
+    print(f"  Prompt TPS:         {prompt_tps:.1f} t/s ({prompt_tps_source})")
+    if endpoint_latency_s > 0 and server_prompt_tps <= 0 and prompt_tps_e2e > 0:
+        print(f"  Prompt TPS e2e:     {prompt_tps_e2e:.1f} t/s (unadjusted)")
+    print(f"  Generation TPS:     {generation_tps:.1f} t/s ({generation_tps_source}-side)")
     if peak_memory_gb > 0:
         print(f"  Peak memory:        {peak_memory_gb:.2f} GB")
 
@@ -210,14 +267,26 @@ def run_benchmark(
         "context_size": context_file.stem,
         "prompt_tokens": prompt_tokens,
         "generation_tokens": completion_tokens,
-        "time_to_first_token": ttft,
+        "time_to_first_token": client_ttft,
         "eval_duration": generation_time,
-        "prompt_eval_duration": ttft,
+        "prompt_eval_duration": prompt_duration,
         "total_time": total_time,
         "prompt_tps": prompt_tps,
+        "prompt_tps_e2e": prompt_tps_e2e,
+        "prompt_tps_latency_adjusted": prompt_tps_latency_adjusted,
         "generation_tps": generation_tps,
         "generated_text": generated_text,
     }
+    if endpoint_latency_s > 0:
+        result.update(
+            {
+                "endpoint_latency_ms": endpoint_latency_s * 1000,
+                "endpoint_latency_median_ms": (latency_stats.get("median_s", 0.0) or 0.0) * 1000,
+                "endpoint_latency_min_ms": (latency_stats.get("min_s", 0.0) or 0.0) * 1000,
+                "endpoint_latency_max_ms": (latency_stats.get("max_s", 0.0) or 0.0) * 1000,
+                "endpoint_latency_samples": latency_stats.get("samples", 0),
+            }
+        )
     if reasoning_text:
         result["reasoning_text"] = reasoning_text
     if peak_memory_gb > 0:
@@ -237,6 +306,8 @@ def run_batch_benchmark(
     prompt_tokens: int = 2048,
     gen_tokens: int = 128,
     num_trials: int = 3,
+    temperature: float = 1.0,
+    endpoint_latency_s: float = 0.0,
 ) -> List[Dict]:
     """Run batch benchmark by sending concurrent requests to test continuous batching.
 
@@ -272,21 +343,25 @@ def run_batch_benchmark(
         # Fallback: approximate ~4 chars per token
         prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
 
+    import httpx
+
+    http_client = httpx.Client(
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=600,
+    )
+
     def single_request():
         """Send one non-streaming request and return (prompt_tps, gen_tps, prompt_tokens, gen_tokens)."""
-        import httpx
-
-        resp = httpx.post(
+        resp = http_client.post(
             f"{base_url}/chat/completions",
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt_text}],
                 "max_tokens": gen_tokens,
-                "temperature": 0.7,
+                "temperature": temperature,
             },
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=600,
         )
+        resp.raise_for_status()
         data = resp.json()
         usage = data.get("usage", {})
         return {
@@ -309,6 +384,8 @@ def run_batch_benchmark(
 
         trial_prompt_tps = []
         trial_gen_tps = []
+        trial_prompt_tps_e2e = []
+        trial_gen_tps_e2e = []
         trial_peak_mem = []
         trial_decode_tps = []  # pure decode rate summed across clients (from server usage)
 
@@ -330,12 +407,19 @@ def run_batch_benchmark(
 
             total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
             total_gen_tok = sum(r["generation_tokens"] for r in responses)
-            agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0
-            agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0
+            adjusted_wall_time = wall_time
+            if endpoint_latency_s > 0 and wall_time > endpoint_latency_s:
+                adjusted_wall_time = wall_time - endpoint_latency_s
+            agg_prompt_tps_e2e = total_prompt_tok / wall_time if wall_time > 0 else 0
+            agg_gen_tps_e2e = total_gen_tok / wall_time if wall_time > 0 else 0
+            agg_prompt_tps = total_prompt_tok / adjusted_wall_time if adjusted_wall_time > 0 else 0
+            agg_gen_tps = total_gen_tok / adjusted_wall_time if adjusted_wall_time > 0 else 0
             peak_mem = max((r["peak_memory"] for r in responses), default=0)
 
             trial_prompt_tps.append(agg_prompt_tps)
             trial_gen_tps.append(agg_gen_tps)
+            trial_prompt_tps_e2e.append(agg_prompt_tps_e2e)
+            trial_gen_tps_e2e.append(agg_gen_tps_e2e)
             if peak_mem > 0:
                 trial_peak_mem.append(peak_mem)
 
@@ -347,7 +431,11 @@ def run_batch_benchmark(
             if len(per_request_decode) == len(responses):
                 trial_decode_tps.append(sum(per_request_decode))
 
-            print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
+            latency_note = " latency-adjusted" if adjusted_wall_time != wall_time else ""
+            print(
+                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s "
+                f"({wall_time:.1f}s e2e{latency_note})"
+            )
 
         if trial_prompt_tps:
             avg_prompt = statistics.mean(trial_prompt_tps)
@@ -356,7 +444,11 @@ def run_batch_benchmark(
                 "batch_size": bs,
                 "prompt_tps": round(avg_prompt, 2),
                 "generation_tps": round(avg_gen, 2),
+                "prompt_tps_e2e": round(statistics.mean(trial_prompt_tps_e2e), 2),
+                "generation_tps_e2e": round(statistics.mean(trial_gen_tps_e2e), 2),
             }
+            if endpoint_latency_s > 0:
+                result["endpoint_latency_ms"] = round(endpoint_latency_s * 1000, 3)
             if trial_decode_tps:
                 avg_decode = statistics.mean(trial_decode_tps)
                 result["decode_tps_total"] = round(avg_decode, 2)
@@ -371,6 +463,7 @@ def run_batch_benchmark(
             print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
             batch_results.append(result)
 
+    http_client.close()
     return batch_results
 
 
@@ -400,6 +493,24 @@ def main() -> int:
         "--api-key",
         default=os.environ.get("OPENAI_API_KEY", "no-key"),
         help="API key (default: OPENAI_API_KEY env var or 'no-key' for local servers)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Sampling temperature (default: 1.0; required by some hosted models, including Kimi K3)",
+    )
+    parser.add_argument(
+        "--latency-adjustment",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Measure warm endpoint latency and remove it from client-side prompt timing (default: enabled)",
+    )
+    parser.add_argument(
+        "--latency-samples",
+        type=int,
+        default=5,
+        help="Warm /models round trips used for endpoint-latency estimation (default: 5)",
     )
 
     parser.add_argument(
@@ -467,6 +578,23 @@ def main() -> int:
             return 1
         print(f"Auto-detected model: {model}")
 
+    if model.lower().startswith("kimi-k3") and args.temperature != 1.0:
+        print(f"Kimi K3 requires temperature 1.0; overriding requested value {args.temperature}.")
+        args.temperature = 1.0
+
+    endpoint_latency = None
+    if args.latency_adjustment and args.latency_samples > 0:
+        print(f"Measuring warm endpoint latency ({args.latency_samples} samples) ...")
+        endpoint_latency = measure_endpoint_latency(client, args.latency_samples)
+        if endpoint_latency["samples"]:
+            print(
+                f"Endpoint latency: {endpoint_latency['mean_s'] * 1000:.1f}ms average "
+                f"({endpoint_latency['min_s'] * 1000:.1f}–{endpoint_latency['max_s'] * 1000:.1f}ms, "
+                f"n={endpoint_latency['samples']})"
+            )
+        else:
+            print("Endpoint latency unavailable; client statistics will remain end-to-end.")
+
     hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_str = common.format_hardware_string(hardware_info)
 
@@ -501,6 +629,8 @@ def main() -> int:
                 ctx_file,
                 args.max_tokens,
                 args.timeout,
+                temperature=args.temperature,
+                endpoint_latency=endpoint_latency,
                 cold_prefill=args.cold_prefill,
                 n_runs=args.runs,
             )
@@ -519,6 +649,8 @@ def main() -> int:
             model=model,
             max_tokens=args.max_tokens,
             timeout=args.timeout,
+            temperature=args.temperature,
+            endpoint_latency=endpoint_latency,
             cold_prefill=args.cold_prefill,
         )
         if args.save_responses:
@@ -546,6 +678,8 @@ def main() -> int:
                 prompt_tokens=args.batch_prompt_tokens,
                 gen_tokens=args.batch_gen_tokens,
                 num_trials=args.batch_trials,
+                temperature=args.temperature,
+                endpoint_latency_s=(endpoint_latency or {}).get("mean_s", 0.0),
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
