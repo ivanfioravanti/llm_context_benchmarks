@@ -317,7 +317,7 @@ def run_batch_benchmark(
                     "model": model,
                     "messages": [{"role": "user", "content": prompt_text}],
                     "max_tokens": gen_tokens,
-                    "temperature": 0.7,
+                    "temperature": 0.0,
                     "stream": True,
                     "stream_options": {"include_usage": True},
                 },
@@ -462,14 +462,14 @@ def main() -> int:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="Sampling temperature for generation (default: 0.7)",
+        default=0.0,
+        help="Sampling temperature for generation (default: 0.0, greedy)",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.95,
-        help="Nucleus sampling top-p value (default: 0.95)",
+        default=1.0,
+        help="Nucleus sampling top-p value (default: 1.0)",
     )
     parser.add_argument(
         "--base-url",

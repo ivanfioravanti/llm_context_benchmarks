@@ -75,9 +75,9 @@ def run_benchmark(
         response = llm.create_completion(
             prompt=prompt,
             max_tokens=max_tokens,
-            temperature=0.7,
+            temperature=0.0,
             top_k=40,
-            top_p=0.95,
+            top_p=1.0,
             echo=False,
             seed=seed,
         )

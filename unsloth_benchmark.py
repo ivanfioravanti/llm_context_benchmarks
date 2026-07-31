@@ -105,7 +105,7 @@ def run_benchmark(
 
     try:
         stream_result = common.stream_chat(
-            client, model, prompt, max_tokens, temperature=0.7, timeout=timeout, chunk_hook=_capture_timings
+            client, model, prompt, max_tokens, temperature=0.0, timeout=timeout, chunk_hook=_capture_timings
         )
     except Exception as e:
         print(f"Error during benchmark: {e}")

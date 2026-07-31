@@ -112,8 +112,8 @@ def _send_request(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-        "temperature": 0.7,
-        "top_p": 0.95,
+        "temperature": 0.0,
+        "top_p": 1.0,
         "stream": False,
     }
     try:

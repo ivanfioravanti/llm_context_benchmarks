@@ -322,8 +322,8 @@ def run_batch_benchmark(
             request_model=request_model,
             prompt=body,
             max_tokens=gen_tokens,
-            temperature=0.6,
-            top_p=0.95,
+            temperature=0.0,
+            top_p=1.0,
             timeout=600,
             generation_mode=generation_mode,
         )
@@ -428,14 +428,14 @@ def main() -> int:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.6,
-        help="Sampling temperature (default: 0.6 — matches MTPLX speed profile)",
+        default=0.0,
+        help="Sampling temperature (default: 0.0, greedy)",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.95,
-        help="Nucleus sampling top-p value (default: 0.95)",
+        default=1.0,
+        help="Nucleus sampling top-p value (default: 1.0)",
     )
     parser.add_argument(
         "--cold-prefill",
