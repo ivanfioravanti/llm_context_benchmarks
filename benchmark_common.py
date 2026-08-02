@@ -196,7 +196,7 @@ def stream_chat(
     model: str,
     prompt: str,
     max_tokens: int,
-    temperature: float = 0.7,
+    temperature: float = 0.0,
     top_p: Optional[float] = None,
     timeout: int = 3600,
     chunk_hook=None,

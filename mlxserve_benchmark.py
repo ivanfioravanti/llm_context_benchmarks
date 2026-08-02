@@ -92,6 +92,8 @@ def run_benchmark(
     max_tokens: int = 128,
     timeout: int = 3600,
     cold_prefill: bool = True,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
     _run_idx: Optional[int] = None,
 ) -> Optional[Dict]:
     """Benchmark a single context file against the mlx-serve server.
@@ -118,7 +120,14 @@ def run_benchmark(
 
     try:
         stream_result = common.stream_chat(
-            client, model, prompt, max_tokens, temperature=0.7, timeout=timeout, chunk_hook=_capture_timings
+            client,
+            model,
+            prompt,
+            max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            timeout=timeout,
+            chunk_hook=_capture_timings,
         )
     except Exception as e:
         print(f"Error during benchmark: {e}")
@@ -209,6 +218,8 @@ def run_batch_benchmark(
     prompt_tokens: int = 2048,
     gen_tokens: int = 128,
     num_trials: int = 3,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
 ) -> List[Dict]:
     """Run batch benchmark by sending concurrent requests to test continuous batching.
 
@@ -243,7 +254,8 @@ def run_batch_benchmark(
                 "model": model,
                 "messages": [{"role": "user", "content": prompt_text}],
                 "max_tokens": gen_tokens,
-                "temperature": 0.7,
+                "temperature": temperature,
+                "top_p": top_p,
             },
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=600,
@@ -370,6 +382,18 @@ def main() -> int:
         help="Skip batch benchmark",
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature; 0.0 = greedy, deterministic TPS (default: 0.0)",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=1.0,
+        help="Nucleus sampling top-p (default: 1.0)",
+    )
+    parser.add_argument(
         "--cold-prefill",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -408,6 +432,7 @@ def main() -> int:
     print(f"Model:      {model}")
     print(f"Hardware:   {hardware_str}")
     print(f"Max tokens: {args.max_tokens}")
+    print(f"Sampling:   temperature={args.temperature} top_p={args.top_p}")
     print(
         f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
@@ -417,6 +442,28 @@ def main() -> int:
         return 1
 
     output_dir = common.create_output_directory("mlx_serve", model, cold_prefill=args.cold_prefill)
+
+    # Warmup run (discarded): absorbs first-request cold-start cost (Metal/MLX
+    # graph compilation, KV cache allocation) so it doesn't land inside the
+    # first measured context size.
+    warmup_file = common.find_warmup_file()
+    if warmup_file:
+        print(f"\n{'=' * 50}")
+        print(f"Warmup run (excluded from results): {warmup_file.name}")
+        print(f"{'=' * 50}")
+        run_benchmark(
+            client,
+            model,
+            warmup_file,
+            args.max_tokens,
+            args.timeout,
+            cold_prefill=args.cold_prefill,
+            temperature=args.temperature,
+            top_p=args.top_p,
+        )
+        print("Warmup complete.")
+    else:
+        print("Warning: 0.5k.txt not found, skipping warmup.")
 
     results = []
     benchmark_start = time.time()
@@ -435,6 +482,8 @@ def main() -> int:
                 args.max_tokens,
                 args.timeout,
                 cold_prefill=args.cold_prefill,
+                temperature=args.temperature,
+                top_p=args.top_p,
                 n_runs=args.runs,
             )
             if result:
@@ -453,6 +502,8 @@ def main() -> int:
             max_tokens=args.max_tokens,
             timeout=args.timeout,
             cold_prefill=args.cold_prefill,
+            temperature=args.temperature,
+            top_p=args.top_p,
         )
         if args.save_responses:
             for result in results:
@@ -479,6 +530,8 @@ def main() -> int:
                 prompt_tokens=args.batch_prompt_tokens,
                 gen_tokens=args.batch_gen_tokens,
                 num_trials=args.batch_trials,
+                temperature=args.temperature,
+                top_p=args.top_p,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")

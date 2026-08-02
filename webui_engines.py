@@ -37,7 +37,7 @@ def _batch_opts(sizes: str = "1,2,4,8") -> list:
     ]
 
 
-def _sampling_opts(temperature: float = 0.7, stream: bool = True) -> list:
+def _sampling_opts(temperature: float = 0.0, stream: bool = True) -> list:
     opts = [
         {
             "key": "temperature",
@@ -46,7 +46,7 @@ def _sampling_opts(temperature: float = 0.7, stream: bool = True) -> list:
             "label": "Temperature",
             "default": temperature,
         },
-        {"key": "top_p", "type": "float", "flag": "--top-p", "label": "Top-p", "default": 0.95},
+        {"key": "top_p", "type": "float", "flag": "--top-p", "label": "Top-p", "default": 1.0},
     ]
     if stream:
         opts.append({"key": "stream", "type": "optbool", "flag": "--stream", "label": "Streaming", "default": True})
@@ -433,7 +433,7 @@ def get_engine_catalog() -> dict:
                     "default": True,
                 },
             ]
-            + _sampling_opts(temperature=0.6)
+            + _sampling_opts()
             + _batch_opts(),
         },
         "dflash-mlx": {
@@ -446,7 +446,7 @@ def get_engine_catalog() -> dict:
             "connection": "base_url",
             "cold_prefill": True,
             "local_mlx": False,
-            "options": [_request_model_opt()] + _sampling_opts(temperature=0.6, stream=False),
+            "options": [_request_model_opt()] + _sampling_opts(stream=False),
         },
         "vmlx": {
             "label": "vMLX",
@@ -472,7 +472,18 @@ def get_engine_catalog() -> dict:
             "default_base_url": "http://127.0.0.1:11234/v1",
             "cold_prefill": True,
             "local_mlx": False,
-            "options": _batch_opts(),
+            "options": [
+                {
+                    "key": "temperature",
+                    "type": "float",
+                    "flag": "--temperature",
+                    "label": "Temperature",
+                    "default": 0.0,
+                    "help": "0.0 = greedy, deterministic TPS",
+                },
+                {"key": "top_p", "type": "float", "flag": "--top-p", "label": "Top-p", "default": 1.0},
+            ]
+            + _batch_opts(),
         },
         "paroquant": {
             "label": "Paroquant",

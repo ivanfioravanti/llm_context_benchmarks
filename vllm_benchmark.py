@@ -615,8 +615,8 @@ def run_benchmark(
     metrics_base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     max_tokens: int = 128,
-    temperature: float = 0.7,
-    top_p: float = 0.95,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
     timeout: int = 300,
     stream: bool = True,
     use_vllm_metrics: bool = False,
@@ -822,8 +822,8 @@ def run_batch_benchmark(
     gen_tokens: int = 128,
     num_trials: int = 3,
     timeout: int = 300,
-    temperature: float = 0.7,
-    top_p: float = 0.95,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
     metrics_base_url: Optional[str] = None,
     use_metrics: bool = True,
 ) -> List[Dict[str, object]]:
@@ -1033,14 +1033,14 @@ def main() -> int:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="Sampling temperature (default: 0.7)",
+        default=0.0,
+        help="Sampling temperature (default: 0.0, greedy)",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.95,
-        help="Nucleus sampling top-p value (default: 0.95)",
+        default=1.0,
+        help="Nucleus sampling top-p value (default: 1.0)",
     )
     parser.add_argument(
         "--stream",

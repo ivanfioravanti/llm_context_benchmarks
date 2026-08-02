@@ -311,14 +311,14 @@ def main() -> int:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.6,
-        help="Sampling temperature (default: 0.6)",
+        default=0.0,
+        help="Sampling temperature (default: 0.0, greedy)",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.95,
-        help="Nucleus sampling top-p value (default: 0.95)",
+        default=1.0,
+        help="Nucleus sampling top-p value (default: 1.0)",
     )
     parser.add_argument(
         "--cold-prefill",

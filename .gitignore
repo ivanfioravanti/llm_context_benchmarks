@@ -122,3 +122,4 @@ $RECYCLE.BIN/
 webui_endpoints.json
 
 .playwright-cli/
+comparison_results_*
