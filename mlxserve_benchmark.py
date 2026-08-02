@@ -422,7 +422,7 @@ def main() -> int:
     benchmark_start = time.time()
 
     if args.cold_prefill:
-        for ctx_file in context_files:
+        for i, ctx_file in enumerate(context_files):
             print(f"\n{'=' * 50}")
             print(f"Benchmarking {ctx_file.name} ...")
             print(f"{'=' * 50}")
@@ -443,6 +443,8 @@ def main() -> int:
                 if args.save_responses:
                     resp_path = output_dir / f"response_{result['context_size']}.txt"
                     common.save_generated_text(result, model, resp_path, "MLX-Serve")
+
+            common.cooldown_after_context(ctx_file, is_last=i == len(context_files) - 1)
     else:
         results = common.run_benchmark_peak_per_run(
             run_benchmark,

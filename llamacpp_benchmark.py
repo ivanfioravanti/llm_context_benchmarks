@@ -26,6 +26,7 @@ import requests
 
 from benchmark_common import (
     add_throughput_metrics,
+    cooldown_after_context,
     create_output_directory,
     find_context_files,
     format_hardware_string,
@@ -302,7 +303,9 @@ def main() -> int:
 
     # Create output directory using common function
     machine_name = _hardware_folder_label(args.server_hardware) if args.server_hardware else None
-    output_dir = create_output_directory("llamacpp", args.model, cold_prefill=args.cold_prefill, machine_name=machine_name)
+    output_dir = create_output_directory(
+        "llamacpp", args.model, cold_prefill=args.cold_prefill, machine_name=machine_name
+    )
 
     # Capture top-K logprobs on a fixed reference text for later KL comparison
     if not args.no_kl_capture:
@@ -332,7 +335,7 @@ def main() -> int:
 
     start_time = time.time()
     if args.cold_prefill:
-        for context_file in context_files:
+        for i, context_file in enumerate(context_files):
             print(f"\n{'=' * 50}")
             print(f"Benchmarking {context_file.name}...")
             print(f"{'=' * 50}")
@@ -365,6 +368,8 @@ def main() -> int:
                 if args.save_responses:
                     response_file = output_dir / f"response_{context_file.stem}.txt"
                     save_generated_text(result, model_name, response_file, framework="llama.cpp")
+
+            cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
     else:
         results = run_benchmark_peak_per_run(
             benchmark_llamacpp,

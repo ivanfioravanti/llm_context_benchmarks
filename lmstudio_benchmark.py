@@ -638,7 +638,7 @@ def main() -> int:
     start_time = time.time()
     results = []
     if args.cold_prefill:
-        for file in context_files:
+        for i, file in enumerate(context_files):
             print(f"\n{'=' * 50}")
             print(f"Benchmarking {file.name}...")
             print(f"{'=' * 50}")
@@ -660,6 +660,8 @@ def main() -> int:
                 if args.save_responses:
                     resp_path = output_dir / f"response_{result['context_size']}.txt"
                     common.save_generated_text(result, model_id, resp_path, "LM Studio")
+
+            common.cooldown_after_context(file, is_last=i == len(context_files) - 1)
     else:
         results = common.run_benchmark_peak_per_run(
             run_benchmark,

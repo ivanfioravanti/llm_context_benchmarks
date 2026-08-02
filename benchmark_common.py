@@ -361,6 +361,30 @@ def find_context_files(contexts_arg=None):
     return context_files
 
 
+# Cooldown delay (seconds) after running a given context size, to let the GPU
+# cool down between runs and avoid thermal throttling. Context sizes below 8k
+# get no cooldown.
+COOLDOWN_SECONDS = {8.0: 5, 16.0: 10, 32.0: 15, 64.0: 20, 128.0: 30}
+
+
+def cooldown_after_context(context_file, is_last=False):
+    """Sleep after a large-context run to let the GPU cool down.
+
+    The delay depends on the context size just run (see COOLDOWN_SECONDS).
+    Skipped for the last context file in a run.
+    """
+    if is_last:
+        return
+    try:
+        size_k = float(Path(context_file).stem[:-1])
+    except (ValueError, IndexError):
+        return
+    seconds = COOLDOWN_SECONDS.get(size_k)
+    if seconds:
+        print(f"Cooling down for {seconds}s after {size_k:g}k context...")
+        time.sleep(seconds)
+
+
 def save_hardware_info(hardware_info, output_path):
     """Save hardware info to JSON file."""
     with open(output_path, "w") as f:
@@ -1831,7 +1855,7 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
     all_results = {cf.stem: [] for cf in context_files}
 
     for run_idx in range(1, n_runs + 1):
-        for context_file in context_files:
+        for i, context_file in enumerate(context_files):
             print(f"\n{'=' * 50}")
             print(f"Run {run_idx}/{n_runs} — Benchmarking {context_file.name}...")
             print(f"{'=' * 50}")
@@ -1853,6 +1877,8 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
                 score = result.get(metric, 0)
                 print(f"    {metric}: {score:.2f}")
                 all_results[context_file.stem].append(result)
+
+            cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
 
     results = []
     for context_file in context_files:

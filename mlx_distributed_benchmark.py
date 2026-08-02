@@ -302,7 +302,7 @@ def main() -> int:
     start_time = time.time()
     results = []
 
-    for context_file in context_files:
+    for i, context_file in enumerate(context_files):
         print(f"\n{'=' * 50}")
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
@@ -346,6 +346,8 @@ def main() -> int:
             if args.save_responses:
                 output_filename = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, output_filename, "MLX Distributed")
+
+        common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
 
     total_benchmark_time = time.time() - start_time
 

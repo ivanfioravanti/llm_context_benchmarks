@@ -1188,7 +1188,7 @@ def main() -> int:
     benchmark_start = time.time()
 
     if args.cold_prefill:
-        for context_file in context_files:
+        for i, context_file in enumerate(context_files):
             print("\n" + "=" * 50)
             print(f"Benchmarking {context_file.name}...")
             print("=" * 50)
@@ -1274,6 +1274,8 @@ def main() -> int:
                         response_file,
                         framework="vLLM",
                     )
+
+            common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
     else:
         results = common.run_benchmark_peak_per_run(
             run_benchmark,
