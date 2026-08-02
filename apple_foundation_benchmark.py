@@ -336,7 +336,7 @@ def main() -> int:
     benchmark_start = time.time()
 
     if args.cold_prefill:
-        for context_file in context_files:
+        for i, context_file in enumerate(context_files):
             print("\n" + "=" * 50)
             print(f"Benchmarking {context_file.name}...")
             print("=" * 50)
@@ -359,6 +359,8 @@ def main() -> int:
                 if args.save_responses:
                     response_path = output_dir / f"response_{result['context_size']}.txt"
                     common.save_generated_text(result, model, response_path, "Apple Foundation Models Serve")
+
+            common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
     else:
         results = common.run_benchmark_peak_per_run(
             run_benchmark,

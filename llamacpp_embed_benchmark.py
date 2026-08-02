@@ -234,7 +234,7 @@ def main() -> int:
 
     results = []
     start_time = time.time()
-    for context_file in context_files:
+    for i, context_file in enumerate(context_files):
         print(f"\n{'=' * 50}")
         print(f"Benchmarking {context_file.name}...")
         print(f"{'=' * 50}")
@@ -273,6 +273,8 @@ def main() -> int:
                 response_file,
                 framework="llama.cpp Embed [EXPERIMENTAL]",
             )
+
+        common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
 
     total_benchmark_time = time.time() - start_time
 

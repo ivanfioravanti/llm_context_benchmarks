@@ -468,7 +468,7 @@ def main() -> int:
     results = []
     benchmark_start = time.time()
 
-    for context_file in context_files:
+    for i, context_file in enumerate(context_files):
         print("\n" + "=" * 50)
         print(f"Benchmarking {context_file.name}...")
         print("=" * 50)
@@ -493,6 +493,8 @@ def main() -> int:
             if args.save_responses:
                 response_path = output_dir / f"response_{result['context_size']}.txt"
                 common.save_generated_text(result, args.model, response_path, "Exo API")
+
+        common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
 
     if not results:
         print("\nNo successful benchmark results")

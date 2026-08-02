@@ -623,7 +623,7 @@ def main() -> int:
 
     if args.cold_prefill:
         # Cold prefill: cache buster per-call, order doesn't matter.
-        for context_file in context_files:
+        for i, context_file in enumerate(context_files):
             print("\n" + "=" * 50)
             print(f"Benchmarking {context_file.name}...")
             print("=" * 50)
@@ -648,6 +648,8 @@ def main() -> int:
                 if args.save_responses:
                     response_path = output_dir / f"response_{result['context_size']}.txt"
                     common.save_generated_text(result, args.model, response_path, "vMLX API")
+
+            common.cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
     else:
         # Warm/cached: each run completes all context sizes before the next
         # starts, so KV cache accumulates within a run (run 1: 1k→2k→4k→…,

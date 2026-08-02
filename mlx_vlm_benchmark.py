@@ -643,7 +643,7 @@ def main() -> int:
     results = []
 
     if args.cold_prefill:
-        for file in context_files:
+        for i, file in enumerate(context_files):
             print(f"\n{'=' * 50}")
             print(f"Benchmarking {file.name}...")
             print(f"{'=' * 50}")
@@ -667,6 +667,8 @@ def main() -> int:
                 if args.save_responses:
                     output_filename = output_dir / f"response_{result['context_size']}.txt"
                     common.save_generated_text(result, args.model, output_filename, "MLX-VLM")
+
+            common.cooldown_after_context(file, is_last=i == len(context_files) - 1)
     else:
         # Warm/cached: each run gets its own PromptCacheState and completes all
         # context sizes before the next run starts, so KV cache accumulates
@@ -679,7 +681,7 @@ def main() -> int:
         all_run_results = defaultdict(list)
         for run_idx in range(1, args.runs + 1):
             prompt_cache_state = PromptCacheState()
-            for file in context_files:
+            for i, file in enumerate(context_files):
                 print(f"\n{'=' * 50}")
                 print(f"Run {run_idx}/{args.runs} — Benchmarking {file.name}...")
                 print(f"{'=' * 50}")
@@ -701,6 +703,8 @@ def main() -> int:
                     score = result.get("generation_tps", 0)
                     print(f"    generation_tps: {score:.2f}")
                     all_run_results[file.stem].append(result)
+
+                common.cooldown_after_context(file, is_last=i == len(context_files) - 1)
 
         # Pick peak per context size
         for file in context_files:
