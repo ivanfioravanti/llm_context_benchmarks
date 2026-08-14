@@ -288,7 +288,8 @@
 
   // Self-contained HTML report with a dark/light toggle (dark is default).
   // charts: [{title, svg}] — raw class-based SVG markup, themed by the
-  // report CSS; dots are interactive (hover/click shows the value).
+  // report CSS and laid out two per row; dots are interactive
+  // (hover/click shows the value).
   function buildHtmlReport(title, entries, tables, charts, legend) {
     const h = htmlEscape;
     const generated = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -302,11 +303,11 @@
       `<div class="legend">${legend.map(l =>
         `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${h(l.name)}</span>`).join("")}</div>`;
     const qmark = desc => (desc ? `<span class="qmark" tabindex="0" data-tip="${h(desc)}">?</span>` : "");
-    const chartsHtml = charts.map(c => `<figure>
+    const chartsHtml = charts.length ? `<div class="charts">${charts.map(c => `<figure>
       <figcaption>${h(c.title)}${qmark(c.desc)}</figcaption>
       <div class="viz">${c.svg}</div>
       ${legendHtml}
-    </figure>`).join("\n");
+    </figure>`).join("\n")}</div>` : "";
     const tablesHtml = tables.map(t => `
       <h2>${h(t.title)}${qmark(t.desc)}</h2>
       <table><thead><tr>${t.headers.map((x, i) =>
@@ -336,7 +337,7 @@
   }
   body { margin: 0; background: var(--page); color: var(--ink);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .wrap { max-width: 1060px; margin: 0 auto; padding: 40px 28px 80px; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 40px 28px 80px; }
   header { border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 26px;
     position: relative; }
   .eyebrow { font: 600 10px/1 ui-monospace, Menlo, monospace; letter-spacing: 0.16em;
@@ -362,9 +363,10 @@
   td.idx { color: var(--muted); width: 24px; }
   .mono { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
   .small { font-size: 10.5px; color: var(--muted); }
-  figure { margin: 22px 0; background: var(--surface); border: 1px solid var(--hairline);
-    border-radius: 12px; padding: 16px 18px; }
-  figcaption { font-size: 13.5px; font-weight: 600; margin-bottom: 10px; }
+  .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }
+  figure { margin: 0; background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 14px 16px; }
+  figcaption { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
   .viz svg { display: block; width: 100%; height: auto; }
   .viz .gridline { stroke: var(--grid); stroke-width: 1; }
   .viz .axisline { stroke: var(--axis); stroke-width: 1; }
@@ -688,25 +690,43 @@ ${tablesHtml}
       y += 20;
     });
 
-    // --- chart pages ---
-    for (const chart of charts) {
+    // --- chart pages: two charts per row, rows flow onto further pages ---
+    const cols = 2;
+    const gapX = 18, gapY = 22;
+    const cellW = (pdf.W - 2 * M - gapX * (cols - 1)) / cols;
+    let cy = Infinity;
+    const newChartPage = () => {
       pdf.addPage();
-      pdf.text(M, 44, chart.title, { bold: true, size: 13 });
+      pdf.text(M, 44, "Charts", { bold: true, size: 13 });
       pdf.line(M, 56, pdf.W - M, 56, 0.2);
-      let iy = 72;
-      if (chart.desc) {
-        for (const line of wrapText(chart.desc, 100)) {
-          pdf.text(M, iy, line, { size: 9, color: [0.45, 0.44, 0.4] });
-          iy += 12;
+      cy = 72;
+    };
+    for (let i = 0; i < charts.length; i += cols) {
+      const row = charts.slice(i, i + cols).map(chart => {
+        // description capped at two lines to keep the grid dense
+        const descLines = chart.desc ? wrapText(chart.desc, 88).slice(0, 2) : [];
+        return { chart, descLines, headH: 15 + descLines.length * 10 + 4 };
+      });
+      const headMax = Math.max(...row.map(r => r.headH));
+      const imgH = Math.max(...row.map(r => r.chart.jpeg.height * (cellW / r.chart.jpeg.width)));
+      if (cy === Infinity || cy + headMax + imgH > pdf.H - 40) newChartPage();
+      // a row taller than a fresh page is scaled down to what remains
+      const fitH = Math.min(imgH, pdf.H - 40 - cy - headMax);
+      for (let j = 0; j < row.length; j++) {
+        const { chart, descLines, headH } = row[j];
+        const x = M + j * (cellW + gapX);
+        pdf.text(x, cy, chart.title, { bold: true, size: 11 });
+        let dy = cy + 15;
+        for (const line of descLines) {
+          pdf.text(x, dy, line, { size: 7.5, color: [0.45, 0.44, 0.4] });
+          dy += 10;
         }
-        iy += 6;
+        const ratio = Math.min(cellW / chart.jpeg.width, fitH / chart.jpeg.height);
+        const w = chart.jpeg.width * ratio;
+        const h = chart.jpeg.height * ratio;
+        pdf.image(chart.jpeg, x + (cellW - w) / 2, cy + headH, w, h);
       }
-      const maxW = pdf.W - 2 * M;
-      const maxH = pdf.H - iy - 40;
-      const ratio = Math.min(maxW / chart.jpeg.width, maxH / chart.jpeg.height);
-      const w = chart.jpeg.width * ratio;
-      const h = chart.jpeg.height * ratio;
-      pdf.image(chart.jpeg, M + (maxW - w) / 2, iy, w, h);
+      cy += headMax + fitH + gapY;
     }
 
     // --- data tables (monospace) ---
