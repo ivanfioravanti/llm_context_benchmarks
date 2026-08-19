@@ -206,9 +206,10 @@
 
     if (format === "html") {
       // interactive SVG charts: theme with the report's toggle, points show
-      // their values on hover/click
+      // their values on hover/click; rendered at the half-column size so the
+      // two-per-row grid shows SVG text at ~1:1 instead of scaled down
       const charts = await renderExportCharts(entries, metrics,
-        { raw: true, width: 1060, height: 420, batchHeight: 380, only });
+        { raw: true, width: 680, height: 320, batchHeight: 300, only });
       const legend = entries.map(e => ({ name: e.name, color: seriesColor(e.slot || 0) }));
       const html = CBExport.buildHtmlReport(title, entries, tables, charts, legend);
       CBExport.download(new Blob([html], { type: "text/html" }), `${baseName}_${stamp}.html`);
@@ -216,8 +217,10 @@
     }
 
     // pdf — always the print-friendly light style; value labels because
-    // print has no hover tooltip either
-    const charts = await renderExportCharts(entries, metrics, { theme: "light", only, pointLabels: true });
+    // print has no hover tooltip either. Rendered near the per-cell size
+    // (two charts per row) so tick and value labels stay legible.
+    const charts = await renderExportCharts(entries, metrics,
+      { theme: "light", width: 760, height: 330, batchHeight: 300, only, pointLabels: true });
     const chartData = [];
     for (const c of charts) chartData.push({ title: c.title, jpeg: await CBExport.canvasToJpeg(c.canvas) });
     const pdf = CBExport.buildPdfReport(title, entries, tables, chartData);
