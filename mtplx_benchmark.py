@@ -43,10 +43,13 @@ def server_root(base_url: str) -> str:
     return normalized
 
 
-def test_server_connection(base_url: str, timeout: int = 10) -> Optional[Dict]:
+def test_server_connection(base_url: str, api_key: Optional[str] = None, timeout: int = 10) -> Optional[Dict]:
     """Hit ``/health`` and return its JSON, or None on failure."""
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = httpx.get(f"{server_root(base_url)}/health", timeout=timeout)
+        resp = httpx.get(f"{server_root(base_url)}/health", headers=headers, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except Exception as exc:
@@ -54,20 +57,26 @@ def test_server_connection(base_url: str, timeout: int = 10) -> Optional[Dict]:
         return None
 
 
-def list_models(base_url: str, timeout: int = 10) -> List[str]:
+def list_models(base_url: str, api_key: Optional[str] = None, timeout: int = 10) -> List[str]:
     """Return model IDs reported by ``/v1/models``."""
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = httpx.get(f"{base_url.rstrip('/')}/models", timeout=timeout)
+        resp = httpx.get(f"{base_url.rstrip('/')}/models", headers=headers, timeout=timeout)
         resp.raise_for_status()
         return [m["id"] for m in resp.json().get("data", [])]
     except Exception:
         return []
 
 
-def clear_server_cache(base_url: str, timeout: int = 30) -> None:
+def clear_server_cache(base_url: str, api_key: Optional[str] = None, timeout: int = 30) -> None:
     """Drop MTPLX's session bank so the next request gets a true cold prefill."""
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        httpx.post(f"{server_root(base_url)}/admin/cache/clear", timeout=timeout)
+        httpx.post(f"{server_root(base_url)}/admin/cache/clear", headers=headers, timeout=timeout)
     except Exception as exc:
         print(f"  Warning: cache clear failed: {exc}")
 
@@ -133,7 +142,7 @@ def run_benchmark(
     if cold_prefill:
         prompt = common.make_cache_buster() + prompt
         if clear_cache:
-            clear_server_cache(base_url)
+            clear_server_cache(base_url, api_key=api_key)
     elif _run_idx is not None:
         prompt = common.make_cache_buster(run_idx=_run_idx) + prompt
 
@@ -345,7 +354,7 @@ def run_batch_benchmark(
         print(f"\n  Batch size {bs} ({num_trials} trials, ~{prompt_tokens} prompt tokens, {gen_tokens} gen tokens)...")
 
         if clear_cache and cold_prefill:
-            clear_server_cache(base_url)
+            clear_server_cache(base_url, api_key=api_key)
 
         # Warmup
         print("    Warmup...")
@@ -487,7 +496,7 @@ def main() -> int:
     base_url = normalize_base_url(args.base_url)
 
     print(f"\nTesting connection to {base_url} ...")
-    health = test_server_connection(base_url)
+    health = test_server_connection(base_url, api_key=args.api_key)
     if not health or not health.get("ok"):
         print(f"Error: MTPLX server not reachable at {base_url}")
         return 1
@@ -498,7 +507,7 @@ def main() -> int:
 
     model = args.model
     if not model:
-        models = list_models(base_url)
+        models = list_models(base_url, api_key=args.api_key)
         if not models:
             model = server_model
         else:
