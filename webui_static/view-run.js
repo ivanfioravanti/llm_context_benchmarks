@@ -9,6 +9,7 @@
   const {
     state, esc, fmt, api, toast, fmtDuration, pageHead, engineById, endpointTarget,
     attachModelPicker, modelPickerHtml, currentView,
+    seriesColor, ctxNum, METRICS, qmarkHtml, openModal, closeModal,
   } = CB;
 
   // connection values for the run: from the endpoint, else the draft / DOM
@@ -100,7 +101,11 @@
       ${pageHead("Bench · Launch", "Run sweep",
         "Prompt processing & generation speed across context sizes.")}
       <div class="grid-2">
-        <div class="panel">
+        <div>
+          <div class="panel-head" style="margin-bottom:8px">
+            <span class="eyebrow">Run settings</span>
+          </div>
+          <div class="panel">
           <div class="form-row cols-2">
             <div class="field">
               <label for="rfEndpoint">Endpoint</label>
@@ -188,6 +193,7 @@
           </details>
           <div class="btn-row" style="margin-top:16px">
             <button class="btn primary" id="rfStart" ${engine.available ? "" : "disabled"}>Start benchmark</button>
+          </div>
           </div>
         </div>
         <div>
@@ -431,6 +437,7 @@
       if (!card) card = createRunCard(container, run);
       updateRunCard(card, run);
     }
+    refreshLiveDetail(runs);
     if (anyActive) startRunsPolling(); else stopRunsPolling();
   }
 
@@ -481,6 +488,7 @@
         </div>
         <div class="run-card-spacer"></div>
         <button class="btn small" data-act="toggle-log">Log</button>
+        <button class="btn small" data-act="live-detail" hidden>Detail</button>
         <button class="btn small danger" data-act="stop">Stop</button>
         <button class="btn small danger" data-act="delete" hidden>Delete</button>
       </div>
@@ -500,6 +508,7 @@
     card.querySelector('[data-act="stop"]').addEventListener("click", async () => {
       try { await api(`/api/runs/${run.id}/stop`, { method: "POST" }); } catch (e) { toast(e.message, true); }
     });
+    card.querySelector('[data-act="live-detail"]').addEventListener("click", () => openLiveDetail(run.id));
     card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
       if (!confirm("Remove this run from the list?")) return;
       try {
@@ -523,6 +532,7 @@
     const active = run.status === "running" || run.status === "starting";
     card.querySelector('[data-act="stop"]').hidden = !active;
     card.querySelector('[data-act="delete"]').hidden = active;
+    card.querySelector('[data-act="live-detail"]').hidden = !(run.progress && run.progress.length);
     card.querySelector(".run-card-title").textContent =
       (run.label ? run.label + " — " : "") + run.engine + " · " + run.model;
     const statusText = { starting: "starting", running: "running", done: "completed",
@@ -615,6 +625,113 @@
         } catch (e) { /* next reload picks it up */ }
       }
     }
+  }
+
+  // ------------------------------------------------- live detail modal
+
+  let liveDetailRunId = null;
+
+  const LIVE_KEYS = ["prompt_tps", "generation_tps", "time_to_first_token", "total_time"];
+
+  function liveMetric(key) {
+    return METRICS.find(m => m.key === key)
+      || { label: key.replace(/_/g, " "), unit: /time/.test(key) ? "s" : "", seconds: /time/.test(key) };
+  }
+
+  function openLiveDetail(runId) {
+    liveDetailRunId = runId;
+    api(`/api/runs/${runId}`).then(run => {
+      if (liveDetailRunId === runId) renderLiveDetail(run);
+    }).catch(e => toast(e.message, true));
+  }
+
+  function renderLiveDetail(run) {
+    const panel = key => {
+      const metric = liveMetric(key);
+      return `<div><div class="chart-title">${esc(metric.label)}
+        ${metric.unit ? `<span class="unit">${esc(metric.unit)}</span>` : ""}${qmarkHtml(metric.desc)}</div>
+        <div data-chart="${esc(key)}"></div></div>`;
+    };
+    const modal = openModal(`
+      <button class="btn small modal-close" data-close>Close</button>
+      <div class="eyebrow">${esc(run.engine)} · live detail</div>
+      <h2>${esc((run.label ? run.label + " — " : "") + run.model)}</h2>
+      <div class="page-sub" data-f="lsub"></div>
+      <div class="detail-charts">${LIVE_KEYS.map(panel).join("")}${panel("batch")}
+        <div class="live-table-cell"><div data-f="ltable"></div></div></div>
+      <p class="hint" style="margin:8px 0 0">Live values scraped from engine output while the run is in
+        progress — the saved result folder stays authoritative once it completes.</p>`);
+    modal.classList.add("live-detail");
+    modal.dataset.liveRun = run.id;
+    modal.dataset.sig = "";
+    drawLiveDetail(modal, run);
+  }
+
+  function drawLiveDetail(modal, run) {
+    const sig = JSON.stringify([run.status, run.progress]);
+    if (modal.dataset.sig === sig) return;
+    modal.dataset.sig = sig;
+
+    modal.querySelector('[data-f="lsub"]').textContent = runProgressSummary(run,
+      { starting: "starting", running: "running", done: "completed",
+        failed: "failed (exit " + run.returncode + ")", stopped: "stopped" }[run.status] || run.status);
+
+    const rows = run.progress || [];
+    const ctxRows = rows.filter(r => r.context != null);
+    for (const key of LIVE_KEYS) {
+      const node = modal.querySelector(`[data-chart="${key}"]`);
+      if (!node) continue;
+      node.parentElement.hidden = !ctxRows.some(r => r[key] != null);
+      const metric = liveMetric(key);
+      Charts.lineChart(node, {
+        series: [{ name: "live", color: seriesColor(0),
+          points: ctxRows.map(r => [ctxNum(r.context), r[key]]) }],
+        logX: true, height: 170, seconds: !!metric.seconds,
+        xLabel: "context", yLabel: metric.unit || "",
+      });
+    }
+
+    const batchNode = modal.querySelector('[data-chart="batch"]');
+    const batchRows = rows.filter(r => r.batch_size != null);
+    if (batchNode) {
+      batchNode.parentElement.hidden = !batchRows.length;
+      if (batchRows.length) {
+        Charts.lineChart(batchNode, {
+          series: [
+            { name: "prompt t/s", color: seriesColor(1),
+              points: batchRows.map(r => [r.batch_size, r.prompt_tps]) },
+            { name: "gen t/s", color: seriesColor(2),
+              points: batchRows.map(r => [r.batch_size, r.generation_tps]) },
+          ],
+          logX: true, height: 170, xLabel: "batch", yLabel: "tok/s", legend: true,
+        });
+      }
+    }
+
+    const cols = [
+      ["prompt_tps", "prompt t/s"], ["generation_tps", "gen t/s"],
+      ["time_to_first_token", "ttft", { seconds: true }], ["total_time", "total s", { seconds: true }],
+      ["peak_memory_gb", "peak GB"],
+    ].filter(([key]) => rows.some(r => r[key] != null));
+    modal.querySelector('[data-f="ltable"]').innerHTML = cols.length ? `
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>phase</th>${cols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${esc(r.context != null
+          ? (/k$/.test(r.context) ? r.context : r.context + "k") : r.batch_size + "× batch")}</td>
+          ${cols.map(([key, , o]) => `<td>${esc(fmt(r[key], o))}</td>`).join("")}</tr>`).join("")}
+        </tbody></table></div>` : "";
+    const tableCell = modal.querySelector(".live-table-cell");
+    if (tableCell) tableCell.hidden = !cols.length;
+  }
+
+  function refreshLiveDetail(runs) {
+    if (!liveDetailRunId) return;
+    const backdrop = document.getElementById("modalBackdrop");
+    const modal = document.getElementById("modal");
+    if (backdrop.hidden || modal.dataset.liveRun !== liveDetailRunId) { liveDetailRunId = null; return; }
+    const run = runs.find(r => r.id === liveDetailRunId);
+    if (!run) { closeModal(); liveDetailRunId = null; return; }
+    drawLiveDetail(modal, run);
   }
 
   function startRunsPolling() {

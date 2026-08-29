@@ -26,17 +26,31 @@ BATCH_SKIP_RE = re.compile(
     re.IGNORECASE,
 )
 GEN_TPS_RES = [
-    re.compile(r"Generation:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
-    re.compile(r"Generation TPS:\s+([\d.]+)"),
-    re.compile(r"generation_tps:\s+([\d.]+)"),
+    re.compile(r"Generation:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),  # ollama-api, lmstudio
+    re.compile(r"Generation TPS:\s+([\d.]+)"),  # mtplx, mlxserve, dflash, llamacpp, openai, ...
+    re.compile(r"generation_tps:\s+([\d.]+)"),  # run_benchmark_peak per-run line
+    re.compile(r"Generation throughput:\s+([\d.]+)\s*tokens/sec"),  # omlx, deepseek, grok, exo, vmlx
+    re.compile(r"Generation:\s+\d+\s+tokens\s+at\s+([\d.]+)\s*t/s"),  # ollama-cli
+    re.compile(r"\btg\s+([\d.]+)\s*t/s"),  # batch trial / peak lines: "pp 900.0 tg 55.0 t/s"
 ]
 PROMPT_TPS_RES = [
-    re.compile(r"Prompt:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),
-    re.compile(r"Prompt TPS:\s+([\d.]+)"),
+    re.compile(r"Prompt:\s+\d+\s+tokens\s+in\s+[\d.]+s\s+=\s+([\d.]+)\s*t/s"),  # ollama-api, lmstudio
+    re.compile(r"Prompt TPS:\s+([\d.]+)"),  # mtplx, mlxserve, dflash, llamacpp, openai, ...
+    re.compile(r"Prompt throughput:\s+([\d.]+)\s*tokens/sec"),  # omlx, deepseek, grok, exo, vmlx, mlx-vlm
+    re.compile(r"\bpp\s+([\d.]+)\s+tg"),  # batch trial / peak lines: "pp 900.0 tg 55.0 t/s"
+    re.compile(r"Prompt:\s+\d+\s+tokens,\s+([\d.]+)\s*tokens-per-sec"),  # mlx, mlx-distributed
+    re.compile(r"Prompt:\s+\d+\s+tokens\s+at\s+([\d.]+)\s*t/s"),  # ollama-cli
+    re.compile(r"prompt_tps:\s+([\d.]+)"),  # run_benchmark_peak merged-peak line
 ]
 TTFT_RES = [
     re.compile(r"Time to first token:\s+([\d.]+)s"),
     re.compile(r"TTFT:\s+([\d.]+)s"),
+]
+TOTAL_TIME_RES = [
+    re.compile(r"Total(?: wall)? time:\s+([\d.]+)s"),
+]
+PEAK_MEM_RES = [
+    re.compile(r"[Pp]eak mem(?:ory)?:\s+([\d.]+)\s*GB"),
 ]
 
 SECRET_FLAGS = {"--api-key"}
@@ -84,7 +98,20 @@ def format_command(argv: list, secret_placeholder: str = "***") -> str:
 
 
 class BenchmarkRun:
-    def __init__(self, run_id, kind, engine_id, tag, model, label, endpoint_name, argv, contexts, endpoint_hardware=""):
+    def __init__(
+        self,
+        run_id,
+        kind,
+        engine_id,
+        tag,
+        model,
+        label,
+        endpoint_name,
+        argv,
+        contexts,
+        endpoint_hardware="",
+        settings=None,
+    ):
         self.id = run_id
         self.kind = kind  # "benchmark" | "ctxgen"
         self.engine = engine_id
@@ -113,7 +140,13 @@ class BenchmarkRun:
         self.phase = None
         self.live = {}
         self.result_folders = []
+        # original /api/runs start payload, replayed by the Results »rerun« button
+        self.settings = settings
         self.error = None
+        # per-context / per-batch metrics accumulated from console output;
+        # entries are {"context": "2k", ...} or {"batch_size": 8, ...} with
+        # whatever metric lines the engine has printed for them so far
+        self.progress = []
 
     def snapshot(self):
         with self.lock:
@@ -143,6 +176,7 @@ class BenchmarkRun:
                 "result_folders": list(self.result_folders),
                 "error": self.error,
                 "log_length": len(self.log_lines),
+                "progress": [dict(entry) for entry in self.progress],
             }
 
     def log_slice(self, offset):
@@ -155,7 +189,19 @@ class RunManager:
         self.runs = {}
         self.lock = threading.Lock()
 
-    def start(self, kind, engine_id, tag, model, label, endpoint_name, argv, contexts, endpoint_hardware=""):
+    def start(
+        self,
+        kind,
+        engine_id,
+        tag,
+        model,
+        label,
+        endpoint_name,
+        argv,
+        contexts,
+        endpoint_hardware="",
+        settings=None,
+    ):
         run = BenchmarkRun(
             uuid.uuid4().hex[:12],
             kind,
@@ -167,6 +213,7 @@ class RunManager:
             argv,
             contexts,
             endpoint_hardware=endpoint_hardware,
+            settings=settings,
         )
         with self.lock:
             self.runs[run.id] = run
@@ -248,6 +295,8 @@ class RunManager:
                     run.current_context = ctx
                     run.contexts_done = len(seen_contexts)
                     run.phase = "context"
+                    if not run.progress or run.progress[-1].get("context") != ctx:
+                        run.progress.append({"context": ctx})
                 batch_match = BATCH_PROGRESS_RE.search(line)
                 if batch_match:
                     batch_size = int(batch_match.group(1))
@@ -274,6 +323,8 @@ class RunManager:
                             run.current_batch_index = None
                     run.current_batch_size = batch_size
                     run.phase = "batch"
+                    if not run.progress or run.progress[-1].get("batch_size") != batch_size:
+                        run.progress.append({"batch_size": batch_size})
                 skip_match = BATCH_SKIP_RE.search(line)
                 if skip_match and run.batch_sizes:
                     skipped_size = int(skip_match.group(1))
@@ -308,20 +359,41 @@ class RunManager:
                 for regex in GEN_TPS_RES:
                     m = regex.search(line)
                     if m:
-                        run.live["generation_tps"] = float(m.group(1))
+                        value = float(m.group(1))
+                        run.live["generation_tps"] = value
+                        if run.progress:
+                            run.progress[-1]["generation_tps"] = value
                         live_updated = True
                         break
                 for regex in PROMPT_TPS_RES:
                     m = regex.search(line)
                     if m:
-                        run.live["prompt_tps"] = float(m.group(1))
+                        value = float(m.group(1))
+                        run.live["prompt_tps"] = value
+                        if run.progress:
+                            run.progress[-1]["prompt_tps"] = value
                         live_updated = True
                         break
                 for regex in TTFT_RES:
                     m = regex.search(line)
                     if m:
-                        run.live["ttft"] = float(m.group(1))
+                        value = float(m.group(1))
+                        run.live["ttft"] = value
+                        if run.progress:
+                            run.progress[-1]["time_to_first_token"] = value
                         live_updated = True
+                        break
+                for regex in TOTAL_TIME_RES:
+                    m = regex.search(line)
+                    if m:
+                        if run.progress:
+                            run.progress[-1]["total_time"] = float(m.group(1))
+                        break
+                for regex in PEAK_MEM_RES:
+                    m = regex.search(line)
+                    if m:
+                        if run.progress:
+                            run.progress[-1]["peak_memory_gb"] = float(m.group(1))
                         break
                 if live_updated and run.phase:
                     run.live["source"] = run.phase
@@ -350,6 +422,8 @@ class RunManager:
                         "endpoint_hardware": run.endpoint_hardware or "",
                         "created": datetime.now().isoformat(timespec="seconds"),
                     }
+                    if run.settings:
+                        meta["settings"] = run.settings
                     meta_path.write_text(json.dumps(meta, indent=2))
                     folders.append(name)
             except OSError:

@@ -480,7 +480,19 @@ def api_runs_start(payload: dict):
         argv,
         contexts,
         endpoint_hardware=endpoint_hardware,
+        settings=payload,
     )
+    return run.snapshot()
+
+
+@app.get("/api/results/{name}/settings")
+def api_results_settings(name: str):
+    """Return the stored launch settings of a saved run (for the »rerun« button)."""
+    folder = resolve_result_folder(name)
+    settings = read_run_meta(folder).get("settings")
+    if not settings:
+        raise HTTPException(404, "No saved settings for this run")
+    return settings
     return run.snapshot()
 
 

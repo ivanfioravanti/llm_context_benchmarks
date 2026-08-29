@@ -68,6 +68,7 @@
         <div class="r-actions">
           <span class="r-date">${esc(fmtDate(r.timestamp))}</span>
           <button class="btn small" data-act="detail">Details</button>
+          <button class="btn small" data-act="rerun" title="Load this run's settings into the Run form">↻ Rerun</button>
           <button class="btn small" data-act="rename" title="Rename label">✎</button>
           <button class="btn small danger" data-act="delete" title="Delete result">✕</button>
         </div>
@@ -82,6 +83,7 @@
       });
       row.querySelector('[data-act="detail"]').addEventListener("click", () => openDetail(folder));
       row.querySelector('[data-act="rename"]').addEventListener("click", () => renameResult(folder));
+      row.querySelector('[data-act="rerun"]').addEventListener("click", () => rerunResult(folder));
       row.querySelector('[data-act="delete"]').addEventListener("click", () => deleteResult(folder));
     });
     updateCompareButton();
@@ -105,6 +107,42 @@
       renderResultRows();
     } catch (e) { toast(e.message, true); }
   }
+  async function rerunResult(folder) {
+    let settings;
+    try {
+      settings = await api(`/api/results/${encodeURIComponent(folder)}/settings`);
+    } catch (e) {
+      toast("No saved settings for this run — it was started before settings were recorded.", true);
+      return;
+    }
+    const draft = state.runForm;
+    const epExists = settings.endpoint_id && state.endpoints.some(x => x.id === settings.endpoint_id);
+    draft.endpoint = epExists ? settings.endpoint_id : "";
+    draft.engine = settings.engine || draft.engine;
+    draft.model = settings.model || "";
+    draft.label = settings.label || "";
+    draft.contexts = String(settings.contexts || "").split(",").map(s => s.trim()).filter(Boolean);
+    draft.maxTokens = String(settings.max_tokens ?? "");
+    draft.runs = String(settings.runs ?? "");
+    draft.timeout = String(settings.timeout ?? "");
+    draft.saveResponses = !!settings.save_responses;
+    draft.coldPrefill = settings.cold_prefill !== false;
+    draft.options = Object.assign({}, settings.options);
+    draft.extraArgs = settings.extra_args || "";
+    if (!epExists) {
+      const conn = settings.connection || {};
+      draft.baseUrl = conn.base_url || draft.baseUrl || "";
+      draft.apiKey = conn.api_key || "";
+      draft.host = conn.host || draft.host || "localhost";
+      draft.port = conn.port || draft.port || "8080";
+    }
+    location.hash = "run";
+    // the hashchange re-render captures the (stale) form first — render ours
+    // now with keepDraft so that capture round-trips the loaded settings
+    CB.views.run({ keepDraft: true });
+    toast("Settings loaded — review and press »Start benchmark«.");
+  }
+
 
   async function deleteResult(folder) {
     if (!confirm(`Delete result »${folder}«?\nThis removes the folder from output/ permanently.`)) return;
