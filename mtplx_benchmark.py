@@ -356,21 +356,30 @@ def run_batch_benchmark(
         if clear_cache and cold_prefill:
             clear_server_cache(base_url, api_key=api_key)
 
-        # Warmup
+        # Warmup — a server error here must skip this batch size, not kill
+        # the run (the webui also matches this line to mark the chip skipped).
         print("    Warmup...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
-            list(pool.map(lambda _: single_request(), range(bs)))
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                list(pool.map(lambda _: single_request(), range(bs)))
+        except Exception as e:
+            print(f"    Warmup failed for batch size {bs}: {e} — skipping")
+            continue
 
         trial_prompt_tps: List[float] = []
         trial_gen_tps: List[float] = []
         trial_peak_mem: List[float] = []
 
         for trial in range(num_trials):
-            start = time.time()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
-                futures = [pool.submit(single_request) for _ in range(bs)]
-                responses = [f.result() for f in futures]
-            wall_time = time.time() - start
+            try:
+                start = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as pool:
+                    futures = [pool.submit(single_request) for _ in range(bs)]
+                    responses = [f.result() for f in futures]
+                wall_time = time.time() - start
+            except Exception as e:
+                print(f"    Trial {trial + 1} failed: {e}")
+                continue
 
             total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
             total_gen_tok = sum(r["generation_tokens"] for r in responses)
@@ -644,18 +653,22 @@ def main() -> int:
         print(f"\n{'=' * 50}")
         print("BATCH BENCHMARK (concurrent requests)")
         print(f"{'=' * 50}")
-        batch_results = run_batch_benchmark(
-            base_url=base_url,
-            api_key=args.api_key,
-            request_model=request_model,
-            batch_sizes=batch_sizes,
-            prompt_tokens=args.batch_prompt_tokens,
-            gen_tokens=args.batch_gen_tokens,
-            num_trials=args.batch_trials,
-            generation_mode=args.generation_mode,
-            cold_prefill=args.cold_prefill,
-            clear_cache=args.clear_cache,
-        )
+        try:
+            batch_results = run_batch_benchmark(
+                base_url=base_url,
+                api_key=args.api_key,
+                request_model=request_model,
+                batch_sizes=batch_sizes,
+                prompt_tokens=args.batch_prompt_tokens,
+                gen_tokens=args.batch_gen_tokens,
+                num_trials=args.batch_trials,
+                generation_mode=args.generation_mode,
+                cold_prefill=args.cold_prefill,
+                clear_cache=args.clear_cache,
+            )
+        except Exception as e:
+            print(f"\nBatch benchmark failed (continuing): {e}")
+            batch_results = None
         total_benchmark_time = time.time() - benchmark_start
 
     has_memory = any(r.get("peak_memory_gb", 0) > 0 for r in results)
