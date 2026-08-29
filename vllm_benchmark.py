@@ -832,7 +832,7 @@ def run_batch_benchmark(
     vLLM's defining feature is continuous batching, so we fire N concurrent
     non-streaming /chat/completions requests and report aggregate prompt +
     generation tokens/sec (total tokens across the batch / wall time),
-    averaged over ``num_trials`` trials per batch size.
+    peak per metric over ``num_trials`` trials per batch size.
     """
     import concurrent.futures
     import statistics
@@ -995,12 +995,14 @@ def run_batch_benchmark(
             )
 
         if trial_prompt_tps:
-            avg_prompt = statistics.mean(trial_prompt_tps)
-            avg_gen = statistics.mean(trial_gen_tps)
+            # Peak per metric, taken independently: a slow trial (scheduling,
+            # system hiccup) must not drag down the reported throughput.
+            peak_prompt = max(trial_prompt_tps)
+            peak_gen = max(trial_gen_tps)
             result = {
                 "batch_size": bs,
-                "prompt_tps": round(avg_prompt, 2),
-                "generation_tps": round(avg_gen, 2),
+                "prompt_tps": round(peak_prompt, 2),
+                "generation_tps": round(peak_gen, 2),
             }
             if trial_ttft:
                 result["time_to_first_token"] = round(statistics.median(trial_ttft), 3)
@@ -1009,7 +1011,7 @@ def run_batch_benchmark(
             if trial_kv_perc:
                 result["kv_cache_usage_perc"] = round(max(trial_kv_perc), 4)
             batch_results.append(result)
-            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
 
     return batch_results
 

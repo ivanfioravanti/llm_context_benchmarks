@@ -663,20 +663,26 @@ def run_batch_benchmark(
                 )
 
             if trial_prompt_tps:
-                avg_prompt_tps = statistics.mean(trial_prompt_tps)
-                avg_gen_tps = statistics.mean(trial_gen_tps)
+                # Peak per metric, taken independently: a slow trial (thermal
+                # throttling, system hiccup) must not drag down the reported
+                # throughput of the other phase. Durations come from the
+                # winning trials so they stay consistent with the peaks.
+                peak_prompt_tps = max(trial_prompt_tps)
+                peak_gen_tps = max(trial_gen_tps)
+                prompt_idx = trial_prompt_tps.index(peak_prompt_tps)
+                gen_idx = trial_gen_tps.index(peak_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
                 avg_kv_gb = (statistics.mean(trial_kv_bytes) / 1e9) if trial_kv_bytes else 0.0
 
                 print(
-                    f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, "
+                    f"  Peak: pp {peak_prompt_tps:.1f} tg {peak_gen_tps:.1f} t/s, "
                     f"peak mem {peak_mem:.2f} GB, kv cache {avg_kv_gb:.2f} GB"
                 )
 
                 result = {
                     "batch_size": bs,
-                    "prompt_tps": round(avg_prompt_tps, 2),
-                    "generation_tps": round(avg_gen_tps, 2),
+                    "prompt_tps": round(peak_prompt_tps, 2),
+                    "generation_tps": round(peak_gen_tps, 2),
                     "peak_memory_gb": round(peak_mem, 3),
                     "kv_cache_gb": round(avg_kv_gb, 3),
                 }
@@ -685,10 +691,12 @@ def run_batch_benchmark(
                 if trial_tpot:
                     result["time_per_output_token"] = round(statistics.median(trial_tpot), 5)
                 if trial_prompt_times:
-                    result["prompt_eval_duration"] = round(statistics.mean(trial_prompt_times), 4)
+                    result["prompt_eval_duration"] = round(trial_prompt_times[prompt_idx], 4)
                 if trial_gen_times:
-                    result["eval_duration"] = round(statistics.mean(trial_gen_times), 4)
-                if trial_wall_times:
+                    result["eval_duration"] = round(trial_gen_times[gen_idx], 4)
+                if trial_prompt_times and trial_gen_times:
+                    result["total_time"] = round(trial_prompt_times[prompt_idx] + trial_gen_times[gen_idx], 4)
+                elif trial_wall_times:
                     result["total_time"] = round(statistics.mean(trial_wall_times), 4)
                 if trial_prompt_tokens:
                     result["prompt_tokens"] = int(round(statistics.mean(trial_prompt_tokens)))

@@ -297,7 +297,6 @@ def run_batch_benchmark(
         List of result dicts with batch_size, prompt_tps, generation_tps, peak_memory_gb.
     """
     import concurrent.futures
-    import statistics
 
     import tiktoken
 
@@ -378,15 +377,17 @@ def run_batch_benchmark(
             print(f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)")
 
         if trial_prompt_tps:
-            avg_prompt = statistics.mean(trial_prompt_tps)
-            avg_gen = statistics.mean(trial_gen_tps)
+            # Peak per metric, taken independently: a slow trial (scheduling,
+            # system hiccup) must not drag down the reported throughput.
+            peak_prompt = max(trial_prompt_tps)
+            peak_gen = max(trial_gen_tps)
             result = {
                 "batch_size": bs,
-                "prompt_tps": round(avg_prompt, 2),
-                "generation_tps": round(avg_gen, 2),
+                "prompt_tps": round(peak_prompt, 2),
+                "generation_tps": round(peak_gen, 2),
                 "peak_memory_gb": round(max(trial_peak_mem), 3) if trial_peak_mem else 0.0,
             }
-            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
             batch_results.append(result)
 
     return batch_results

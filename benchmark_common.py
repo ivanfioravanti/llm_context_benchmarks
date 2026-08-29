@@ -1703,7 +1703,7 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
         "--runs",
         type=int,
         default=2,
-        help="Number of runs per context size; peak score is kept (default: 2)",
+        help="Number of runs per context size; peak decode and prefill are kept independently (default: 2)",
     )
     parser.add_argument(
         "--timeout",
@@ -1745,6 +1745,65 @@ def _is_degenerate_generation(result: Dict) -> bool:
     return False
 
 
+# Fields that describe the prompt (prefill) phase of a result. When the best
+# prefill comes from a different run than the best decode, these are copied
+# from the prefill-winning run so both phases report their peak independently.
+PREFILL_PHASE_FIELDS = (
+    "prompt_tps",
+    "prompt_eval_duration",
+    "prompt_utf8_bytes_per_sec",
+    "prompt_chars_per_sec",
+)
+
+
+def merge_peak_results(run_results: List[Dict], metric: str = "generation_tps") -> Optional[Dict]:
+    """Combine per-run results into one dict with independent per-phase peaks.
+
+    The decode winner (highest ``metric``, default ``generation_tps``) provides
+    the base result.  The prefill winner (highest ``prompt_tps``) then
+    overrides the prompt-phase fields, even when it is a different run — so a
+    scheduling hiccup or spike in one run cannot drag down the reported peak
+    of the other phase.  ``total_time`` is recomputed from the two winning
+    phase durations and ``time_to_first_token`` takes the fastest run.
+
+    Args:
+        run_results: Non-degenerate result dicts from the runs of one context size.
+        metric: Decode-phase metric to maximize when picking the base run.
+
+    Returns:
+        Merged result dict, or None when ``run_results`` is empty.
+    """
+    if not run_results:
+        return None
+
+    base = max(run_results, key=lambda r: r.get(metric, 0) or 0)
+    prefill_best = max(run_results, key=lambda r: r.get("prompt_tps", 0) or 0)
+    merged = dict(base)
+
+    if prefill_best is not base and prefill_best.get("prompt_tps", 0):
+        for field in PREFILL_PHASE_FIELDS:
+            if prefill_best.get(field):
+                merged[field] = prefill_best[field]
+        print(
+            f"    Prefill peak from a different run: prompt_tps "
+            f"{base.get('prompt_tps', 0):.2f} -> {prefill_best['prompt_tps']:.2f}"
+        )
+
+    # Keep total_time consistent with the (possibly mixed) phase durations.
+    prompt_duration = merged.get("prompt_eval_duration", 0) or 0
+    eval_duration = merged.get("eval_duration", 0) or 0
+    if prompt_duration > 0 and eval_duration > 0:
+        merged["total_time"] = prompt_duration + eval_duration
+
+    # TTFT is prefill-bound; the fastest run is its peak (spike-resistant).
+    ttfts = [r.get("time_to_first_token", 0) or 0 for r in run_results]
+    ttfts = [t for t in ttfts if t > 0]
+    if ttfts:
+        merged["time_to_first_token"] = min(ttfts)
+
+    return merged
+
+
 def run_benchmark_peak(
     run_fn,
     *args,
@@ -1753,7 +1812,11 @@ def run_benchmark_peak(
     reject_prefill_cache_hits=False,
     **kwargs,
 ):
-    """Run benchmark N times and return the result with peak generation_tps.
+    """Run benchmark N times and return the merged per-phase peak result.
+
+    The peak decode (``metric``) and peak prefill (``prompt_tps``) are taken
+    independently across runs via ``merge_peak_results`` — they may come from
+    different runs.
 
     Each run gets a unique ``_run_idx`` keyword argument so the engine can
     bust any server-side KV cache that may carry over from a previous run.
@@ -1774,7 +1837,8 @@ def run_benchmark_peak(
         **kwargs: Keyword arguments forwarded to run_fn.
 
     Returns:
-        Result dict from the run with the highest metric value, or None if all runs fail.
+        Merged result dict combining the peak decode and prefill phases across
+        runs, or None if all runs fail.
     """
     run_results = []
     for run_idx in range(1, n_runs + 1):
@@ -1820,10 +1884,11 @@ def run_benchmark_peak(
         if filtered_results:
             run_results = filtered_results
 
-    best_result = max(run_results, key=lambda r: r.get(metric, 0), default=None)
-    best_score = best_result.get(metric, 0) if best_result else -1
+    best_result = merge_peak_results(run_results, metric=metric)
     if best_result:
-        print(f"  Peak {metric}: {best_score:.2f}")
+        print(
+            f"  Peak {metric}: {best_result.get(metric, 0):.2f}, peak prompt_tps: {best_result.get('prompt_tps', 0):.2f}"
+        )
     # Clean up so the kwarg doesn't leak if the dict is reused
     kwargs.pop("_run_idx", None)
     return best_result
@@ -1839,8 +1904,8 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
     different runs are cache-isolated while the same run reuses cache across
     context sizes.
 
-    For each context size, the result with the peak metric value across runs is
-    returned.
+    For each context size, the merged per-phase peak across runs is returned
+    (see ``merge_peak_results``).
 
     Args:
         run_fn: Engine-specific run_benchmark function.
@@ -1884,10 +1949,12 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
     for context_file in context_files:
         run_results = all_results[context_file.stem]
         if run_results:
-            best = max(run_results, key=lambda r: r.get(metric, 0))
-            print(f"  {context_file.name}: Peak {metric}: {best.get(metric, 0):.2f}")
+            best = merge_peak_results(run_results, metric=metric)
+            print(
+                f"  {context_file.name}: Peak {metric}: {best.get(metric, 0):.2f}, "
+                f"peak prompt_tps: {best.get('prompt_tps', 0):.2f}"
+            )
             results.append(best)
-
     kwargs.pop("_run_idx", None)
     return results
 

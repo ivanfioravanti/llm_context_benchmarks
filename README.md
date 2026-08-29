@@ -112,7 +112,8 @@ Common options:
 - `--max-tokens 200` — generation cap per run
 - `--timeout 7200` — per-context timeout (default 3600s)
 - `--save-responses` — save model outputs to `response_<size>.txt`
-- `--runs 3` — repeat each context size and keep the peak
+- `--runs 3` — repeat each context size; peak decode and peak prefill are kept
+  independently (they may come from different runs)
 
 Engine-specific options worth knowing:
 

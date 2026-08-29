@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import statistics
 import sys
 import threading
 import time
@@ -335,17 +334,20 @@ def run_batch_benchmark(
                     )
 
             if trial_prompt_tps:
-                avg_prompt_tps = statistics.mean(trial_prompt_tps)
-                avg_gen_tps = statistics.mean(trial_gen_tps)
+                # Peak per metric, taken independently: a slow trial (thermal
+                # throttling, system hiccup) must not drag down the reported
+                # throughput of the other phase.
+                peak_prompt_tps = max(trial_prompt_tps)
+                peak_gen_tps = max(trial_gen_tps)
                 peak_mem = mx.get_peak_memory() / 1e9
 
-                print(f"  Avg: pp {avg_prompt_tps:.1f} tg {avg_gen_tps:.1f} t/s, " f"peak mem {peak_mem:.2f} GB")
+                print(f"  Peak: pp {peak_prompt_tps:.1f} tg {peak_gen_tps:.1f} t/s, " f"peak mem {peak_mem:.2f} GB")
 
                 batch_results.append(
                     {
                         "batch_size": bs,
-                        "prompt_tps": round(avg_prompt_tps, 2),
-                        "generation_tps": round(avg_gen_tps, 2),
+                        "prompt_tps": round(peak_prompt_tps, 2),
+                        "generation_tps": round(peak_gen_tps, 2),
                         "peak_memory_gb": round(peak_mem, 3),
                     }
                 )

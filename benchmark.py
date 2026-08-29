@@ -278,7 +278,7 @@ Examples:
         "--runs",
         type=int,
         default=2,
-        help="Number of runs per context size; peak score is kept (default: 2)",
+        help="Number of runs per context size; peak decode and prefill are kept independently (default: 2)",
     )
 
     # Engine-specific options

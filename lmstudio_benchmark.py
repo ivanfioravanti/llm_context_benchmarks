@@ -21,7 +21,6 @@ Usage:
 
 import argparse
 import os
-import statistics
 import sys
 import time
 import uuid
@@ -335,8 +334,7 @@ def run_batch_benchmark(
         batch_sizes: Concurrency levels to test
         prompt_tokens: Approximate prompt tokens per request
         gen_tokens: Tokens to generate per request
-        num_trials: Trials per batch size (averaged)
-        cold_prefill: Prepend a unique cache-buster per request
+        num_trials: Trials per batch size (peak kept per metric)
         timeout: Per-request timeout
 
     Returns:
@@ -465,14 +463,16 @@ def run_batch_benchmark(
             )
 
         if trial_prompt_tps:
-            avg_prompt = statistics.mean(trial_prompt_tps)
-            avg_gen = statistics.mean(trial_gen_tps)
-            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            # Peak per metric, taken independently: a slow trial (scheduling,
+            # system hiccup) must not drag down the reported throughput.
+            peak_prompt = max(trial_prompt_tps)
+            peak_gen = max(trial_gen_tps)
+            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
             batch_results.append(
                 {
                     "batch_size": bs,
-                    "prompt_tps": round(avg_prompt, 2),
-                    "generation_tps": round(avg_gen, 2),
+                    "prompt_tps": round(peak_prompt, 2),
+                    "generation_tps": round(peak_gen, 2),
                     # LM Studio's API doesn't report memory; stub for schema
                     "peak_memory_gb": 0.0,
                 }

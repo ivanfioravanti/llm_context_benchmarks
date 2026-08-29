@@ -324,7 +324,6 @@ def run_batch_benchmark(
         List of result dicts with batch_size, prompt_tps, generation_tps
     """
     import concurrent.futures
-    import statistics
 
     import tiktoken
 
@@ -438,21 +437,23 @@ def run_batch_benchmark(
             )
 
         if trial_prompt_tps:
-            avg_prompt = statistics.mean(trial_prompt_tps)
-            avg_gen = statistics.mean(trial_gen_tps)
+            # Peak per metric, taken independently: a slow trial (scheduling,
+            # system hiccup) must not drag down the reported throughput.
+            peak_prompt = max(trial_prompt_tps)
+            peak_gen = max(trial_gen_tps)
             result = {
                 "batch_size": bs,
-                "prompt_tps": round(avg_prompt, 2),
-                "generation_tps": round(avg_gen, 2),
-                "prompt_tps_e2e": round(statistics.mean(trial_prompt_tps_e2e), 2),
-                "generation_tps_e2e": round(statistics.mean(trial_gen_tps_e2e), 2),
+                "prompt_tps": round(peak_prompt, 2),
+                "generation_tps": round(peak_gen, 2),
+                "prompt_tps_e2e": round(max(trial_prompt_tps_e2e), 2),
+                "generation_tps_e2e": round(max(trial_gen_tps_e2e), 2),
             }
             if endpoint_latency_s > 0:
                 result["endpoint_latency_ms"] = round(endpoint_latency_s * 1000, 3)
             if trial_decode_tps:
-                avg_decode = statistics.mean(trial_decode_tps)
-                result["decode_tps_total"] = round(avg_decode, 2)
-                result["decode_tps_per_client"] = round(avg_decode / bs, 2)
+                peak_decode = max(trial_decode_tps)
+                result["decode_tps_total"] = round(peak_decode, 2)
+                result["decode_tps_per_client"] = round(peak_decode / bs, 2)
             if trial_host_mem:
                 result["host_memory_gb"] = round(max(trial_host_mem), 2)
             if trial_peak_mem:
@@ -460,7 +461,7 @@ def run_batch_benchmark(
             else:
                 result["peak_memory_gb"] = 0.0
 
-            print(f"  Avg: pp {avg_prompt:.1f} tg {avg_gen:.1f} t/s")
+            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
             batch_results.append(result)
 
     http_client.close()
