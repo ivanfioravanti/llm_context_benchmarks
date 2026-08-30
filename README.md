@@ -3,7 +3,7 @@
 Benchmark prompt-processing and generation throughput across context sizes
 (0.5k–128k tokens) for many inference engines: Ollama (API & CLI), MLX,
 MLX Distributed, MLX-VLM, llama.cpp, LM Studio, Exo, Apple Foundation Models
-Serve, vMLX, oMLX, Paroquant, and any OpenAI-compatible endpoint.
+Serve, vMLX, oMLX, Paroquant, SGLang, vLLM, and any OpenAI-compatible endpoint.
 
 Optimized for Apple Silicon but works anywhere Python runs.
 
@@ -28,6 +28,8 @@ Engine-specific setup:
 | LM Studio | Install [LM Studio](https://lmstudio.ai), start the local server |
 | Apple Foundation Models Serve | Start the local server; defaults to `http://127.0.0.1:1976/v1` |
 | Exo / OpenAI-compatible | Any server exposing `/v1/chat/completions` |
+| SGLang | `python -m sglang.launch_server --model ... --port 8888`; start with `--enable-cache-report` for cached-token stats |
+| vLLM | `vllm serve <model>`; defaults to `http://127.0.0.1:8000/v1` |
 
 (Optional) pre-commit hooks for Black + isort:
 
@@ -55,6 +57,28 @@ uv run benchmark-webui --host 0.0.0.0 --port 9000 --no-open
   and delete.
 - **Compare** — select up to 8 runs and compare any metric (generation/prompt
   t/s, TTFT, TPOT, memory, KV cache, batch sweeps) in interactive charts.
+
+### Screenshots
+
+**Run** — configure engine, contexts and options; watch live progress with
+per-context chips and throughput as the sweep runs:
+
+![Run view — live sweep in progress](docs/webui/run.webp)
+
+**Results** — every saved run from `output/` with sparklines, context ranges,
+peak t/s, rerun / rename / delete:
+
+![Results view — saved runs](docs/webui/results.webp)
+
+**Run detail** — per-run metric charts plus the full results table, exportable
+as ZIP / HTML / PDF:
+
+![Run detail view — charts and metrics table](docs/webui/results-detail.webp)
+
+**Compare** — up to 8 runs side by side across every metric, with an
+all-metrics grid and relative-to-run mode:
+
+![Compare view — multi-run metric charts](docs/webui/compare.webp)
 
 ### Master / Worker: aggregate results from multiple machines
 
