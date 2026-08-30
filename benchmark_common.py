@@ -200,6 +200,7 @@ def stream_chat(
     top_p: Optional[float] = None,
     timeout: int = 3600,
     chunk_hook=None,
+    extra_body: Optional[Dict] = None,
 ) -> Dict[str, object]:
     """Stream one chat completion via an OpenAI-SDK client and measure it.
 
@@ -211,6 +212,9 @@ def stream_chat(
 
     ``chunk_hook``, when given, is called with every raw chunk so engines can
     pull server-specific extras (e.g. a top-level ``timings`` block).
+    ``extra_body`` is merged into the request body for servers with
+    vendor-specific request extensions (e.g. SGLang's ``sglext`` stat flags);
+    pydantic servers ignore unknown keys, so it is safe to always send them.
 
     Returns a dict with: ``generated_text``, ``reasoning_text``, ``usage``,
     ``total_time``, ``time_to_first_token`` (0.0 when no token text arrived),
@@ -229,6 +233,8 @@ def stream_chat(
     }
     if top_p is not None:
         request_args["top_p"] = top_p
+    if extra_body:
+        request_args["extra_body"] = extra_body
 
     message_parts: List[str] = []
     reasoning_parts: List[str] = []

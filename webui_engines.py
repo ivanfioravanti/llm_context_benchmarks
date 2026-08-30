@@ -227,6 +227,19 @@ def get_engine_catalog() -> dict:
             ]
             + _batch_opts(),
         },
+        "sglang": {
+            "label": "SGLang",
+            "script": "sglang_benchmark.py",
+            "tag": "sglang",
+            "description": "SGLang server (OpenAI-compatible + usage/cache/spec-decode stats)",
+            "example": "Qwen/Qwen3-8B",
+            "model": "auto",
+            "connection": "base_url",
+            "default_base_url": "http://dgx1.local:8888/v1",
+            "cold_prefill": True,
+            "local_mlx": False,
+            "options": [],
+        },
         "deepseek": {
             "label": "DeepSeek",
             "script": "deepseek_benchmark.py",
