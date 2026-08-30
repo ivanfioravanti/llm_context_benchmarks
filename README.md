@@ -56,6 +56,46 @@ uv run benchmark-webui --host 0.0.0.0 --port 9000 --no-open
 - **Compare** — select up to 8 runs and compare any metric (generation/prompt
   t/s, TTFT, TPOT, memory, KV cache, batch sweeps) in interactive charts.
 
+### Master / Worker: aggregate results from multiple machines
+
+Any machine running the WebUI can act as the **master**. Workers come in two
+flavors: the `benchmark-worker` CLI, or — easier to manage — a worker machine
+running its own WebUI with `--master`, so you launch and watch runs locally
+while every run is mirrored to the master live. In both cases the benchmark
+runs locally on the worker, its console output streams to the master as a
+normal live card (progress chips, tPS), and every result file is uploaded to
+the master's `output/` as soon as it is written. The worker keeps its own
+local copy; mirroring never blocks the benchmark, and a master that is down
+or restarted mid-run is retried/re-attached automatically. *Stop* works in
+both directions: the master's stop button terminates the worker's benchmark,
+and stopping locally marks the master's card as stopped.
+
+```bash
+# master (any machine with the web UI)
+uv run benchmark-webui --host 0.0.0.0                # workers push to /api/worker/*
+uv run benchmark-webui --host 0.0.0.0 --worker-token s3cret   # ...with shared-secret auth
+
+# worker, CLI flavor (same engine syntax as `uv run benchmark -- ...`)
+uv run benchmark-worker --master http://192.168.1.10:8321 -- mlx mlx-community/Qwen3-0.6B-4bit
+uv run benchmark-worker --master http://192.168.1.10:8321 --token s3cret --label "M4 Max" -- ollama-api gpt-oss:20b
+
+# worker, WebUI flavor (full local UI + live mirroring of everything you launch)
+uv run benchmark-webui --master http://192.168.1.10:8321 --worker-name "M4 Max"
+uv run benchmark-webui --master http://192.168.1.10:8321 --master-token s3cret --no-open
+
+Notes:
+
+- One worker per machine/output directory at a time — a worker mirrors every
+  `benchmark_*` folder created while it runs (folders from other engines'
+  concurrent runs are filtered by tag prefix).
+- `--worker-token` (or `BENCHMARK_WORKER_TOKEN`) on the master requires the
+  same token on workers (`--token` for the CLI, `--master-token` /
+  `BENCHMARK_MASTER_TOKEN` for the WebUI flavor); without a token the ingest
+  endpoints are open — fine on a trusted LAN, not on exposed networks.
+- Workers send their launch command (secrets like `--api-key` are redacted in
+  the UI, but the upload itself carries them — use a token on untrusted
+  networks).
+
 ### Docker
 
 The web UI can also run in a container — no local Python or `uv` needed:

@@ -15,8 +15,11 @@ Usage:
 """
 
 import argparse
+import hmac
 import json
 import os
+import platform
+import re
 import shutil
 import sys
 import threading
@@ -27,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -560,6 +563,104 @@ def api_runs_delete(run_id: str):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Worker ingest (remote machines running `benchmark-worker` push runs here)
+# ---------------------------------------------------------------------------
+
+# Optional shared secret; set via --worker-token or BENCHMARK_WORKER_TOKEN.
+WORKER_TOKEN = os.environ.get("BENCHMARK_WORKER_TOKEN", "")
+
+WORKER_FOLDER_RE = re.compile(r"^benchmark_[A-Za-z0-9._+-]+$")
+WORKER_FILE_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
+MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+
+
+def require_worker_token(request: Request):
+    if WORKER_TOKEN:
+        provided = request.headers.get("x-worker-token", "")
+        if not hmac.compare_digest(provided, WORKER_TOKEN):
+            raise HTTPException(401, "Invalid worker token")
+
+
+@app.post("/api/worker/register", dependencies=[Depends(require_worker_token)])
+def api_worker_register(payload: dict):
+    """A worker announces a benchmark it is starting locally."""
+    engine_id = payload.get("engine") or ""
+    if engine_id not in get_engine_catalog():
+        raise HTTPException(400, f"Unknown engine '{engine_id}'")
+    argv = payload.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        raise HTTPException(400, "argv must be a non-empty list of strings")
+    contexts = payload.get("contexts")
+    if not isinstance(contexts, list):
+        contexts = []
+    worker = (payload.get("worker") or "worker").strip() or "worker"
+    run = run_manager.start_remote(
+        engine_id,
+        get_engine_catalog()[engine_id]["tag"],
+        (payload.get("model") or "").strip() or "(auto)",
+        (payload.get("label") or "").strip() or worker,
+        worker,
+        (payload.get("hardware") or "").strip(),
+        argv,
+        [str(c) for c in contexts],
+        settings=payload.get("settings") or None,
+    )
+    return {"run_id": run.id, "status": run.status}
+
+
+@app.post("/api/worker/runs/{run_id}/logs", dependencies=[Depends(require_worker_token)])
+def api_worker_logs(run_id: str, payload: dict):
+    """Append a batch of benchmark stdout lines from a worker."""
+    run = run_manager.get(run_id)
+    lines = payload.get("lines")
+    if not isinstance(lines, list):
+        raise HTTPException(400, "lines must be a list of strings")
+    for line in lines[-5000:]:
+        run.ingest_line(str(line))
+    return {"ok": True, "log_length": len(run.log_lines), "stop": run.stop_requested}
+
+
+@app.get("/api/worker/runs/{run_id}/poll", dependencies=[Depends(require_worker_token)])
+def api_worker_poll(run_id: str):
+    """Cheap status poll so the worker can honor UI stop requests."""
+    run = run_manager.get(run_id)
+    return {"stop": bool(run.stop_requested)}
+
+
+@app.post("/api/worker/runs/{run_id}/file", dependencies=[Depends(require_worker_token)])
+async def api_worker_file(run_id: str, request: Request, folder: str, name: str):
+    """Store one result file from a worker into its master-side run folder."""
+    run = run_manager.get(run_id)
+    if not WORKER_FOLDER_RE.match(folder):
+        raise HTTPException(400, "Invalid folder name")
+    parts = name.split("/")
+    if len(parts) > 3 or not parts[-1] or not all(WORKER_FILE_RE.match(p) for p in parts):
+        raise HTTPException(400, "Invalid file name")
+    body = await request.body()
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large")
+    master_name = run_manager.claim_remote_folder(run, folder)
+    dest = OUTPUT_DIR / master_name
+    for part in parts[:-1]:
+        dest = dest / part
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / parts[-1]).write_bytes(body)
+    return {"ok": True, "folder": master_name}
+
+
+@app.post("/api/worker/runs/{run_id}/finish", dependencies=[Depends(require_worker_token)])
+def api_worker_finish(run_id: str, payload: dict):
+    """A worker reports its benchmark process exited."""
+    run = run_manager.get(run_id)
+    rc = payload.get("returncode")
+    try:
+        rc = int(rc)
+    except (TypeError, ValueError):
+        rc = 1
+    return run_manager.finish_remote(run, rc, stopped=bool(payload.get("stopped"))).snapshot()
+
+
 @app.get("/api/results")
 def api_results_list():
     if not OUTPUT_DIR.is_dir():
@@ -632,15 +733,46 @@ def index():
 
 
 def main():
+    global WORKER_TOKEN
     parser = argparse.ArgumentParser(description="Web UI for the LLM context benchmark toolkit")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8321, help="Bind port (default: 8321)")
     parser.add_argument("--no-open", action="store_true", help="Don't open the browser on start")
+    parser.add_argument(
+        "--worker-token",
+        default=WORKER_TOKEN,
+        help="Shared secret required by /api/worker/* upload endpoints "
+        "(env: BENCHMARK_WORKER_TOKEN; empty = no auth)",
+    )
+    parser.add_argument(
+        "--master",
+        default="",
+        help="Run as a worker: mirror every benchmark launched here to a master WebUI at this URL",
+    )
+    parser.add_argument(
+        "--master-token",
+        default=os.environ.get("BENCHMARK_MASTER_TOKEN", ""),
+        help="Token to authenticate to the master (env: BENCHMARK_MASTER_TOKEN)",
+    )
+    parser.add_argument(
+        "--worker-name",
+        default=platform.node(),
+        help="Worker name shown at the master (default: hostname)",
+    )
     args = parser.parse_args()
+
+    if args.master:
+        run_manager.mirror = {"master": args.master, "token": args.master_token, "name": args.worker_name}
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     url = f"http://{args.host}:{args.port}"
     print(f"LLM Context Bench UI on {url}")
+    if WORKER_TOKEN:
+        print("Worker ingest enabled (token auth)")
+    else:
+        print("Worker ingest enabled (no token — LAN use only)")
+    if args.master:
+        print(f"Worker mode: mirroring launched runs to {args.master} as '{args.worker_name}'")
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

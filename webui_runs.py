@@ -120,6 +120,7 @@ class BenchmarkRun:
         self.label = label
         self.endpoint_name = endpoint_name
         self.endpoint_hardware = endpoint_hardware
+        self.worker = ""  # remote worker name ("" for local subprocess runs)
         self.argv = argv
         self.contexts = contexts
         self.status = "starting"
@@ -147,6 +148,8 @@ class BenchmarkRun:
         # entries are {"context": "2k", ...} or {"batch_size": 8, ...} with
         # whatever metric lines the engine has printed for them so far
         self.progress = []
+        self._seen_contexts = set()
+        self.remote = False
 
     def snapshot(self):
         with self.lock:
@@ -156,7 +159,7 @@ class BenchmarkRun:
                 "engine": self.engine,
                 "model": self.model,
                 "label": self.label,
-                "endpoint": self.endpoint_name,
+                "worker": self.worker,
                 "command": format_command(self.argv),
                 "status": self.status,
                 "returncode": self.returncode,
@@ -183,11 +186,144 @@ class BenchmarkRun:
         with self.lock:
             return self.log_lines[offset:], len(self.log_lines)
 
+    def ingest_line(self, line: str):
+        """Parse one benchmark stdout line into live progress state.
+
+        Shared by the local subprocess loop in RunManager._execute and the
+        worker log-upload endpoint, so remote runs show identical live cards.
+        """
+        with self.lock:
+            self.log_lines.append(line)
+            match = PROGRESS_RE.search(line)
+            if match:
+                ctx = match.group(1)
+                if self.current_batch_index is not None:
+                    self.batch_sizes_done = max(self.batch_sizes_done, self.current_batch_index + 1)
+                    self.current_batch_size = None
+                    self.current_batch_index = None
+                if self.current_context and self.current_context not in self._seen_contexts:
+                    self._seen_contexts.add(self.current_context)
+                self.current_context = ctx
+                self.contexts_done = len(self._seen_contexts)
+                self.phase = "context"
+                if not self.progress or self.progress[-1].get("context") != ctx:
+                    self.progress.append({"context": ctx})
+            batch_match = BATCH_PROGRESS_RE.search(line)
+            if batch_match:
+                batch_size = int(batch_match.group(1))
+                if self.current_context and self.current_context not in self._seen_contexts:
+                    self._seen_contexts.add(self.current_context)
+                    self.contexts_done = len(self._seen_contexts)
+                self.current_context = None
+                if self.current_batch_index is not None:
+                    self.batch_sizes_done = max(self.batch_sizes_done, self.current_batch_index + 1)
+                self.current_batch_index = next(
+                    (
+                        index
+                        for index in range(self.batch_sizes_done, len(self.batch_sizes))
+                        if self.batch_sizes[index] == batch_size
+                    ),
+                    None,
+                )
+                # Fall back to any matching chip if the remaining-range lookup misses
+                # (e.g. duplicate sizes or a size already marked done).
+                if self.current_batch_index is None:
+                    try:
+                        self.current_batch_index = self.batch_sizes.index(batch_size)
+                    except ValueError:
+                        self.current_batch_index = None
+                self.current_batch_size = batch_size
+                self.phase = "batch"
+                if not self.progress or self.progress[-1].get("batch_size") != batch_size:
+                    self.progress.append({"batch_size": batch_size})
+            skip_match = BATCH_SKIP_RE.search(line)
+            if skip_match and self.batch_sizes:
+                skipped_size = int(skip_match.group(1))
+                idx = self.current_batch_index
+                if idx is None or self.batch_sizes[idx] != skipped_size:
+                    idx = next(
+                        (
+                            index
+                            for index in range(len(self.batch_sizes))
+                            if self.batch_sizes[index] == skipped_size and index not in self.batch_skipped
+                        ),
+                        None,
+                    )
+                if idx is not None:
+                    if idx not in self.batch_skipped:
+                        self.batch_skipped.append(idx)
+                    self.batch_sizes_done = max(self.batch_sizes_done, idx + 1)
+                    if self.current_batch_index == idx:
+                        self.current_batch_size = None
+                        self.current_batch_index = None
+            batch_complete_match = BATCH_COMPLETE_RE.search(line)
+            if batch_complete_match:
+                # Sweep finished — advance past every planned size. Skipped
+                # indices stay in batch_skipped so chips don't look successful.
+                if self.current_batch_index is not None:
+                    self.batch_sizes_done = max(self.batch_sizes_done, self.current_batch_index + 1)
+                self.batch_sizes_done = max(self.batch_sizes_done, len(self.batch_sizes))
+                self.current_batch_size = None
+                self.current_batch_index = None
+                self.phase = None
+            live_updated = False
+            for regex in GEN_TPS_RES:
+                m = regex.search(line)
+                if m:
+                    value = float(m.group(1))
+                    self.live["generation_tps"] = value
+                    if self.progress:
+                        self.progress[-1]["generation_tps"] = value
+                    live_updated = True
+                    break
+            for regex in PROMPT_TPS_RES:
+                m = regex.search(line)
+                if m:
+                    value = float(m.group(1))
+                    self.live["prompt_tps"] = value
+                    if self.progress:
+                        self.progress[-1]["prompt_tps"] = value
+                    live_updated = True
+                    break
+            for regex in TTFT_RES:
+                m = regex.search(line)
+                if m:
+                    value = float(m.group(1))
+                    self.live["ttft"] = value
+                    if self.progress:
+                        self.progress[-1]["time_to_first_token"] = value
+                    live_updated = True
+                    break
+            for regex in TOTAL_TIME_RES:
+                m = regex.search(line)
+                if m:
+                    if self.progress:
+                        self.progress[-1]["total_time"] = float(m.group(1))
+                    break
+            for regex in PEAK_MEM_RES:
+                m = regex.search(line)
+                if m:
+                    if self.progress:
+                        self.progress[-1]["peak_memory_gb"] = float(m.group(1))
+                    break
+            if live_updated and self.phase:
+                self.live["source"] = self.phase
+                if self.phase == "batch" and self.current_batch_size is not None:
+                    self.live["source_batch_size"] = self.current_batch_size
+                elif self.phase == "context" and self.current_context:
+                    self.live["source_context"] = self.current_context
+
 
 class RunManager:
     def __init__(self):
         self.runs = {}
         self.lock = threading.Lock()
+        # run_id -> {worker_folder_name: master_folder_name}
+        self.remote_folders = {}
+        # Worker mode: {"master": url, "token": str, "name": str} — when set,
+        # every locally launched benchmark run is mirrored to a master WebUI
+        # (benchmark-webui --master ...).
+        self.mirror = None
 
     def start(
         self,
@@ -250,6 +386,7 @@ class RunManager:
             self.stop(run_id)
         with self.lock:
             self.runs.pop(run_id, None)
+            self.remote_folders.pop(run_id, None)
         return run
 
     def _execute(self, run: BenchmarkRun):
@@ -278,129 +415,14 @@ class RunManager:
             run.proc = proc
             run.status = "running"
 
-        seen_contexts = set()
+        mirror_session = None
+        if self.mirror and run.kind == "benchmark":
+            mirror_session = self._start_mirror(run, proc, before)
+
         for line in proc.stdout:
-            line = line.rstrip("\n")
-            with run.lock:
-                run.log_lines.append(line)
-                match = PROGRESS_RE.search(line)
-                if match:
-                    ctx = match.group(1)
-                    if run.current_batch_index is not None:
-                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
-                        run.current_batch_size = None
-                        run.current_batch_index = None
-                    if run.current_context and run.current_context not in seen_contexts:
-                        seen_contexts.add(run.current_context)
-                    run.current_context = ctx
-                    run.contexts_done = len(seen_contexts)
-                    run.phase = "context"
-                    if not run.progress or run.progress[-1].get("context") != ctx:
-                        run.progress.append({"context": ctx})
-                batch_match = BATCH_PROGRESS_RE.search(line)
-                if batch_match:
-                    batch_size = int(batch_match.group(1))
-                    if run.current_context and run.current_context not in seen_contexts:
-                        seen_contexts.add(run.current_context)
-                        run.contexts_done = len(seen_contexts)
-                    run.current_context = None
-                    if run.current_batch_index is not None:
-                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
-                    run.current_batch_index = next(
-                        (
-                            index
-                            for index in range(run.batch_sizes_done, len(run.batch_sizes))
-                            if run.batch_sizes[index] == batch_size
-                        ),
-                        None,
-                    )
-                    # Fall back to any matching chip if the remaining-range lookup misses
-                    # (e.g. duplicate sizes or a size already marked done).
-                    if run.current_batch_index is None:
-                        try:
-                            run.current_batch_index = run.batch_sizes.index(batch_size)
-                        except ValueError:
-                            run.current_batch_index = None
-                    run.current_batch_size = batch_size
-                    run.phase = "batch"
-                    if not run.progress or run.progress[-1].get("batch_size") != batch_size:
-                        run.progress.append({"batch_size": batch_size})
-                skip_match = BATCH_SKIP_RE.search(line)
-                if skip_match and run.batch_sizes:
-                    skipped_size = int(skip_match.group(1))
-                    idx = run.current_batch_index
-                    if idx is None or run.batch_sizes[idx] != skipped_size:
-                        idx = next(
-                            (
-                                index
-                                for index in range(len(run.batch_sizes))
-                                if run.batch_sizes[index] == skipped_size and index not in run.batch_skipped
-                            ),
-                            None,
-                        )
-                    if idx is not None:
-                        if idx not in run.batch_skipped:
-                            run.batch_skipped.append(idx)
-                        run.batch_sizes_done = max(run.batch_sizes_done, idx + 1)
-                        if run.current_batch_index == idx:
-                            run.current_batch_size = None
-                            run.current_batch_index = None
-                batch_complete_match = BATCH_COMPLETE_RE.search(line)
-                if batch_complete_match:
-                    # Sweep finished — advance past every planned size. Skipped
-                    # indices stay in batch_skipped so chips don't look successful.
-                    if run.current_batch_index is not None:
-                        run.batch_sizes_done = max(run.batch_sizes_done, run.current_batch_index + 1)
-                    run.batch_sizes_done = max(run.batch_sizes_done, len(run.batch_sizes))
-                    run.current_batch_size = None
-                    run.current_batch_index = None
-                    run.phase = None
-                live_updated = False
-                for regex in GEN_TPS_RES:
-                    m = regex.search(line)
-                    if m:
-                        value = float(m.group(1))
-                        run.live["generation_tps"] = value
-                        if run.progress:
-                            run.progress[-1]["generation_tps"] = value
-                        live_updated = True
-                        break
-                for regex in PROMPT_TPS_RES:
-                    m = regex.search(line)
-                    if m:
-                        value = float(m.group(1))
-                        run.live["prompt_tps"] = value
-                        if run.progress:
-                            run.progress[-1]["prompt_tps"] = value
-                        live_updated = True
-                        break
-                for regex in TTFT_RES:
-                    m = regex.search(line)
-                    if m:
-                        value = float(m.group(1))
-                        run.live["ttft"] = value
-                        if run.progress:
-                            run.progress[-1]["time_to_first_token"] = value
-                        live_updated = True
-                        break
-                for regex in TOTAL_TIME_RES:
-                    m = regex.search(line)
-                    if m:
-                        if run.progress:
-                            run.progress[-1]["total_time"] = float(m.group(1))
-                        break
-                for regex in PEAK_MEM_RES:
-                    m = regex.search(line)
-                    if m:
-                        if run.progress:
-                            run.progress[-1]["peak_memory_gb"] = float(m.group(1))
-                        break
-                if live_updated and run.phase:
-                    run.live["source"] = run.phase
-                    if run.phase == "batch" and run.current_batch_size is not None:
-                        run.live["source_batch_size"] = run.current_batch_size
-                    elif run.phase == "context" and run.current_context:
-                        run.live["source_context"] = run.current_context
+            run.ingest_line(line.rstrip("\n"))
+            if mirror_session:
+                mirror_session.buffer_line(line.rstrip("\n"))
         proc.wait()
 
         folders = []
@@ -445,3 +467,128 @@ class RunManager:
                 run.batch_sizes_done = len(run.batch_sizes)
             else:
                 run.status = "failed"
+
+        if mirror_session:
+            mirror_session.close(proc.returncode, stopped=run.stop_requested)
+
+    def _start_mirror(self, run: BenchmarkRun, proc, before: set):
+        """Mirror a locally launched run to the master configured in self.mirror."""
+        from webui_worker import MirrorSession, WorkerClient
+
+        cfg = self.mirror
+        client = WorkerClient(
+            master=cfg["master"],
+            worker=cfg.get("name") or "webui-worker",
+            token=cfg.get("token") or "",
+            engine=run.engine,
+            model=run.model,
+            label=run.label,
+            argv=run.argv,
+            contexts=run.contexts,
+            settings=run.settings,
+            folder_prefix=f"benchmark_{run.tag}_" if run.tag else "",
+        )
+        client.try_register()
+        session = MirrorSession(client, proc, before, on_master_stop=lambda: self.stop(run.id), output_dir=OUTPUT_DIR)
+        session.start()
+        return session
+
+    # -- remote workers ----------------------------------------------------
+
+    def start_remote(
+        self,
+        engine_id,
+        tag,
+        model,
+        label,
+        worker,
+        hardware,
+        argv,
+        contexts,
+        settings=None,
+    ):
+        """Register a run executed on a worker machine (no local subprocess).
+
+        The run appears in the UI immediately with status "running"; the worker
+        then streams log lines and uploads result files via /api/worker/*.
+        """
+        run = BenchmarkRun(
+            uuid.uuid4().hex[:12],
+            "benchmark",
+            engine_id,
+            tag,
+            model,
+            label,
+            worker,
+            argv,
+            contexts,
+            endpoint_hardware=hardware,
+            settings=settings,
+        )
+        run.worker = worker
+        run.remote = True
+        run.status = "running"
+        with self.lock:
+            self.runs[run.id] = run
+            self.remote_folders.setdefault(run.id, {})
+        return run
+
+    def claim_remote_folder(self, run: BenchmarkRun, worker_folder: str) -> str:
+        """Map a worker-side result folder to a fresh master-side folder name.
+
+        Idempotent per (run, worker folder): the first upload claims the name,
+        later uploads for the same folder reuse it. A name collision (same
+        worker machine and second, or a leftover folder) gets a numeric suffix.
+        """
+        with self.lock:
+            claimed = self.remote_folders.get(run.id, {}).get(worker_folder)
+            if claimed:
+                return claimed
+            taken = set(self.remote_folders.get(run.id, {}))
+            for run_folders in self.remote_folders.values():
+                taken.update(run_folders.values())
+            if OUTPUT_DIR.is_dir():
+                taken.update(p.name for p in OUTPUT_DIR.iterdir() if p.is_dir())
+            name = worker_folder
+            n = 2
+            while name in taken:
+                name = f"{worker_folder}_{n}"
+                n += 1
+            self.remote_folders.setdefault(run.id, {})[worker_folder] = name
+        folder = OUTPUT_DIR / name
+        folder.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "run_id": run.id,
+            "engine_id": run.engine,
+            "label": run.label or "",
+            "endpoint": run.worker or "",
+            "worker": run.worker or "",
+            "endpoint_hardware": run.endpoint_hardware or "",
+            "created": datetime.now().isoformat(timespec="seconds"),
+        }
+        if run.settings:
+            meta["settings"] = run.settings
+        (folder / RUN_META_FILE).write_text(json.dumps(meta, indent=2))
+        with run.lock:
+            if name not in run.result_folders:
+                run.result_folders.append(name)
+        return name
+
+    def finish_remote(self, run: BenchmarkRun, returncode: int, stopped: bool = False) -> BenchmarkRun:
+        """Finalize a remote run when its worker reports the process exit."""
+        with run.lock:
+            run.returncode = returncode
+            run.finished = time.time()
+            run.current_context = None
+            run.current_batch_size = None
+            run.current_batch_index = None
+            run.phase = None
+            if run.stop_requested or stopped:
+                run.status = "stopped"
+            elif returncode == 0:
+                run.status = "done"
+                run.contexts_done = len(run.contexts)
+                run.batch_sizes_done = len(run.batch_sizes)
+            else:
+                run.status = "failed"
+        return run

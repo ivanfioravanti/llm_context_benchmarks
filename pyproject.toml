@@ -74,6 +74,7 @@ dependencies = [
 [project.scripts]
 benchmark = "benchmark:main"
 benchmark-webui = "webui:main"
+benchmark-worker = "webui_worker:main"
 compare-benchmarks = "compare_benchmarks:main"
 generate-context-files = "generate_context_files:main"
 ollama-api-benchmark = "ollama_api_benchmark:main"
@@ -136,4 +137,5 @@ py-modules = [
   "webui_common",
   "webui_engines",
   "webui_runs",
+  "webui_worker",
 ]
