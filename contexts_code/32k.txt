@@ -1,0 +1,3940 @@
+# Code corpus for context benchmark files
+# Source dir: /Users/ifioravanti/projects/llm_context_benchmarks/Python-3.13.2/Lib
+# Files included: 69
+# Content tokens (cl100k_base, excluding this header): 263524
+# Built: 2026-08-30 07:49:23
+# Command: build_code_corpus.py --source-dir Python-3.13.2/Lib --output code_corpus.txt
+# ---- __future__.py ----
+"""Record of phased-in incompatible language changes.
+
+Each line is of the form:
+
+    FeatureName = "_Feature(" OptionalRelease "," MandatoryRelease ","
+                              CompilerFlag ")"
+
+where, normally, OptionalRelease < MandatoryRelease, and both are 5-tuples
+of the same form as sys.version_info:
+
+    (PY_MAJOR_VERSION, # the 2 in 2.1.0a3; an int
+     PY_MINOR_VERSION, # the 1; an int
+     PY_MICRO_VERSION, # the 0; an int
+     PY_RELEASE_LEVEL, # "alpha", "beta", "candidate" or "final"; string
+     PY_RELEASE_SERIAL # the 3; an int
+    )
+
+OptionalRelease records the first release in which
+
+    from __future__ import FeatureName
+
+was accepted.
+
+In the case of MandatoryReleases that have not yet occurred,
+MandatoryRelease predicts the release in which the feature will become part
+of the language.
+
+Else MandatoryRelease records when the feature became part of the language;
+in releases at or after that, modules no longer need
+
+    from __future__ import FeatureName
+
+to use the feature in question, but may continue to use such imports.
+
+MandatoryRelease may also be None, meaning that a planned feature got
+dropped or that the release version is undetermined.
+
+Instances of class _Feature have two corresponding methods,
+.getOptionalRelease() and .getMandatoryRelease().
+
+CompilerFlag is the (bitfield) flag that should be passed in the fourth
+argument to the builtin function compile() to enable the feature in
+dynamically compiled code.  This flag is stored in the .compiler_flag
+attribute on _Future instances.  These values must match the appropriate
+#defines of CO_xxx flags in Include/cpython/compile.h.
+
+No feature line is ever to be deleted from this file.
+"""
+
+all_feature_names = [
+    "nested_scopes",
+    "generators",
+    "division",
+    "absolute_import",
+    "with_statement",
+    "print_function",
+    "unicode_literals",
+    "barry_as_FLUFL",
+    "generator_stop",
+    "annotations",
+]
+
+__all__ = ["all_feature_names"] + all_feature_names
+
+# The CO_xxx symbols are defined here under the same names defined in
+# code.h and used by compile.h, so that an editor search will find them here.
+# However, they're not exported in __all__, because they don't really belong to
+# this module.
+CO_NESTED = 0x0010                      # nested_scopes
+CO_GENERATOR_ALLOWED = 0                # generators (obsolete, was 0x1000)
+CO_FUTURE_DIVISION = 0x20000            # division
+CO_FUTURE_ABSOLUTE_IMPORT = 0x40000     # perform absolute imports by default
+CO_FUTURE_WITH_STATEMENT = 0x80000      # with statement
+CO_FUTURE_PRINT_FUNCTION = 0x100000     # print function
+CO_FUTURE_UNICODE_LITERALS = 0x200000   # unicode string literals
+CO_FUTURE_BARRY_AS_BDFL = 0x400000
+CO_FUTURE_GENERATOR_STOP = 0x800000     # StopIteration becomes RuntimeError in generators
+CO_FUTURE_ANNOTATIONS = 0x1000000       # annotations become strings at runtime
+
+
+class _Feature:
+
+    def __init__(self, optionalRelease, mandatoryRelease, compiler_flag):
+        self.optional = optionalRelease
+        self.mandatory = mandatoryRelease
+        self.compiler_flag = compiler_flag
+
+    def getOptionalRelease(self):
+        """Return first release in which this feature was recognized.
+
+        This is a 5-tuple, of the same form as sys.version_info.
+        """
+        return self.optional
+
+    def getMandatoryRelease(self):
+        """Return release in which this feature will become mandatory.
+
+        This is a 5-tuple, of the same form as sys.version_info, or, if
+        the feature was dropped, or the release date is undetermined, is None.
+        """
+        return self.mandatory
+
+    def __repr__(self):
+        return "_Feature" + repr((self.optional,
+                                  self.mandatory,
+                                  self.compiler_flag))
+
+
+nested_scopes = _Feature((2, 1, 0, "beta",  1),
+                         (2, 2, 0, "alpha", 0),
+                         CO_NESTED)
+
+generators = _Feature((2, 2, 0, "alpha", 1),
+                      (2, 3, 0, "final", 0),
+                      CO_GENERATOR_ALLOWED)
+
+division = _Feature((2, 2, 0, "alpha", 2),
+                    (3, 0, 0, "alpha", 0),
+                    CO_FUTURE_DIVISION)
+
+absolute_import = _Feature((2, 5, 0, "alpha", 1),
+                           (3, 0, 0, "alpha", 0),
+                           CO_FUTURE_ABSOLUTE_IMPORT)
+
+with_statement = _Feature((2, 5, 0, "alpha", 1),
+                          (2, 6, 0, "alpha", 0),
+                          CO_FUTURE_WITH_STATEMENT)
+
+print_function = _Feature((2, 6, 0, "alpha", 2),
+                          (3, 0, 0, "alpha", 0),
+                          CO_FUTURE_PRINT_FUNCTION)
+
+unicode_literals = _Feature((2, 6, 0, "alpha", 2),
+                            (3, 0, 0, "alpha", 0),
+                            CO_FUTURE_UNICODE_LITERALS)
+
+barry_as_FLUFL = _Feature((3, 1, 0, "alpha", 2),
+                          (4, 0, 0, "alpha", 0),
+                          CO_FUTURE_BARRY_AS_BDFL)
+
+generator_stop = _Feature((3, 5, 0, "beta", 1),
+                          (3, 7, 0, "alpha", 0),
+                          CO_FUTURE_GENERATOR_STOP)
+
+annotations = _Feature((3, 7, 0, "beta", 1),
+                       None,
+                       CO_FUTURE_ANNOTATIONS)
+# ---- __hello__.py ----
+initialized = True
+
+class TestFrozenUtf8_1:
+    """\u00b6"""
+
+class TestFrozenUtf8_2:
+    """\u03c0"""
+
+class TestFrozenUtf8_4:
+    """\U0001f600"""
+
+def main():
+    print("Hello world!")
+
+if __name__ == '__main__':
+    main()
+# ---- __phello__/__init__.py ----
+initialized = True
+
+def main():
+    print("Hello world!")
+
+if __name__ == '__main__':
+    main()
+# ---- __phello__/ham/__init__.py ----
+# ---- __phello__/ham/eggs.py ----
+# ---- __phello__/spam.py ----
+initialized = True
+
+def main():
+    print("Hello world!")
+
+if __name__ == '__main__':
+    main()
+# ---- _aix_support.py ----
+"""Shared AIX support functions."""
+
+import sys
+import sysconfig
+
+
+# Taken from _osx_support _read_output function
+def _read_cmd_output(commandstring, capture_stderr=False):
+    """Output from successful command execution or None"""
+    # Similar to os.popen(commandstring, "r").read(),
+    # but without actually using os.popen because that
+    # function is not usable during python bootstrap.
+    import os
+    import contextlib
+    fp = open("/tmp/_aix_support.%s"%(
+        os.getpid(),), "w+b")
+
+    with contextlib.closing(fp) as fp:
+        if capture_stderr:
+            cmd = "%s >'%s' 2>&1" % (commandstring, fp.name)
+        else:
+            cmd = "%s 2>/dev/null >'%s'" % (commandstring, fp.name)
+        return fp.read() if not os.system(cmd) else None
+
+
+def _aix_tag(vrtl, bd):
+    # type: (List[int], int) -> str
+    # Infer the ABI bitwidth from maxsize (assuming 64 bit as the default)
+    _sz = 32 if sys.maxsize == (2**31-1) else 64
+    _bd = bd if bd != 0 else 9988
+    # vrtl[version, release, technology_level]
+    return "aix-{:1x}{:1d}{:02d}-{:04d}-{}".format(vrtl[0], vrtl[1], vrtl[2], _bd, _sz)
+
+
+# extract version, release and technology level from a VRMF string
+def _aix_vrtl(vrmf):
+    # type: (str) -> List[int]
+    v, r, tl = vrmf.split(".")[:3]
+    return [int(v[-1]), int(r), int(tl)]
+
+
+def _aix_bos_rte():
+    # type: () -> Tuple[str, int]
+    """
+    Return a Tuple[str, int] e.g., ['7.1.4.34', 1806]
+    The fileset bos.rte represents the current AIX run-time level. It's VRMF and
+    builddate reflect the current ABI levels of the runtime environment.
+    If no builddate is found give a value that will satisfy pep425 related queries
+    """
+    # All AIX systems to have lslpp installed in this location
+    # subprocess may not be available during python bootstrap
+    try:
+        import subprocess
+        out = subprocess.check_output(["/usr/bin/lslpp", "-Lqc", "bos.rte"])
+    except ImportError:
+        out = _read_cmd_output("/usr/bin/lslpp -Lqc bos.rte")
+    out = out.decode("utf-8")
+    out = out.strip().split(":")  # type: ignore
+    _bd = int(out[-1]) if out[-1] != '' else 9988
+    return (str(out[2]), _bd)
+
+
+def aix_platform():
+    # type: () -> str
+    """
+    AIX filesets are identified by four decimal values: V.R.M.F.
+    V (version) and R (release) can be retrieved using ``uname``
+    Since 2007, starting with AIX 5.3 TL7, the M value has been
+    included with the fileset bos.rte and represents the Technology
+    Level (TL) of AIX. The F (Fix) value also increases, but is not
+    relevant for comparing releases and binary compatibility.
+    For binary compatibility the so-called builddate is needed.
+    Again, the builddate of an AIX release is associated with bos.rte.
+    AIX ABI compatibility is described  as guaranteed at: https://www.ibm.com/\
+    support/knowledgecenter/en/ssw_aix_72/install/binary_compatability.html
+
+    For pep425 purposes the AIX platform tag becomes:
+    "aix-{:1x}{:1d}{:02d}-{:04d}-{}".format(v, r, tl, builddate, bitsize)
+    e.g., "aix-6107-1415-32" for AIX 6.1 TL7 bd 1415, 32-bit
+    and, "aix-6107-1415-64" for AIX 6.1 TL7 bd 1415, 64-bit
+    """
+    vrmf, bd = _aix_bos_rte()
+    return _aix_tag(_aix_vrtl(vrmf), bd)
+
+
+# extract vrtl from the BUILD_GNU_TYPE as an int
+def _aix_bgt():
+    # type: () -> List[int]
+    gnu_type = sysconfig.get_config_var("BUILD_GNU_TYPE")
+    if not gnu_type:
+        raise ValueError("BUILD_GNU_TYPE is not defined")
+    return _aix_vrtl(vrmf=gnu_type)
+
+
+def aix_buildtag():
+    # type: () -> str
+    """
+    Return the platform_tag of the system Python was built on.
+    """
+    # AIX_BUILDDATE is defined by configure with:
+    # lslpp -Lcq bos.rte | awk -F:  '{ print $NF }'
+    build_date = sysconfig.get_config_var("AIX_BUILDDATE")
+    try:
+        build_date = int(build_date)
+    except (ValueError, TypeError):
+        raise ValueError(f"AIX_BUILDDATE is not defined or invalid: "
+                         f"{build_date!r}")
+    return _aix_tag(_aix_bgt(), build_date)
+# ---- _android_support.py ----
+import io
+import sys
+from threading import RLock
+from time import sleep, time
+
+# The maximum length of a log message in bytes, including the level marker and
+# tag, is defined as LOGGER_ENTRY_MAX_PAYLOAD at
+# https://cs.android.com/android/platform/superproject/+/android-14.0.0_r1:system/logging/liblog/include/log/log.h;l=71.
+# Messages longer than this will be truncated by logcat. This limit has already
+# been reduced at least once in the history of Android (from 4076 to 4068 between
+# API level 23 and 26), so leave some headroom.
+MAX_BYTES_PER_WRITE = 4000
+
+# UTF-8 uses a maximum of 4 bytes per character, so limiting text writes to this
+# size ensures that we can always avoid exceeding MAX_BYTES_PER_WRITE.
+# However, if the actual number of bytes per character is smaller than that,
+# then we may still join multiple consecutive text writes into binary
+# writes containing a larger number of characters.
+MAX_CHARS_PER_WRITE = MAX_BYTES_PER_WRITE // 4
+
+
+# When embedded in an app on current versions of Android, there's no easy way to
+# monitor the C-level stdout and stderr. The testbed comes with a .c file to
+# redirect them to the system log using a pipe, but that wouldn't be convenient
+# or appropriate for all apps. So we redirect at the Python level instead.
+def init_streams(android_log_write, stdout_prio, stderr_prio):
+    if sys.executable:
+        return  # Not embedded in an app.
+
+    global logcat
+    logcat = Logcat(android_log_write)
+
+    sys.stdout = TextLogStream(
+        stdout_prio, "python.stdout", sys.stdout.fileno())
+    sys.stderr = TextLogStream(
+        stderr_prio, "python.stderr", sys.stderr.fileno())
+
+
+class TextLogStream(io.TextIOWrapper):
+    def __init__(self, prio, tag, fileno=None, **kwargs):
+        # The default is surrogateescape for stdout and backslashreplace for
+        # stderr, but in the context of an Android log, readability is more
+        # important than reversibility.
+        kwargs.setdefault("encoding", "UTF-8")
+        kwargs.setdefault("errors", "backslashreplace")
+
+        super().__init__(BinaryLogStream(prio, tag, fileno), **kwargs)
+        self._lock = RLock()
+        self._pending_bytes = []
+        self._pending_bytes_count = 0
+
+    def __repr__(self):
+        return f"<TextLogStream {self.buffer.tag!r}>"
+
+    def write(self, s):
+        if not isinstance(s, str):
+            raise TypeError(
+                f"write() argument must be str, not {type(s).__name__}")
+
+        # In case `s` is a str subclass that writes itself to stdout or stderr
+        # when we call its methods, convert it to an actual str.
+        s = str.__str__(s)
+
+        # We want to emit one log message per line wherever possible, so split
+        # the string into lines first. Note that "".splitlines() == [], so
+        # nothing will be logged for an empty string.
+        with self._lock:
+            for line in s.splitlines(keepends=True):
+                while line:
+                    chunk = line[:MAX_CHARS_PER_WRITE]
+                    line = line[MAX_CHARS_PER_WRITE:]
+                    self._write_chunk(chunk)
+
+        return len(s)
+
+    # The size and behavior of TextIOWrapper's buffer is not part of its public
+    # API, so we handle buffering ourselves to avoid truncation.
+    def _write_chunk(self, s):
+        b = s.encode(self.encoding, self.errors)
+        if self._pending_bytes_count + len(b) > MAX_BYTES_PER_WRITE:
+            self.flush()
+
+        self._pending_bytes.append(b)
+        self._pending_bytes_count += len(b)
+        if (
+            self.write_through
+            or b.endswith(b"\n")
+            or self._pending_bytes_count > MAX_BYTES_PER_WRITE
+        ):
+            self.flush()
+
+    def flush(self):
+        with self._lock:
+            self.buffer.write(b"".join(self._pending_bytes))
+            self._pending_bytes.clear()
+            self._pending_bytes_count = 0
+
+    # Since this is a line-based logging system, line buffering cannot be turned
+    # off, i.e. a newline always causes a flush.
+    @property
+    def line_buffering(self):
+        return True
+
+
+class BinaryLogStream(io.RawIOBase):
+    def __init__(self, prio, tag, fileno=None):
+        self.prio = prio
+        self.tag = tag
+        self._fileno = fileno
+
+    def __repr__(self):
+        return f"<BinaryLogStream {self.tag!r}>"
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        if type(b) is not bytes:
+            try:
+                b = bytes(memoryview(b))
+            except TypeError:
+                raise TypeError(
+                    f"write() argument must be bytes-like, not {type(b).__name__}"
+                ) from None
+
+        # Writing an empty string to the stream should have no effect.
+        if b:
+            logcat.write(self.prio, self.tag, b)
+        return len(b)
+
+    # This is needed by the test suite --timeout option, which uses faulthandler.
+    def fileno(self):
+        if self._fileno is None:
+            raise io.UnsupportedOperation("fileno")
+        return self._fileno
+
+
+# When a large volume of data is written to logcat at once, e.g. when a test
+# module fails in --verbose3 mode, there's a risk of overflowing logcat's own
+# buffer and losing messages. We avoid this by imposing a rate limit using the
+# token bucket algorithm, based on a conservative estimate of how fast `adb
+# logcat` can consume data.
+MAX_BYTES_PER_SECOND = 1024 * 1024
+
+# The logcat buffer size of a device can be determined by running `logcat -g`.
+# We set the token bucket size to half of the buffer size of our current minimum
+# API level, because other things on the system will be producing messages as
+# well.
+BUCKET_SIZE = 128 * 1024
+
+# https://cs.android.com/android/platform/superproject/+/android-14.0.0_r1:system/logging/liblog/include/log/log_read.h;l=39
+PER_MESSAGE_OVERHEAD = 28
+
+
+class Logcat:
+    def __init__(self, android_log_write):
+        self.android_log_write = android_log_write
+        self._lock = RLock()
+        self._bucket_level = 0
+        self._prev_write_time = time()
+
+    def write(self, prio, tag, message):
+        # Encode null bytes using "modified UTF-8" to avoid them truncating the
+        # message.
+        message = message.replace(b"\x00", b"\xc0\x80")
+
+        with self._lock:
+            now = time()
+            self._bucket_level += (
+                (now - self._prev_write_time) * MAX_BYTES_PER_SECOND)
+
+            # If the bucket level is still below zero, the clock must have gone
+            # backwards, so reset it to zero and continue.
+            self._bucket_level = max(0, min(self._bucket_level, BUCKET_SIZE))
+            self._prev_write_time = now
+
+            self._bucket_level -= PER_MESSAGE_OVERHEAD + len(tag) + len(message)
+            if self._bucket_level < 0:
+                sleep(-self._bucket_level / MAX_BYTES_PER_SECOND)
+
+            self.android_log_write(prio, tag, message)
+# ---- _apple_support.py ----
+import io
+import sys
+
+
+def init_streams(log_write, stdout_level, stderr_level):
+    # Redirect stdout and stderr to the Apple system log. This method is
+    # invoked by init_apple_streams() (initconfig.c) if config->use_system_logger
+    # is enabled.
+    sys.stdout = SystemLog(log_write, stdout_level, errors=sys.stderr.errors)
+    sys.stderr = SystemLog(log_write, stderr_level, errors=sys.stderr.errors)
+
+
+class SystemLog(io.TextIOWrapper):
+    def __init__(self, log_write, level, **kwargs):
+        kwargs.setdefault("encoding", "UTF-8")
+        kwargs.setdefault("line_buffering", True)
+        super().__init__(LogStream(log_write, level), **kwargs)
+
+    def __repr__(self):
+        return f"<SystemLog (level {self.buffer.level})>"
+
+    def write(self, s):
+        if not isinstance(s, str):
+            raise TypeError(
+                f"write() argument must be str, not {type(s).__name__}")
+
+        # In case `s` is a str subclass that writes itself to stdout or stderr
+        # when we call its methods, convert it to an actual str.
+        s = str.__str__(s)
+
+        # We want to emit one log message per line, so split
+        # the string before sending it to the superclass.
+        for line in s.splitlines(keepends=True):
+            super().write(line)
+
+        return len(s)
+
+
+class LogStream(io.RawIOBase):
+    def __init__(self, log_write, level):
+        self.log_write = log_write
+        self.level = level
+
+    def __repr__(self):
+        return f"<LogStream (level {self.level!r})>"
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        if type(b) is not bytes:
+            try:
+                b = bytes(memoryview(b))
+            except TypeError:
+                raise TypeError(
+                    f"write() argument must be bytes-like, not {type(b).__name__}"
+                ) from None
+
+        # Writing an empty string to the stream should have no effect.
+        if b:
+            # Encode null bytes using "modified UTF-8" to avoid truncating the
+            # message. This should not affect the return value, as the caller
+            # may be expecting it to match the length of the input.
+            self.log_write(self.level, b.replace(b"\x00", b"\xc0\x80"))
+
+        return len(b)
+# ---- _collections_abc.py ----
+# Copyright 2007 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Abstract Base Classes (ABCs) for collections, according to PEP 3119.
+
+Unit tests are in test_collections.
+"""
+
+############ Maintenance notes #########################################
+#
+# ABCs are different from other standard library modules in that they
+# specify compliance tests.  In general, once an ABC has been published,
+# new methods (either abstract or concrete) cannot be added.
+#
+# Though classes that inherit from an ABC would automatically receive a
+# new mixin method, registered classes would become non-compliant and
+# violate the contract promised by ``isinstance(someobj, SomeABC)``.
+#
+# Though irritating, the correct procedure for adding new abstract or
+# mixin methods is to create a new ABC as a subclass of the previous
+# ABC.  For example, union(), intersection(), and difference() cannot
+# be added to Set but could go into a new ABC that extends Set.
+#
+# Because they are so hard to change, new ABCs should have their APIs
+# carefully thought through prior to publication.
+#
+# Since ABCMeta only checks for the presence of methods, it is possible
+# to alter the signature of a method by adding optional arguments
+# or changing parameters names.  This is still a bit dubious but at
+# least it won't cause isinstance() to return an incorrect result.
+#
+#
+#######################################################################
+
+from abc import ABCMeta, abstractmethod
+import sys
+
+GenericAlias = type(list[int])
+EllipsisType = type(...)
+def _f(): pass
+FunctionType = type(_f)
+del _f
+
+__all__ = ["Awaitable", "Coroutine",
+           "AsyncIterable", "AsyncIterator", "AsyncGenerator",
+           "Hashable", "Iterable", "Iterator", "Generator", "Reversible",
+           "Sized", "Container", "Callable", "Collection",
+           "Set", "MutableSet",
+           "Mapping", "MutableMapping",
+           "MappingView", "KeysView", "ItemsView", "ValuesView",
+           "Sequence", "MutableSequence",
+           "ByteString", "Buffer",
+           ]
+
+# This module has been renamed from collections.abc to _collections_abc to
+# speed up interpreter startup. Some of the types such as MutableMapping are
+# required early but collections module imports a lot of other modules.
+# See issue #19218
+__name__ = "collections.abc"
+
+# Private list of types that we want to register with the various ABCs
+# so that they will pass tests like:
+#       it = iter(somebytearray)
+#       assert isinstance(it, Iterable)
+# Note:  in other implementations, these types might not be distinct
+# and they may have their own implementation specific types that
+# are not included on this list.
+bytes_iterator = type(iter(b''))
+bytearray_iterator = type(iter(bytearray()))
+#callable_iterator = ???
+dict_keyiterator = type(iter({}.keys()))
+dict_valueiterator = type(iter({}.values()))
+dict_itemiterator = type(iter({}.items()))
+list_iterator = type(iter([]))
+list_reverseiterator = type(iter(reversed([])))
+range_iterator = type(iter(range(0)))
+longrange_iterator = type(iter(range(1 << 1000)))
+set_iterator = type(iter(set()))
+str_iterator = type(iter(""))
+tuple_iterator = type(iter(()))
+zip_iterator = type(iter(zip()))
+## views ##
+dict_keys = type({}.keys())
+dict_values = type({}.values())
+dict_items = type({}.items())
+## misc ##
+mappingproxy = type(type.__dict__)
+def _get_framelocalsproxy():
+    return type(sys._getframe().f_locals)
+framelocalsproxy = _get_framelocalsproxy()
+del _get_framelocalsproxy
+generator = type((lambda: (yield))())
+## coroutine ##
+async def _coro(): pass
+_coro = _coro()
+coroutine = type(_coro)
+_coro.close()  # Prevent ResourceWarning
+del _coro
+## asynchronous generator ##
+async def _ag(): yield
+_ag = _ag()
+async_generator = type(_ag)
+del _ag
+
+
+### ONE-TRICK PONIES ###
+
+def _check_methods(C, *methods):
+    mro = C.__mro__
+    for method in methods:
+        for B in mro:
+            if method in B.__dict__:
+                if B.__dict__[method] is None:
+                    return NotImplemented
+                break
+        else:
+            return NotImplemented
+    return True
+
+class Hashable(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __hash__(self):
+        return 0
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Hashable:
+            return _check_methods(C, "__hash__")
+        return NotImplemented
+
+
+class Awaitable(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __await__(self):
+        yield
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Awaitable:
+            return _check_methods(C, "__await__")
+        return NotImplemented
+
+    __class_getitem__ = classmethod(GenericAlias)
+
+
+class Coroutine(Awaitable):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def send(self, value):
+        """Send a value into the coroutine.
+        Return next yielded value or raise StopIteration.
+        """
+        raise StopIteration
+
+    @abstractmethod
+    def throw(self, typ, val=None, tb=None):
+        """Raise an exception in the coroutine.
+        Return next yielded value or raise StopIteration.
+        """
+        if val is None:
+            if tb is None:
+                raise typ
+            val = typ()
+        if tb is not None:
+            val = val.with_traceback(tb)
+        raise val
+
+    def close(self):
+        """Raise GeneratorExit inside coroutine.
+        """
+        try:
+            self.throw(GeneratorExit)
+        except (GeneratorExit, StopIteration):
+            pass
+        else:
+            raise RuntimeError("coroutine ignored GeneratorExit")
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Coroutine:
+            return _check_methods(C, '__await__', 'send', 'throw', 'close')
+        return NotImplemented
+
+
+Coroutine.register(coroutine)
+
+
+class AsyncIterable(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __aiter__(self):
+        return AsyncIterator()
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is AsyncIterable:
+            return _check_methods(C, "__aiter__")
+        return NotImplemented
+
+    __class_getitem__ = classmethod(GenericAlias)
+
+
+class AsyncIterator(AsyncIterable):
+
+    __slots__ = ()
+
+    @abstractmethod
+    async def __anext__(self):
+        """Return the next item or raise StopAsyncIteration when exhausted."""
+        raise StopAsyncIteration
+
+    def __aiter__(self):
+        return self
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is AsyncIterator:
+            return _check_methods(C, "__anext__", "__aiter__")
+        return NotImplemented
+
+
+class AsyncGenerator(AsyncIterator):
+
+    __slots__ = ()
+
+    async def __anext__(self):
+        """Return the next item from the asynchronous generator.
+        When exhausted, raise StopAsyncIteration.
+        """
+        return await self.asend(None)
+
+    @abstractmethod
+    async def asend(self, value):
+        """Send a value into the asynchronous generator.
+        Return next yielded value or raise StopAsyncIteration.
+        """
+        raise StopAsyncIteration
+
+    @abstractmethod
+    async def athrow(self, typ, val=None, tb=None):
+        """Raise an exception in the asynchronous generator.
+        Return next yielded value or raise StopAsyncIteration.
+        """
+        if val is None:
+            if tb is None:
+                raise typ
+            val = typ()
+        if tb is not None:
+            val = val.with_traceback(tb)
+        raise val
+
+    async def aclose(self):
+        """Raise GeneratorExit inside coroutine.
+        """
+        try:
+            await self.athrow(GeneratorExit)
+        except (GeneratorExit, StopAsyncIteration):
+            pass
+        else:
+            raise RuntimeError("asynchronous generator ignored GeneratorExit")
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is AsyncGenerator:
+            return _check_methods(C, '__aiter__', '__anext__',
+                                  'asend', 'athrow', 'aclose')
+        return NotImplemented
+
+
+AsyncGenerator.register(async_generator)
+
+
+class Iterable(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __iter__(self):
+        while False:
+            yield None
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Iterable:
+            return _check_methods(C, "__iter__")
+        return NotImplemented
+
+    __class_getitem__ = classmethod(GenericAlias)
+
+
+class Iterator(Iterable):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __next__(self):
+        'Return the next item from the iterator. When exhausted, raise StopIteration'
+        raise StopIteration
+
+    def __iter__(self):
+        return self
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Iterator:
+            return _check_methods(C, '__iter__', '__next__')
+        return NotImplemented
+
+
+Iterator.register(bytes_iterator)
+Iterator.register(bytearray_iterator)
+#Iterator.register(callable_iterator)
+Iterator.register(dict_keyiterator)
+Iterator.register(dict_valueiterator)
+Iterator.register(dict_itemiterator)
+Iterator.register(list_iterator)
+Iterator.register(list_reverseiterator)
+Iterator.register(range_iterator)
+Iterator.register(longrange_iterator)
+Iterator.register(set_iterator)
+Iterator.register(str_iterator)
+Iterator.register(tuple_iterator)
+Iterator.register(zip_iterator)
+
+
+class Reversible(Iterable):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __reversed__(self):
+        while False:
+            yield None
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Reversible:
+            return _check_methods(C, "__reversed__", "__iter__")
+        return NotImplemented
+
+
+class Generator(Iterator):
+
+    __slots__ = ()
+
+    def __next__(self):
+        """Return the next item from the generator.
+        When exhausted, raise StopIteration.
+        """
+        return self.send(None)
+
+    @abstractmethod
+    def send(self, value):
+        """Send a value into the generator.
+        Return next yielded value or raise StopIteration.
+        """
+        raise StopIteration
+
+    @abstractmethod
+    def throw(self, typ, val=None, tb=None):
+        """Raise an exception in the generator.
+        Return next yielded value or raise StopIteration.
+        """
+        if val is None:
+            if tb is None:
+                raise typ
+            val = typ()
+        if tb is not None:
+            val = val.with_traceback(tb)
+        raise val
+
+    def close(self):
+        """Raise GeneratorExit inside generator.
+        """
+        try:
+            self.throw(GeneratorExit)
+        except (GeneratorExit, StopIteration):
+            pass
+        else:
+            raise RuntimeError("generator ignored GeneratorExit")
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Generator:
+            return _check_methods(C, '__iter__', '__next__',
+                                  'send', 'throw', 'close')
+        return NotImplemented
+
+
+Generator.register(generator)
+
+
+class Sized(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __len__(self):
+        return 0
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Sized:
+            return _check_methods(C, "__len__")
+        return NotImplemented
+
+
+class Container(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __contains__(self, x):
+        return False
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Container:
+            return _check_methods(C, "__contains__")
+        return NotImplemented
+
+    __class_getitem__ = classmethod(GenericAlias)
+
+
+class Collection(Sized, Iterable, Container):
+
+    __slots__ = ()
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Collection:
+            return _check_methods(C,  "__len__", "__iter__", "__contains__")
+        return NotImplemented
+
+
+class Buffer(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __buffer__(self, flags: int, /) -> memoryview:
+        raise NotImplementedError
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Buffer:
+            return _check_methods(C, "__buffer__")
+        return NotImplemented
+
+
+class _CallableGenericAlias(GenericAlias):
+    """ Represent `Callable[argtypes, resulttype]`.
+
+    This sets ``__args__`` to a tuple containing the flattened ``argtypes``
+    followed by ``resulttype``.
+
+    Example: ``Callable[[int, str], float]`` sets ``__args__`` to
+    ``(int, str, float)``.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, origin, args):
+        if not (isinstance(args, tuple) and len(args) == 2):
+            raise TypeError(
+                "Callable must be used as Callable[[arg, ...], result].")
+        t_args, t_result = args
+        if isinstance(t_args, (tuple, list)):
+            args = (*t_args, t_result)
+        elif not _is_param_expr(t_args):
+            raise TypeError(f"Expected a list of types, an ellipsis, "
+                            f"ParamSpec, or Concatenate. Got {t_args}")
+        return super().__new__(cls, origin, args)
+
+    def __repr__(self):
+        if len(self.__args__) == 2 and _is_param_expr(self.__args__[0]):
+            return super().__repr__()
+        return (f'collections.abc.Callable'
+                f'[[{", ".join([_type_repr(a) for a in self.__args__[:-1]])}], '
+                f'{_type_repr(self.__args__[-1])}]')
+
+    def __reduce__(self):
+        args = self.__args__
+        if not (len(args) == 2 and _is_param_expr(args[0])):
+            args = list(args[:-1]), args[-1]
+        return _CallableGenericAlias, (Callable, args)
+
+    def __getitem__(self, item):
+        # Called during TypeVar substitution, returns the custom subclass
+        # rather than the default types.GenericAlias object.  Most of the
+        # code is copied from typing's _GenericAlias and the builtin
+        # types.GenericAlias.
+        if not isinstance(item, tuple):
+            item = (item,)
+
+        new_args = super().__getitem__(item).__args__
+
+        # args[0] occurs due to things like Z[[int, str, bool]] from PEP 612
+        if not isinstance(new_args[0], (tuple, list)):
+            t_result = new_args[-1]
+            t_args = new_args[:-1]
+            new_args = (t_args, t_result)
+        return _CallableGenericAlias(Callable, tuple(new_args))
+
+def _is_param_expr(obj):
+    """Checks if obj matches either a list of types, ``...``, ``ParamSpec`` or
+    ``_ConcatenateGenericAlias`` from typing.py
+    """
+    if obj is Ellipsis:
+        return True
+    if isinstance(obj, list):
+        return True
+    obj = type(obj)
+    names = ('ParamSpec', '_ConcatenateGenericAlias')
+    return obj.__module__ == 'typing' and any(obj.__name__ == name for name in names)
+
+def _type_repr(obj):
+    """Return the repr() of an object, special-casing types (internal helper).
+
+    Copied from :mod:`typing` since collections.abc
+    shouldn't depend on that module.
+    (Keep this roughly in sync with the typing version.)
+    """
+    if isinstance(obj, type):
+        if obj.__module__ == 'builtins':
+            return obj.__qualname__
+        return f'{obj.__module__}.{obj.__qualname__}'
+    if obj is Ellipsis:
+        return '...'
+    if isinstance(obj, FunctionType):
+        return obj.__name__
+    return repr(obj)
+
+
+class Callable(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __call__(self, *args, **kwds):
+        return False
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Callable:
+            return _check_methods(C, "__call__")
+        return NotImplemented
+
+    __class_getitem__ = classmethod(_CallableGenericAlias)
+
+
+### SETS ###
+
+
+class Set(Collection):
+    """A set is a finite, iterable container.
+
+    This class provides concrete generic implementations of all
+    methods except for __contains__, __iter__ and __len__.
+
+    To override the comparisons (presumably for speed, as the
+    semantics are fixed), redefine __le__ and __ge__,
+    then the other operations will automatically follow suit.
+    """
+
+    __slots__ = ()
+
+    def __le__(self, other):
+        if not isinstance(other, Set):
+            return NotImplemented
+        if len(self) > len(other):
+            return False
+        for elem in self:
+            if elem not in other:
+                return False
+        return True
+
+    def __lt__(self, other):
+        if not isinstance(other, Set):
+            return NotImplemented
+        return len(self) < len(other) and self.__le__(other)
+
+    def __gt__(self, other):
+        if not isinstance(other, Set):
+            return NotImplemented
+        return len(self) > len(other) and self.__ge__(other)
+
+    def __ge__(self, other):
+        if not isinstance(other, Set):
+            return NotImplemented
+        if len(self) < len(other):
+            return False
+        for elem in other:
+            if elem not in self:
+                return False
+        return True
+
+    def __eq__(self, other):
+        if not isinstance(other, Set):
+            return NotImplemented
+        return len(self) == len(other) and self.__le__(other)
+
+    @classmethod
+    def _from_iterable(cls, it):
+        '''Construct an instance of the class from any iterable input.
+
+        Must override this method if the class constructor signature
+        does not accept an iterable for an input.
+        '''
+        return cls(it)
+
+    def __and__(self, other):
+        if not isinstance(other, Iterable):
+            return NotImplemented
+        return self._from_iterable(value for value in other if value in self)
+
+    __rand__ = __and__
+
+    def isdisjoint(self, other):
+        'Return True if two sets have a null intersection.'
+        for value in other:
+            if value in self:
+                return False
+        return True
+
+    def __or__(self, other):
+        if not isinstance(other, Iterable):
+            return NotImplemented
+        chain = (e for s in (self, other) for e in s)
+        return self._from_iterable(chain)
+
+    __ror__ = __or__
+
+    def __sub__(self, other):
+        if not isinstance(other, Set):
+            if not isinstance(other, Iterable):
+                return NotImplemented
+            other = self._from_iterable(other)
+        return self._from_iterable(value for value in self
+                                   if value not in other)
+
+    def __rsub__(self, other):
+        if not isinstance(other, Set):
+            if not isinstance(other, Iterable):
+                return NotImplemented
+            other = self._from_iterable(other)
+        return self._from_iterable(value for value in other
+                                   if value not in self)
+
+    def __xor__(self, other):
+        if not isinstance(other, Set):
+            if not isinstance(other, Iterable):
+                return NotImplemented
+            other = self._from_iterable(other)
+        return (self - other) | (other - self)
+
+    __rxor__ = __xor__
+
+    def _hash(self):
+        """Compute the hash value of a set.
+
+        Note that we don't define __hash__: not all sets are hashable.
+        But if you define a hashable set type, its __hash__ should
+        call this function.
+
+        This must be compatible __eq__.
+
+        All sets ought to compare equal if they contain the same
+        elements, regardless of how they are implemented, and
+        regardless of the order of the elements; so there's not much
+        freedom for __eq__ or __hash__.  We match the algorithm used
+        by the built-in frozenset type.
+        """
+        MAX = sys.maxsize
+        MASK = 2 * MAX + 1
+        n = len(self)
+        h = 1927868237 * (n + 1)
+        h &= MASK
+        for x in self:
+            hx = hash(x)
+            h ^= (hx ^ (hx << 16) ^ 89869747)  * 3644798167
+            h &= MASK
+        h ^= (h >> 11) ^ (h >> 25)
+        h = h * 69069 + 907133923
+        h &= MASK
+        if h > MAX:
+            h -= MASK + 1
+        if h == -1:
+            h = 590923713
+        return h
+
+
+Set.register(frozenset)
+
+
+class MutableSet(Set):
+    """A mutable set is a finite, iterable container.
+
+    This class provides concrete generic implementations of all
+    methods except for __contains__, __iter__, __len__,
+    add(), and discard().
+
+    To override the comparisons (presumably for speed, as the
+    semantics are fixed), all you have to do is redefine __le__ and
+    then the other operations will automatically follow suit.
+    """
+
+    __slots__ = ()
+
+    @abstractmethod
+    def add(self, value):
+        """Add an element."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def discard(self, value):
+        """Remove an element.  Do not raise an exception if absent."""
+        raise NotImplementedError
+
+    def remove(self, value):
+        """Remove an element. If not a member, raise a KeyError."""
+        if value not in self:
+            raise KeyError(value)
+        self.discard(value)
+
+    def pop(self):
+        """Return the popped value.  Raise KeyError if empty."""
+        it = iter(self)
+        try:
+            value = next(it)
+        except StopIteration:
+            raise KeyError from None
+        self.discard(value)
+        return value
+
+    def clear(self):
+        """This is slow (creates N new iterators!) but effective."""
+        try:
+            while True:
+                self.pop()
+        except KeyError:
+            pass
+
+    def __ior__(self, it):
+        for value in it:
+            self.add(value)
+        return self
+
+    def __iand__(self, it):
+        for value in (self - it):
+            self.discard(value)
+        return self
+
+    def __ixor__(self, it):
+        if it is self:
+            self.clear()
+        else:
+            if not isinstance(it, Set):
+                it = self._from_iterable(it)
+            for value in it:
+                if value in self:
+                    self.discard(value)
+                else:
+                    self.add(value)
+        return self
+
+    def __isub__(self, it):
+        if it is self:
+            self.clear()
+        else:
+            for value in it:
+                self.discard(value)
+        return self
+
+
+MutableSet.register(set)
+
+
+### MAPPINGS ###
+
+class Mapping(Collection):
+    """A Mapping is a generic container for associating key/value
+    pairs.
+
+    This class provides concrete generic implementations of all
+    methods except for __getitem__, __iter__, and __len__.
+    """
+
+    __slots__ = ()
+
+    # Tell ABCMeta.__new__ that this class should have TPFLAGS_MAPPING set.
+    __abc_tpflags__ = 1 << 6 # Py_TPFLAGS_MAPPING
+
+    @abstractmethod
+    def __getitem__(self, key):
+        raise KeyError
+
+    def get(self, key, default=None):
+        'D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None.'
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        try:
+            self[key]
+        except KeyError:
+            return False
+        else:
+            return True
+
+    def keys(self):
+        "D.keys() -> a set-like object providing a view on D's keys"
+        return KeysView(self)
+
+    def items(self):
+        "D.items() -> a set-like object providing a view on D's items"
+        return ItemsView(self)
+
+    def values(self):
+        "D.values() -> an object providing a view on D's values"
+        return ValuesView(self)
+
+    def __eq__(self, other):
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return dict(self.items()) == dict(other.items())
+
+    __reversed__ = None
+
+Mapping.register(mappingproxy)
+Mapping.register(framelocalsproxy)
+
+
+class MappingView(Sized):
+
+    __slots__ = '_mapping',
+
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def __len__(self):
+        return len(self._mapping)
+
+    def __repr__(self):
+        return '{0.__class__.__name__}({0._mapping!r})'.format(self)
+
+    __class_getitem__ = classmethod(GenericAlias)
+
+
+class KeysView(MappingView, Set):
+
+    __slots__ = ()
+
+    @classmethod
+    def _from_iterable(cls, it):
+        return set(it)
+
+    def __contains__(self, key):
+        return key in self._mapping
+
+    def __iter__(self):
+        yield from self._mapping
+
+
+KeysView.register(dict_keys)
+
+
+class ItemsView(MappingView, Set):
+
+    __slots__ = ()
+
+    @classmethod
+    def _from_iterable(cls, it):
+        return set(it)
+
+    def __contains__(self, item):
+        key, value = item
+        try:
+            v = self._mapping[key]
+        except KeyError:
+            return False
+        else:
+            return v is value or v == value
+
+    def __iter__(self):
+        for key in self._mapping:
+            yield (key, self._mapping[key])
+
+
+ItemsView.register(dict_items)
+
+
+class ValuesView(MappingView, Collection):
+
+    __slots__ = ()
+
+    def __contains__(self, value):
+        for key in self._mapping:
+            v = self._mapping[key]
+            if v is value or v == value:
+                return True
+        return False
+
+    def __iter__(self):
+        for key in self._mapping:
+            yield self._mapping[key]
+
+
+ValuesView.register(dict_values)
+
+
+class MutableMapping(Mapping):
+    """A MutableMapping is a generic container for associating
+    key/value pairs.
+
+    This class provides concrete generic implementations of all
+    methods except for __getitem__, __setitem__, __delitem__,
+    __iter__, and __len__.
+    """
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __setitem__(self, key, value):
+        raise KeyError
+
+    @abstractmethod
+    def __delitem__(self, key):
+        raise KeyError
+
+    __marker = object()
+
+    def pop(self, key, default=__marker):
+        '''D.pop(k[,d]) -> v, remove specified key and return the corresponding value.
+          If key is not found, d is returned if given, otherwise KeyError is raised.
+        '''
+        try:
+            value = self[key]
+        except KeyError:
+            if default is self.__marker:
+                raise
+            return default
+        else:
+            del self[key]
+            return value
+
+    def popitem(self):
+        '''D.popitem() -> (k, v), remove and return some (key, value) pair
+           as a 2-tuple; but raise KeyError if D is empty.
+        '''
+        try:
+            key = next(iter(self))
+        except StopIteration:
+            raise KeyError from None
+        value = self[key]
+        del self[key]
+        return key, value
+
+    def clear(self):
+        'D.clear() -> None.  Remove all items from D.'
+        try:
+            while True:
+                self.popitem()
+        except KeyError:
+            pass
+
+    def update(self, other=(), /, **kwds):
+        ''' D.update([E, ]**F) -> None.  Update D from mapping/iterable E and F.
+            If E present and has a .keys() method, does:     for k in E.keys(): D[k] = E[k]
+            If E present and lacks .keys() method, does:     for (k, v) in E: D[k] = v
+            In either case, this is followed by: for k, v in F.items(): D[k] = v
+        '''
+        if isinstance(other, Mapping):
+            for key in other:
+                self[key] = other[key]
+        elif hasattr(other, "keys"):
+            for key in other.keys():
+                self[key] = other[key]
+        else:
+            for key, value in other:
+                self[key] = value
+        for key, value in kwds.items():
+            self[key] = value
+
+    def setdefault(self, key, default=None):
+        'D.setdefault(k[,d]) -> D.get(k,d), also set D[k]=d if k not in D'
+        try:
+            return self[key]
+        except KeyError:
+            self[key] = default
+        return default
+
+
+MutableMapping.register(dict)
+
+
+### SEQUENCES ###
+
+class Sequence(Reversible, Collection):
+    """All the operations on a read-only sequence.
+
+    Concrete subclasses must override __new__ or __init__,
+    __getitem__, and __len__.
+    """
+
+    __slots__ = ()
+
+    # Tell ABCMeta.__new__ that this class should have TPFLAGS_SEQUENCE set.
+    __abc_tpflags__ = 1 << 5 # Py_TPFLAGS_SEQUENCE
+
+    @abstractmethod
+    def __getitem__(self, index):
+        raise IndexError
+
+    def __iter__(self):
+        i = 0
+        try:
+            while True:
+                v = self[i]
+                yield v
+                i += 1
+        except IndexError:
+            return
+
+    def __contains__(self, value):
+        for v in self:
+            if v is value or v == value:
+                return True
+        return False
+
+    def __reversed__(self):
+        for i in reversed(range(len(self))):
+            yield self[i]
+
+    def index(self, value, start=0, stop=None):
+        '''S.index(value, [start, [stop]]) -> integer -- return first index of value.
+           Raises ValueError if the value is not present.
+
+           Supporting start and stop arguments is optional, but
+           recommended.
+        '''
+        if start is not None and start < 0:
+            start = max(len(self) + start, 0)
+        if stop is not None and stop < 0:
+            stop += len(self)
+
+        i = start
+        while stop is None or i < stop:
+            try:
+                v = self[i]
+            except IndexError:
+                break
+            if v is value or v == value:
+                return i
+            i += 1
+        raise ValueError
+
+    def count(self, value):
+        'S.count(value) -> integer -- return number of occurrences of value'
+        return sum(1 for v in self if v is value or v == value)
+
+Sequence.register(tuple)
+Sequence.register(str)
+Sequence.register(range)
+Sequence.register(memoryview)
+
+class _DeprecateByteStringMeta(ABCMeta):
+    def __new__(cls, name, bases, namespace, **kwargs):
+        if name != "ByteString":
+            import warnings
+
+            warnings._deprecated(
+                "collections.abc.ByteString",
+                remove=(3, 14),
+            )
+        return super().__new__(cls, name, bases, namespace, **kwargs)
+
+    def __instancecheck__(cls, instance):
+        import warnings
+
+        warnings._deprecated(
+            "collections.abc.ByteString",
+            remove=(3, 14),
+        )
+        return super().__instancecheck__(instance)
+
+class ByteString(Sequence, metaclass=_DeprecateByteStringMeta):
+    """This unifies bytes and bytearray.
+
+    XXX Should add all their methods.
+    """
+
+    __slots__ = ()
+
+ByteString.register(bytes)
+ByteString.register(bytearray)
+
+
+class MutableSequence(Sequence):
+    """All the operations on a read-write sequence.
+
+    Concrete subclasses must provide __new__ or __init__,
+    __getitem__, __setitem__, __delitem__, __len__, and insert().
+    """
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __setitem__(self, index, value):
+        raise IndexError
+
+    @abstractmethod
+    def __delitem__(self, index):
+        raise IndexError
+
+    @abstractmethod
+    def insert(self, index, value):
+        'S.insert(index, value) -- insert value before index'
+        raise IndexError
+
+    def append(self, value):
+        'S.append(value) -- append value to the end of the sequence'
+        self.insert(len(self), value)
+
+    def clear(self):
+        'S.clear() -> None -- remove all items from S'
+        try:
+            while True:
+                self.pop()
+        except IndexError:
+            pass
+
+    def reverse(self):
+        'S.reverse() -- reverse *IN PLACE*'
+        n = len(self)
+        for i in range(n//2):
+            self[i], self[n-i-1] = self[n-i-1], self[i]
+
+    def extend(self, values):
+        'S.extend(iterable) -- extend sequence by appending elements from the iterable'
+        if values is self:
+            values = list(values)
+        for v in values:
+            self.append(v)
+
+    def pop(self, index=-1):
+        '''S.pop([index]) -> item -- remove and return item at index (default last).
+           Raise IndexError if list is empty or index is out of range.
+        '''
+        v = self[index]
+        del self[index]
+        return v
+
+    def remove(self, value):
+        '''S.remove(value) -- remove first occurrence of value.
+           Raise ValueError if the value is not present.
+        '''
+        del self[self.index(value)]
+
+    def __iadd__(self, values):
+        self.extend(values)
+        return self
+
+
+MutableSequence.register(list)
+MutableSequence.register(bytearray)  # Multiply inheriting, see ByteString
+# ---- _colorize.py ----
+import io
+import os
+import sys
+
+COLORIZE = True
+
+
+class ANSIColors:
+    BOLD_GREEN = "\x1b[1;32m"
+    BOLD_MAGENTA = "\x1b[1;35m"
+    BOLD_RED = "\x1b[1;31m"
+    GREEN = "\x1b[32m"
+    GREY = "\x1b[90m"
+    MAGENTA = "\x1b[35m"
+    RED = "\x1b[31m"
+    RESET = "\x1b[0m"
+    YELLOW = "\x1b[33m"
+
+
+NoColors = ANSIColors()
+
+for attr in dir(NoColors):
+    if not attr.startswith("__"):
+        setattr(NoColors, attr, "")
+
+
+def get_colors(colorize: bool = False, *, file=None) -> ANSIColors:
+    if colorize or can_colorize(file=file):
+        return ANSIColors()
+    else:
+        return NoColors
+
+
+def can_colorize(*, file=None) -> bool:
+    if file is None:
+        file = sys.stdout
+
+    if not sys.flags.ignore_environment:
+        if os.environ.get("PYTHON_COLORS") == "0":
+            return False
+        if os.environ.get("PYTHON_COLORS") == "1":
+            return True
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not COLORIZE:
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    if os.environ.get("TERM") == "dumb":
+        return False
+
+    if not hasattr(file, "fileno"):
+        return False
+
+    if sys.platform == "win32":
+        try:
+            import nt
+
+            if not nt._supports_virtual_terminal():
+                return False
+        except (ImportError, AttributeError):
+            return False
+
+    try:
+        return os.isatty(file.fileno())
+    except io.UnsupportedOperation:
+        return file.isatty()
+# ---- _compat_pickle.py ----
+# This module is used to map the old Python 2 names to the new names used in
+# Python 3 for the pickle module.  This needed to make pickle streams
+# generated with Python 2 loadable by Python 3.
+
+# This is a copy of lib2to3.fixes.fix_imports.MAPPING.  We cannot import
+# lib2to3 and use the mapping defined there, because lib2to3 uses pickle.
+# Thus, this could cause the module to be imported recursively.
+IMPORT_MAPPING = {
+    '__builtin__' : 'builtins',
+    'copy_reg': 'copyreg',
+    'Queue': 'queue',
+    'SocketServer': 'socketserver',
+    'ConfigParser': 'configparser',
+    'repr': 'reprlib',
+    'tkFileDialog': 'tkinter.filedialog',
+    'tkSimpleDialog': 'tkinter.simpledialog',
+    'tkColorChooser': 'tkinter.colorchooser',
+    'tkCommonDialog': 'tkinter.commondialog',
+    'Dialog': 'tkinter.dialog',
+    'Tkdnd': 'tkinter.dnd',
+    'tkFont': 'tkinter.font',
+    'tkMessageBox': 'tkinter.messagebox',
+    'ScrolledText': 'tkinter.scrolledtext',
+    'Tkconstants': 'tkinter.constants',
+    'ttk': 'tkinter.ttk',
+    'Tkinter': 'tkinter',
+    'markupbase': '_markupbase',
+    '_winreg': 'winreg',
+    'thread': '_thread',
+    'dummy_thread': '_dummy_thread',
+    'dbhash': 'dbm.bsd',
+    'dumbdbm': 'dbm.dumb',
+    'dbm': 'dbm.ndbm',
+    'gdbm': 'dbm.gnu',
+    'xmlrpclib': 'xmlrpc.client',
+    'SimpleXMLRPCServer': 'xmlrpc.server',
+    'httplib': 'http.client',
+    'htmlentitydefs' : 'html.entities',
+    'HTMLParser' : 'html.parser',
+    'Cookie': 'http.cookies',
+    'cookielib': 'http.cookiejar',
+    'BaseHTTPServer': 'http.server',
+    'test.test_support': 'test.support',
+    'commands': 'subprocess',
+    'urlparse' : 'urllib.parse',
+    'robotparser' : 'urllib.robotparser',
+    'urllib2': 'urllib.request',
+    'anydbm': 'dbm',
+    '_abcoll' : 'collections.abc',
+}
+
+
+# This contains rename rules that are easy to handle.  We ignore the more
+# complex stuff (e.g. mapping the names in the urllib and types modules).
+# These rules should be run before import names are fixed.
+NAME_MAPPING = {
+    ('__builtin__', 'xrange'):     ('builtins', 'range'),
+    ('__builtin__', 'reduce'):     ('functools', 'reduce'),
+    ('__builtin__', 'intern'):     ('sys', 'intern'),
+    ('__builtin__', 'unichr'):     ('builtins', 'chr'),
+    ('__builtin__', 'unicode'):    ('builtins', 'str'),
+    ('__builtin__', 'long'):       ('builtins', 'int'),
+    ('itertools', 'izip'):         ('builtins', 'zip'),
+    ('itertools', 'imap'):         ('builtins', 'map'),
+    ('itertools', 'ifilter'):      ('builtins', 'filter'),
+    ('itertools', 'ifilterfalse'): ('itertools', 'filterfalse'),
+    ('itertools', 'izip_longest'): ('itertools', 'zip_longest'),
+    ('UserDict', 'IterableUserDict'): ('collections', 'UserDict'),
+    ('UserList', 'UserList'): ('collections', 'UserList'),
+    ('UserString', 'UserString'): ('collections', 'UserString'),
+    ('whichdb', 'whichdb'): ('dbm', 'whichdb'),
+    ('_socket', 'fromfd'): ('socket', 'fromfd'),
+    ('_multiprocessing', 'Connection'): ('multiprocessing.connection', 'Connection'),
+    ('multiprocessing.process', 'Process'): ('multiprocessing.context', 'Process'),
+    ('multiprocessing.forking', 'Popen'): ('multiprocessing.popen_fork', 'Popen'),
+    ('urllib', 'ContentTooShortError'): ('urllib.error', 'ContentTooShortError'),
+    ('urllib', 'getproxies'): ('urllib.request', 'getproxies'),
+    ('urllib', 'pathname2url'): ('urllib.request', 'pathname2url'),
+    ('urllib', 'quote_plus'): ('urllib.parse', 'quote_plus'),
+    ('urllib', 'quote'): ('urllib.parse', 'quote'),
+    ('urllib', 'unquote_plus'): ('urllib.parse', 'unquote_plus'),
+    ('urllib', 'unquote'): ('urllib.parse', 'unquote'),
+    ('urllib', 'url2pathname'): ('urllib.request', 'url2pathname'),
+    ('urllib', 'urlcleanup'): ('urllib.request', 'urlcleanup'),
+    ('urllib', 'urlencode'): ('urllib.parse', 'urlencode'),
+    ('urllib', 'urlopen'): ('urllib.request', 'urlopen'),
+    ('urllib', 'urlretrieve'): ('urllib.request', 'urlretrieve'),
+    ('urllib2', 'HTTPError'): ('urllib.error', 'HTTPError'),
+    ('urllib2', 'URLError'): ('urllib.error', 'URLError'),
+}
+
+PYTHON2_EXCEPTIONS = (
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BufferError",
+    "BytesWarning",
+    "DeprecationWarning",
+    "EOFError",
+    "EnvironmentError",
+    "Exception",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "NameError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "ReferenceError",
+    "RuntimeError",
+    "RuntimeWarning",
+    # StandardError is gone in Python 3, so we map it to Exception
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "Warning",
+    "ZeroDivisionError",
+)
+
+try:
+    WindowsError
+except NameError:
+    pass
+else:
+    PYTHON2_EXCEPTIONS += ("WindowsError",)
+
+for excname in PYTHON2_EXCEPTIONS:
+    NAME_MAPPING[("exceptions", excname)] = ("builtins", excname)
+
+MULTIPROCESSING_EXCEPTIONS = (
+    'AuthenticationError',
+    'BufferTooShort',
+    'ProcessError',
+    'TimeoutError',
+)
+
+for excname in MULTIPROCESSING_EXCEPTIONS:
+    NAME_MAPPING[("multiprocessing", excname)] = ("multiprocessing.context", excname)
+
+# Same, but for 3.x to 2.x
+REVERSE_IMPORT_MAPPING = dict((v, k) for (k, v) in IMPORT_MAPPING.items())
+assert len(REVERSE_IMPORT_MAPPING) == len(IMPORT_MAPPING)
+REVERSE_NAME_MAPPING = dict((v, k) for (k, v) in NAME_MAPPING.items())
+assert len(REVERSE_NAME_MAPPING) == len(NAME_MAPPING)
+
+# Non-mutual mappings.
+
+IMPORT_MAPPING.update({
+    'cPickle': 'pickle',
+    '_elementtree': 'xml.etree.ElementTree',
+    'FileDialog': 'tkinter.filedialog',
+    'SimpleDialog': 'tkinter.simpledialog',
+    'DocXMLRPCServer': 'xmlrpc.server',
+    'SimpleHTTPServer': 'http.server',
+    'CGIHTTPServer': 'http.server',
+    # For compatibility with broken pickles saved in old Python 3 versions
+    'UserDict': 'collections',
+    'UserList': 'collections',
+    'UserString': 'collections',
+    'whichdb': 'dbm',
+    'StringIO':  'io',
+    'cStringIO': 'io',
+})
+
+REVERSE_IMPORT_MAPPING.update({
+    '_bz2': 'bz2',
+    '_dbm': 'dbm',
+    '_functools': 'functools',
+    '_gdbm': 'gdbm',
+    '_pickle': 'pickle',
+})
+
+NAME_MAPPING.update({
+    ('__builtin__', 'basestring'): ('builtins', 'str'),
+    ('exceptions', 'StandardError'): ('builtins', 'Exception'),
+    ('UserDict', 'UserDict'): ('collections', 'UserDict'),
+    ('socket', '_socketobject'): ('socket', 'SocketType'),
+})
+
+REVERSE_NAME_MAPPING.update({
+    ('_functools', 'reduce'): ('__builtin__', 'reduce'),
+    ('tkinter.filedialog', 'FileDialog'): ('FileDialog', 'FileDialog'),
+    ('tkinter.filedialog', 'LoadFileDialog'): ('FileDialog', 'LoadFileDialog'),
+    ('tkinter.filedialog', 'SaveFileDialog'): ('FileDialog', 'SaveFileDialog'),
+    ('tkinter.simpledialog', 'SimpleDialog'): ('SimpleDialog', 'SimpleDialog'),
+    ('xmlrpc.server', 'ServerHTMLDoc'): ('DocXMLRPCServer', 'ServerHTMLDoc'),
+    ('xmlrpc.server', 'XMLRPCDocGenerator'):
+        ('DocXMLRPCServer', 'XMLRPCDocGenerator'),
+    ('xmlrpc.server', 'DocXMLRPCRequestHandler'):
+        ('DocXMLRPCServer', 'DocXMLRPCRequestHandler'),
+    ('xmlrpc.server', 'DocXMLRPCServer'):
+        ('DocXMLRPCServer', 'DocXMLRPCServer'),
+    ('xmlrpc.server', 'DocCGIXMLRPCRequestHandler'):
+        ('DocXMLRPCServer', 'DocCGIXMLRPCRequestHandler'),
+    ('http.server', 'SimpleHTTPRequestHandler'):
+        ('SimpleHTTPServer', 'SimpleHTTPRequestHandler'),
+    ('http.server', 'CGIHTTPRequestHandler'):
+        ('CGIHTTPServer', 'CGIHTTPRequestHandler'),
+    ('_socket', 'socket'): ('socket', '_socketobject'),
+})
+
+PYTHON3_OSERROR_EXCEPTIONS = (
+    'BrokenPipeError',
+    'ChildProcessError',
+    'ConnectionAbortedError',
+    'ConnectionError',
+    'ConnectionRefusedError',
+    'ConnectionResetError',
+    'FileExistsError',
+    'FileNotFoundError',
+    'InterruptedError',
+    'IsADirectoryError',
+    'NotADirectoryError',
+    'PermissionError',
+    'ProcessLookupError',
+    'TimeoutError',
+)
+
+for excname in PYTHON3_OSERROR_EXCEPTIONS:
+    REVERSE_NAME_MAPPING[('builtins', excname)] = ('exceptions', 'OSError')
+
+PYTHON3_IMPORTERROR_EXCEPTIONS = (
+    'ModuleNotFoundError',
+)
+
+for excname in PYTHON3_IMPORTERROR_EXCEPTIONS:
+    REVERSE_NAME_MAPPING[('builtins', excname)] = ('exceptions', 'ImportError')
+del excname
+# ---- _compression.py ----
+"""Internal classes used by the gzip, lzma and bz2 modules"""
+
+import io
+import sys
+
+BUFFER_SIZE = io.DEFAULT_BUFFER_SIZE  # Compressed data read chunk size
+
+
+class BaseStream(io.BufferedIOBase):
+    """Mode-checking helper functions."""
+
+    def _check_not_closed(self):
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+
+    def _check_can_read(self):
+        if not self.readable():
+            raise io.UnsupportedOperation("File not open for reading")
+
+    def _check_can_write(self):
+        if not self.writable():
+            raise io.UnsupportedOperation("File not open for writing")
+
+    def _check_can_seek(self):
+        if not self.readable():
+            raise io.UnsupportedOperation("Seeking is only supported "
+                                          "on files open for reading")
+        if not self.seekable():
+            raise io.UnsupportedOperation("The underlying file object "
+                                          "does not support seeking")
+
+
+class DecompressReader(io.RawIOBase):
+    """Adapts the decompressor API to a RawIOBase reader API"""
+
+    def readable(self):
+        return True
+
+    def __init__(self, fp, decomp_factory, trailing_error=(), **decomp_args):
+        self._fp = fp
+        self._eof = False
+        self._pos = 0  # Current offset in decompressed stream
+
+        # Set to size of decompressed stream once it is known, for SEEK_END
+        self._size = -1
+
+        # Save the decompressor factory and arguments.
+        # If the file contains multiple compressed streams, each
+        # stream will need a separate decompressor object. A new decompressor
+        # object is also needed when implementing a backwards seek().
+        self._decomp_factory = decomp_factory
+        self._decomp_args = decomp_args
+        self._decompressor = self._decomp_factory(**self._decomp_args)
+
+        # Exception class to catch from decompressor signifying invalid
+        # trailing data to ignore
+        self._trailing_error = trailing_error
+
+    def close(self):
+        self._decompressor = None
+        return super().close()
+
+    def seekable(self):
+        return self._fp.seekable()
+
+    def readinto(self, b):
+        with memoryview(b) as view, view.cast("B") as byte_view:
+            data = self.read(len(byte_view))
+            byte_view[:len(data)] = data
+        return len(data)
+
+    def read(self, size=-1):
+        if size < 0:
+            return self.readall()
+
+        if not size or self._eof:
+            return b""
+        data = None  # Default if EOF is encountered
+        # Depending on the input data, our call to the decompressor may not
+        # return any data. In this case, try again after reading another block.
+        while True:
+            if self._decompressor.eof:
+                rawblock = (self._decompressor.unused_data or
+                            self._fp.read(BUFFER_SIZE))
+                if not rawblock:
+                    break
+                # Continue to next stream.
+                self._decompressor = self._decomp_factory(
+                    **self._decomp_args)
+                try:
+                    data = self._decompressor.decompress(rawblock, size)
+                except self._trailing_error:
+                    # Trailing data isn't a valid compressed stream; ignore it.
+                    break
+            else:
+                if self._decompressor.needs_input:
+                    rawblock = self._fp.read(BUFFER_SIZE)
+                    if not rawblock:
+                        raise EOFError("Compressed file ended before the "
+                                       "end-of-stream marker was reached")
+                else:
+                    rawblock = b""
+                data = self._decompressor.decompress(rawblock, size)
+            if data:
+                break
+        if not data:
+            self._eof = True
+            self._size = self._pos
+            return b""
+        self._pos += len(data)
+        return data
+
+    def readall(self):
+        chunks = []
+        # sys.maxsize means the max length of output buffer is unlimited,
+        # so that the whole input buffer can be decompressed within one
+        # .decompress() call.
+        while data := self.read(sys.maxsize):
+            chunks.append(data)
+
+        return b"".join(chunks)
+
+    # Rewind the file to the beginning of the data stream.
+    def _rewind(self):
+        self._fp.seek(0)
+        self._eof = False
+        self._pos = 0
+        self._decompressor = self._decomp_factory(**self._decomp_args)
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        # Recalculate offset as an absolute file position.
+        if whence == io.SEEK_SET:
+            pass
+        elif whence == io.SEEK_CUR:
+            offset = self._pos + offset
+        elif whence == io.SEEK_END:
+            # Seeking relative to EOF - we need to know the file's size.
+            if self._size < 0:
+                while self.read(io.DEFAULT_BUFFER_SIZE):
+                    pass
+            offset = self._size + offset
+        else:
+            raise ValueError("Invalid value for whence: {}".format(whence))
+
+        # Make it so that offset is the number of bytes to skip forward.
+        if offset < self._pos:
+            self._rewind()
+        else:
+            offset -= self._pos
+
+        # Read and discard data until we reach the desired position.
+        while offset > 0:
+            data = self.read(min(io.DEFAULT_BUFFER_SIZE, offset))
+            if not data:
+                break
+            offset -= len(data)
+
+        return self._pos
+
+    def tell(self):
+        """Return the current file position."""
+        return self._pos
+# ---- _ios_support.py ----
+import sys
+try:
+    from ctypes import cdll, c_void_p, c_char_p, util
+except ImportError:
+    # ctypes is an optional module. If it's not present, we're limited in what
+    # we can tell about the system, but we don't want to prevent the module
+    # from working.
+    print("ctypes isn't available; iOS system calls will not be available", file=sys.stderr)
+    objc = None
+else:
+    # ctypes is available. Load the ObjC library, and wrap the objc_getClass,
+    # sel_registerName methods
+    lib = util.find_library("objc")
+    if lib is None:
+        # Failed to load the objc library
+        raise ImportError("ObjC runtime library couldn't be loaded")
+
+    objc = cdll.LoadLibrary(lib)
+    objc.objc_getClass.restype = c_void_p
+    objc.objc_getClass.argtypes = [c_char_p]
+    objc.sel_registerName.restype = c_void_p
+    objc.sel_registerName.argtypes = [c_char_p]
+
+
+def get_platform_ios():
+    # Determine if this is a simulator using the multiarch value
+    is_simulator = sys.implementation._multiarch.endswith("simulator")
+
+    # We can't use ctypes; abort
+    if not objc:
+        return None
+
+    # Most of the methods return ObjC objects
+    objc.objc_msgSend.restype = c_void_p
+    # All the methods used have no arguments.
+    objc.objc_msgSend.argtypes = [c_void_p, c_void_p]
+
+    # Equivalent of:
+    #   device = [UIDevice currentDevice]
+    UIDevice = objc.objc_getClass(b"UIDevice")
+    SEL_currentDevice = objc.sel_registerName(b"currentDevice")
+    device = objc.objc_msgSend(UIDevice, SEL_currentDevice)
+
+    # Equivalent of:
+    #   device_systemVersion = [device systemVersion]
+    SEL_systemVersion = objc.sel_registerName(b"systemVersion")
+    device_systemVersion = objc.objc_msgSend(device, SEL_systemVersion)
+
+    # Equivalent of:
+    #   device_systemName = [device systemName]
+    SEL_systemName = objc.sel_registerName(b"systemName")
+    device_systemName = objc.objc_msgSend(device, SEL_systemName)
+
+    # Equivalent of:
+    #   device_model = [device model]
+    SEL_model = objc.sel_registerName(b"model")
+    device_model = objc.objc_msgSend(device, SEL_model)
+
+    # UTF8String returns a const char*;
+    SEL_UTF8String = objc.sel_registerName(b"UTF8String")
+    objc.objc_msgSend.restype = c_char_p
+
+    # Equivalent of:
+    #   system = [device_systemName UTF8String]
+    #   release = [device_systemVersion UTF8String]
+    #   model = [device_model UTF8String]
+    system = objc.objc_msgSend(device_systemName, SEL_UTF8String).decode()
+    release = objc.objc_msgSend(device_systemVersion, SEL_UTF8String).decode()
+    model = objc.objc_msgSend(device_model, SEL_UTF8String).decode()
+
+    return system, release, model, is_simulator
+# ---- _markupbase.py ----
+"""Shared support for scanning document type declarations in HTML and XHTML.
+
+This module is used as a foundation for the html.parser module.  It has no
+documented public API and should not be used directly.
+
+"""
+
+import re
+
+_declname_match = re.compile(r'[a-zA-Z][-_.a-zA-Z0-9]*\s*').match
+_declstringlit_match = re.compile(r'(\'[^\']*\'|"[^"]*")\s*').match
+_commentclose = re.compile(r'--\s*>')
+_markedsectionclose = re.compile(r']\s*]\s*>')
+
+# An analysis of the MS-Word extensions is available at
+# http://www.planetpublish.com/xmlarena/xap/Thursday/WordtoXML.pdf
+
+_msmarkedsectionclose = re.compile(r']\s*>')
+
+del re
+
+
+class ParserBase:
+    """Parser base class which provides some common support methods used
+    by the SGML/HTML and XHTML parsers."""
+
+    def __init__(self):
+        if self.__class__ is ParserBase:
+            raise RuntimeError(
+                "_markupbase.ParserBase must be subclassed")
+
+    def reset(self):
+        self.lineno = 1
+        self.offset = 0
+
+    def getpos(self):
+        """Return current line number and offset."""
+        return self.lineno, self.offset
+
+    # Internal -- update line number and offset.  This should be
+    # called for each piece of data exactly once, in order -- in other
+    # words the concatenation of all the input strings to this
+    # function should be exactly the entire input.
+    def updatepos(self, i, j):
+        if i >= j:
+            return j
+        rawdata = self.rawdata
+        nlines = rawdata.count("\n", i, j)
+        if nlines:
+            self.lineno = self.lineno + nlines
+            pos = rawdata.rindex("\n", i, j) # Should not fail
+            self.offset = j-(pos+1)
+        else:
+            self.offset = self.offset + j-i
+        return j
+
+    _decl_otherchars = ''
+
+    # Internal -- parse declaration (for use by subclasses).
+    def parse_declaration(self, i):
+        # This is some sort of declaration; in "HTML as
+        # deployed," this should only be the document type
+        # declaration ("<!DOCTYPE html...>").
+        # ISO 8879:1986, however, has more complex
+        # declaration syntax for elements in <!...>, including:
+        # --comment--
+        # [marked section]
+        # name in the following list: ENTITY, DOCTYPE, ELEMENT,
+        # ATTLIST, NOTATION, SHORTREF, USEMAP,
+        # LINKTYPE, LINK, IDLINK, USELINK, SYSTEM
+        rawdata = self.rawdata
+        j = i + 2
+        assert rawdata[i:j] == "<!", "unexpected call to parse_declaration"
+        if rawdata[j:j+1] == ">":
+            # the empty comment <!>
+            return j + 1
+        if rawdata[j:j+1] in ("-", ""):
+            # Start of comment followed by buffer boundary,
+            # or just a buffer boundary.
+            return -1
+        # A simple, practical version could look like: ((name|stringlit) S*) + '>'
+        n = len(rawdata)
+        if rawdata[j:j+2] == '--': #comment
+            # Locate --.*-- as the body of the comment
+            return self.parse_comment(i)
+        elif rawdata[j] == '[': #marked section
+            # Locate [statusWord [...arbitrary SGML...]] as the body of the marked section
+            # Where statusWord is one of TEMP, CDATA, IGNORE, INCLUDE, RCDATA
+            # Note that this is extended by Microsoft Office "Save as Web" function
+            # to include [if...] and [endif].
+            return self.parse_marked_section(i)
+        else: #all other declaration elements
+            decltype, j = self._scan_name(j, i)
+        if j < 0:
+            return j
+        if decltype == "doctype":
+            self._decl_otherchars = ''
+        while j < n:
+            c = rawdata[j]
+            if c == ">":
+                # end of declaration syntax
+                data = rawdata[i+2:j]
+                if decltype == "doctype":
+                    self.handle_decl(data)
+                else:
+                    # According to the HTML5 specs sections "8.2.4.44 Bogus
+                    # comment state" and "8.2.4.45 Markup declaration open
+                    # state", a comment token should be emitted.
+                    # Calling unknown_decl provides more flexibility though.
+                    self.unknown_decl(data)
+                return j + 1
+            if c in "\"'":
+                m = _declstringlit_match(rawdata, j)
+                if not m:
+                    return -1 # incomplete
+                j = m.end()
+            elif c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                name, j = self._scan_name(j, i)
+            elif c in self._decl_otherchars:
+                j = j + 1
+            elif c == "[":
+                # this could be handled in a separate doctype parser
+                if decltype == "doctype":
+                    j = self._parse_doctype_subset(j + 1, i)
+                elif decltype in {"attlist", "linktype", "link", "element"}:
+                    # must tolerate []'d groups in a content model in an element declaration
+                    # also in data attribute specifications of attlist declaration
+                    # also link type declaration subsets in linktype declarations
+                    # also link attribute specification lists in link declarations
+                    raise AssertionError("unsupported '[' char in %s declaration" % decltype)
+                else:
+                    raise AssertionError("unexpected '[' char in declaration")
+            else:
+                raise AssertionError("unexpected %r char in declaration" % rawdata[j])
+            if j < 0:
+                return j
+        return -1 # incomplete
+
+    # Internal -- parse a marked section
+    # Override this to handle MS-word extension syntax <![if word]>content<![endif]>
+    def parse_marked_section(self, i, report=1):
+        rawdata= self.rawdata
+        assert rawdata[i:i+3] == '<![', "unexpected call to parse_marked_section()"
+        sectName, j = self._scan_name( i+3, i )
+        if j < 0:
+            return j
+        if sectName in {"temp", "cdata", "ignore", "include", "rcdata"}:
+            # look for standard ]]> ending
+            match= _markedsectionclose.search(rawdata, i+3)
+        elif sectName in {"if", "else", "endif"}:
+            # look for MS Office ]> ending
+            match= _msmarkedsectionclose.search(rawdata, i+3)
+        else:
+            raise AssertionError(
+                'unknown status keyword %r in marked section' % rawdata[i+3:j]
+            )
+        if not match:
+            return -1
+        if report:
+            j = match.start(0)
+            self.unknown_decl(rawdata[i+3: j])
+        return match.end(0)
+
+    # Internal -- parse comment, return length or -1 if not terminated
+    def parse_comment(self, i, report=1):
+        rawdata = self.rawdata
+        if rawdata[i:i+4] != '<!--':
+            raise AssertionError('unexpected call to parse_comment()')
+        match = _commentclose.search(rawdata, i+4)
+        if not match:
+            return -1
+        if report:
+            j = match.start(0)
+            self.handle_comment(rawdata[i+4: j])
+        return match.end(0)
+
+    # Internal -- scan past the internal subset in a <!DOCTYPE declaration,
+    # returning the index just past any whitespace following the trailing ']'.
+    def _parse_doctype_subset(self, i, declstartpos):
+        rawdata = self.rawdata
+        n = len(rawdata)
+        j = i
+        while j < n:
+            c = rawdata[j]
+            if c == "<":
+                s = rawdata[j:j+2]
+                if s == "<":
+                    # end of buffer; incomplete
+                    return -1
+                if s != "<!":
+                    self.updatepos(declstartpos, j + 1)
+                    raise AssertionError(
+                        "unexpected char in internal subset (in %r)" % s
+                    )
+                if (j + 2) == n:
+                    # end of buffer; incomplete
+                    return -1
+                if (j + 4) > n:
+                    # end of buffer; incomplete
+                    return -1
+                if rawdata[j:j+4] == "<!--":
+                    j = self.parse_comment(j, report=0)
+                    if j < 0:
+                        return j
+                    continue
+                name, j = self._scan_name(j + 2, declstartpos)
+                if j == -1:
+                    return -1
+                if name not in {"attlist", "element", "entity", "notation"}:
+                    self.updatepos(declstartpos, j + 2)
+                    raise AssertionError(
+                        "unknown declaration %r in internal subset" % name
+                    )
+                # handle the individual names
+                meth = getattr(self, "_parse_doctype_" + name)
+                j = meth(j, declstartpos)
+                if j < 0:
+                    return j
+            elif c == "%":
+                # parameter entity reference
+                if (j + 1) == n:
+                    # end of buffer; incomplete
+                    return -1
+                s, j = self._scan_name(j + 1, declstartpos)
+                if j < 0:
+                    return j
+                if rawdata[j] == ";":
+                    j = j + 1
+            elif c == "]":
+                j = j + 1
+                while j < n and rawdata[j].isspace():
+                    j = j + 1
+                if j < n:
+                    if rawdata[j] == ">":
+                        return j
+                    self.updatepos(declstartpos, j)
+                    raise AssertionError("unexpected char after internal subset")
+                else:
+                    return -1
+            elif c.isspace():
+                j = j + 1
+            else:
+                self.updatepos(declstartpos, j)
+                raise AssertionError("unexpected char %r in internal subset" % c)
+        # end of buffer reached
+        return -1
+
+    # Internal -- scan past <!ELEMENT declarations
+    def _parse_doctype_element(self, i, declstartpos):
+        name, j = self._scan_name(i, declstartpos)
+        if j == -1:
+            return -1
+        # style content model; just skip until '>'
+        rawdata = self.rawdata
+        if '>' in rawdata[j:]:
+            return rawdata.find(">", j) + 1
+        return -1
+
+    # Internal -- scan past <!ATTLIST declarations
+    def _parse_doctype_attlist(self, i, declstartpos):
+        rawdata = self.rawdata
+        name, j = self._scan_name(i, declstartpos)
+        c = rawdata[j:j+1]
+        if c == "":
+            return -1
+        if c == ">":
+            return j + 1
+        while 1:
+            # scan a series of attribute descriptions; simplified:
+            #   name type [value] [#constraint]
+            name, j = self._scan_name(j, declstartpos)
+            if j < 0:
+                return j
+            c = rawdata[j:j+1]
+            if c == "":
+                return -1
+            if c == "(":
+                # an enumerated type; look for ')'
+                if ")" in rawdata[j:]:
+                    j = rawdata.find(")", j) + 1
+                else:
+                    return -1
+                while rawdata[j:j+1].isspace():
+                    j = j + 1
+                if not rawdata[j:]:
+                    # end of buffer, incomplete
+                    return -1
+            else:
+                name, j = self._scan_name(j, declstartpos)
+            c = rawdata[j:j+1]
+            if not c:
+                return -1
+            if c in "'\"":
+                m = _declstringlit_match(rawdata, j)
+                if m:
+                    j = m.end()
+                else:
+                    return -1
+                c = rawdata[j:j+1]
+                if not c:
+                    return -1
+            if c == "#":
+                if rawdata[j:] == "#":
+                    # end of buffer
+                    return -1
+                name, j = self._scan_name(j + 1, declstartpos)
+                if j < 0:
+                    return j
+                c = rawdata[j:j+1]
+                if not c:
+                    return -1
+            if c == '>':
+                # all done
+                return j + 1
+
+    # Internal -- scan past <!NOTATION declarations
+    def _parse_doctype_notation(self, i, declstartpos):
+        name, j = self._scan_name(i, declstartpos)
+        if j < 0:
+            return j
+        rawdata = self.rawdata
+        while 1:
+            c = rawdata[j:j+1]
+            if not c:
+                # end of buffer; incomplete
+                return -1
+            if c == '>':
+                return j + 1
+            if c in "'\"":
+                m = _declstringlit_match(rawdata, j)
+                if not m:
+                    return -1
+                j = m.end()
+            else:
+                name, j = self._scan_name(j, declstartpos)
+                if j < 0:
+                    return j
+
+    # Internal -- scan past <!ENTITY declarations
+    def _parse_doctype_entity(self, i, declstartpos):
+        rawdata = self.rawdata
+        if rawdata[i:i+1] == "%":
+            j = i + 1
+            while 1:
+                c = rawdata[j:j+1]
+                if not c:
+                    return -1
+                if c.isspace():
+                    j = j + 1
+                else:
+                    break
+        else:
+            j = i
+        name, j = self._scan_name(j, declstartpos)
+        if j < 0:
+            return j
+        while 1:
+            c = self.rawdata[j:j+1]
+            if not c:
+                return -1
+            if c in "'\"":
+                m = _declstringlit_match(rawdata, j)
+                if m:
+                    j = m.end()
+                else:
+                    return -1    # incomplete
+            elif c == ">":
+                return j + 1
+            else:
+                name, j = self._scan_name(j, declstartpos)
+                if j < 0:
+                    return j
+
+    # Internal -- scan a name token and the new position and the token, or
+    # return -1 if we've reached the end of the buffer.
+    def _scan_name(self, i, declstartpos):
+        rawdata = self.rawdata
+        n = len(rawdata)
+        if i == n:
+            return None, -1
+        m = _declname_match(rawdata, i)
+        if m:
+            s = m.group()
+            name = s.strip()
+            if (i + len(s)) == n:
+                return None, -1  # end of buffer
+            return name.lower(), m.end()
+        else:
+            self.updatepos(declstartpos, i)
+            raise AssertionError(
+                "expected name token at %r" % rawdata[declstartpos:declstartpos+20]
+            )
+
+    # To be overridden -- handlers for unknown objects
+    def unknown_decl(self, data):
+        pass
+# ---- _opcode_metadata.py ----
+# This file is generated by Tools/cases_generator/py_metadata_generator.py
+# from:
+#   Python/bytecodes.c
+# Do not edit!
+_specializations = {
+    "RESUME": [
+        "RESUME_CHECK",
+    ],
+    "TO_BOOL": [
+        "TO_BOOL_ALWAYS_TRUE",
+        "TO_BOOL_BOOL",
+        "TO_BOOL_INT",
+        "TO_BOOL_LIST",
+        "TO_BOOL_NONE",
+        "TO_BOOL_STR",
+    ],
+    "BINARY_OP": [
+        "BINARY_OP_MULTIPLY_INT",
+        "BINARY_OP_ADD_INT",
+        "BINARY_OP_SUBTRACT_INT",
+        "BINARY_OP_MULTIPLY_FLOAT",
+        "BINARY_OP_ADD_FLOAT",
+        "BINARY_OP_SUBTRACT_FLOAT",
+        "BINARY_OP_ADD_UNICODE",
+        "BINARY_OP_INPLACE_ADD_UNICODE",
+    ],
+    "BINARY_SUBSCR": [
+        "BINARY_SUBSCR_DICT",
+        "BINARY_SUBSCR_GETITEM",
+        "BINARY_SUBSCR_LIST_INT",
+        "BINARY_SUBSCR_STR_INT",
+        "BINARY_SUBSCR_TUPLE_INT",
+    ],
+    "STORE_SUBSCR": [
+        "STORE_SUBSCR_DICT",
+        "STORE_SUBSCR_LIST_INT",
+    ],
+    "SEND": [
+        "SEND_GEN",
+    ],
+    "UNPACK_SEQUENCE": [
+        "UNPACK_SEQUENCE_TWO_TUPLE",
+        "UNPACK_SEQUENCE_TUPLE",
+        "UNPACK_SEQUENCE_LIST",
+    ],
+    "STORE_ATTR": [
+        "STORE_ATTR_INSTANCE_VALUE",
+        "STORE_ATTR_SLOT",
+        "STORE_ATTR_WITH_HINT",
+    ],
+    "LOAD_GLOBAL": [
+        "LOAD_GLOBAL_MODULE",
+        "LOAD_GLOBAL_BUILTIN",
+    ],
+    "LOAD_SUPER_ATTR": [
+        "LOAD_SUPER_ATTR_ATTR",
+        "LOAD_SUPER_ATTR_METHOD",
+    ],
+    "LOAD_ATTR": [
+        "LOAD_ATTR_INSTANCE_VALUE",
+        "LOAD_ATTR_MODULE",
+        "LOAD_ATTR_WITH_HINT",
+        "LOAD_ATTR_SLOT",
+        "LOAD_ATTR_CLASS",
+        "LOAD_ATTR_PROPERTY",
+        "LOAD_ATTR_GETATTRIBUTE_OVERRIDDEN",
+        "LOAD_ATTR_METHOD_WITH_VALUES",
+        "LOAD_ATTR_METHOD_NO_DICT",
+        "LOAD_ATTR_METHOD_LAZY_DICT",
+        "LOAD_ATTR_NONDESCRIPTOR_WITH_VALUES",
+        "LOAD_ATTR_NONDESCRIPTOR_NO_DICT",
+    ],
+    "COMPARE_OP": [
+        "COMPARE_OP_FLOAT",
+        "COMPARE_OP_INT",
+        "COMPARE_OP_STR",
+    ],
+    "CONTAINS_OP": [
+        "CONTAINS_OP_SET",
+        "CONTAINS_OP_DICT",
+    ],
+    "FOR_ITER": [
+        "FOR_ITER_LIST",
+        "FOR_ITER_TUPLE",
+        "FOR_ITER_RANGE",
+        "FOR_ITER_GEN",
+    ],
+    "CALL": [
+        "CALL_BOUND_METHOD_EXACT_ARGS",
+        "CALL_PY_EXACT_ARGS",
+        "CALL_TYPE_1",
+        "CALL_STR_1",
+        "CALL_TUPLE_1",
+        "CALL_BUILTIN_CLASS",
+        "CALL_BUILTIN_O",
+        "CALL_BUILTIN_FAST",
+        "CALL_BUILTIN_FAST_WITH_KEYWORDS",
+        "CALL_LEN",
+        "CALL_ISINSTANCE",
+        "CALL_LIST_APPEND",
+        "CALL_METHOD_DESCRIPTOR_O",
+        "CALL_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS",
+        "CALL_METHOD_DESCRIPTOR_NOARGS",
+        "CALL_METHOD_DESCRIPTOR_FAST",
+        "CALL_ALLOC_AND_ENTER_INIT",
+        "CALL_PY_GENERAL",
+        "CALL_BOUND_METHOD_GENERAL",
+        "CALL_NON_PY_GENERAL",
+    ],
+}
+
+_specialized_opmap = {
+    'BINARY_OP_ADD_FLOAT': 150,
+    'BINARY_OP_ADD_INT': 151,
+    'BINARY_OP_ADD_UNICODE': 152,
+    'BINARY_OP_INPLACE_ADD_UNICODE': 3,
+    'BINARY_OP_MULTIPLY_FLOAT': 153,
+    'BINARY_OP_MULTIPLY_INT': 154,
+    'BINARY_OP_SUBTRACT_FLOAT': 155,
+    'BINARY_OP_SUBTRACT_INT': 156,
+    'BINARY_SUBSCR_DICT': 157,
+    'BINARY_SUBSCR_GETITEM': 158,
+    'BINARY_SUBSCR_LIST_INT': 159,
+    'BINARY_SUBSCR_STR_INT': 160,
+    'BINARY_SUBSCR_TUPLE_INT': 161,
+    'CALL_ALLOC_AND_ENTER_INIT': 162,
+    'CALL_BOUND_METHOD_EXACT_ARGS': 163,
+    'CALL_BOUND_METHOD_GENERAL': 164,
+    'CALL_BUILTIN_CLASS': 165,
+    'CALL_BUILTIN_FAST': 166,
+    'CALL_BUILTIN_FAST_WITH_KEYWORDS': 167,
+    'CALL_BUILTIN_O': 168,
+    'CALL_ISINSTANCE': 169,
+    'CALL_LEN': 170,
+    'CALL_LIST_APPEND': 171,
+    'CALL_METHOD_DESCRIPTOR_FAST': 172,
+    'CALL_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS': 173,
+    'CALL_METHOD_DESCRIPTOR_NOARGS': 174,
+    'CALL_METHOD_DESCRIPTOR_O': 175,
+    'CALL_NON_PY_GENERAL': 176,
+    'CALL_PY_EXACT_ARGS': 177,
+    'CALL_PY_GENERAL': 178,
+    'CALL_STR_1': 179,
+    'CALL_TUPLE_1': 180,
+    'CALL_TYPE_1': 181,
+    'COMPARE_OP_FLOAT': 182,
+    'COMPARE_OP_INT': 183,
+    'COMPARE_OP_STR': 184,
+    'CONTAINS_OP_DICT': 185,
+    'CONTAINS_OP_SET': 186,
+    'FOR_ITER_GEN': 187,
+    'FOR_ITER_LIST': 188,
+    'FOR_ITER_RANGE': 189,
+    'FOR_ITER_TUPLE': 190,
+    'LOAD_ATTR_CLASS': 191,
+    'LOAD_ATTR_GETATTRIBUTE_OVERRIDDEN': 192,
+    'LOAD_ATTR_INSTANCE_VALUE': 193,
+    'LOAD_ATTR_METHOD_LAZY_DICT': 194,
+    'LOAD_ATTR_METHOD_NO_DICT': 195,
+    'LOAD_ATTR_METHOD_WITH_VALUES': 196,
+    'LOAD_ATTR_MODULE': 197,
+    'LOAD_ATTR_NONDESCRIPTOR_NO_DICT': 198,
+    'LOAD_ATTR_NONDESCRIPTOR_WITH_VALUES': 199,
+    'LOAD_ATTR_PROPERTY': 200,
+    'LOAD_ATTR_SLOT': 201,
+    'LOAD_ATTR_WITH_HINT': 202,
+    'LOAD_GLOBAL_BUILTIN': 203,
+    'LOAD_GLOBAL_MODULE': 204,
+    'LOAD_SUPER_ATTR_ATTR': 205,
+    'LOAD_SUPER_ATTR_METHOD': 206,
+    'RESUME_CHECK': 207,
+    'SEND_GEN': 208,
+    'STORE_ATTR_INSTANCE_VALUE': 209,
+    'STORE_ATTR_SLOT': 210,
+    'STORE_ATTR_WITH_HINT': 211,
+    'STORE_SUBSCR_DICT': 212,
+    'STORE_SUBSCR_LIST_INT': 213,
+    'TO_BOOL_ALWAYS_TRUE': 214,
+    'TO_BOOL_BOOL': 215,
+    'TO_BOOL_INT': 216,
+    'TO_BOOL_LIST': 217,
+    'TO_BOOL_NONE': 218,
+    'TO_BOOL_STR': 219,
+    'UNPACK_SEQUENCE_LIST': 220,
+    'UNPACK_SEQUENCE_TUPLE': 221,
+    'UNPACK_SEQUENCE_TWO_TUPLE': 222,
+}
+
+opmap = {
+    'CACHE': 0,
+    'RESERVED': 17,
+    'RESUME': 149,
+    'INSTRUMENTED_LINE': 254,
+    'BEFORE_ASYNC_WITH': 1,
+    'BEFORE_WITH': 2,
+    'BINARY_SLICE': 4,
+    'BINARY_SUBSCR': 5,
+    'CHECK_EG_MATCH': 6,
+    'CHECK_EXC_MATCH': 7,
+    'CLEANUP_THROW': 8,
+    'DELETE_SUBSCR': 9,
+    'END_ASYNC_FOR': 10,
+    'END_FOR': 11,
+    'END_SEND': 12,
+    'EXIT_INIT_CHECK': 13,
+    'FORMAT_SIMPLE': 14,
+    'FORMAT_WITH_SPEC': 15,
+    'GET_AITER': 16,
+    'GET_ANEXT': 18,
+    'GET_ITER': 19,
+    'GET_LEN': 20,
+    'GET_YIELD_FROM_ITER': 21,
+    'INTERPRETER_EXIT': 22,
+    'LOAD_ASSERTION_ERROR': 23,
+    'LOAD_BUILD_CLASS': 24,
+    'LOAD_LOCALS': 25,
+    'MAKE_FUNCTION': 26,
+    'MATCH_KEYS': 27,
+    'MATCH_MAPPING': 28,
+    'MATCH_SEQUENCE': 29,
+    'NOP': 30,
+    'POP_EXCEPT': 31,
+    'POP_TOP': 32,
+    'PUSH_EXC_INFO': 33,
+    'PUSH_NULL': 34,
+    'RETURN_GENERATOR': 35,
+    'RETURN_VALUE': 36,
+    'SETUP_ANNOTATIONS': 37,
+    'STORE_SLICE': 38,
+    'STORE_SUBSCR': 39,
+    'TO_BOOL': 40,
+    'UNARY_INVERT': 41,
+    'UNARY_NEGATIVE': 42,
+    'UNARY_NOT': 43,
+    'WITH_EXCEPT_START': 44,
+    'BINARY_OP': 45,
+    'BUILD_CONST_KEY_MAP': 46,
+    'BUILD_LIST': 47,
+    'BUILD_MAP': 48,
+    'BUILD_SET': 49,
+    'BUILD_SLICE': 50,
+    'BUILD_STRING': 51,
+    'BUILD_TUPLE': 52,
+    'CALL': 53,
+    'CALL_FUNCTION_EX': 54,
+    'CALL_INTRINSIC_1': 55,
+    'CALL_INTRINSIC_2': 56,
+    'CALL_KW': 57,
+    'COMPARE_OP': 58,
+    'CONTAINS_OP': 59,
+    'CONVERT_VALUE': 60,
+    'COPY': 61,
+    'COPY_FREE_VARS': 62,
+    'DELETE_ATTR': 63,
+    'DELETE_DEREF': 64,
+    'DELETE_FAST': 65,
+    'DELETE_GLOBAL': 66,
+    'DELETE_NAME': 67,
+    'DICT_MERGE': 68,
+    'DICT_UPDATE': 69,
+    'ENTER_EXECUTOR': 70,
+    'EXTENDED_ARG': 71,
+    'FOR_ITER': 72,
+    'GET_AWAITABLE': 73,
+    'IMPORT_FROM': 74,
+    'IMPORT_NAME': 75,
+    'IS_OP': 76,
+    'JUMP_BACKWARD': 77,
+    'JUMP_BACKWARD_NO_INTERRUPT': 78,
+    'JUMP_FORWARD': 79,
+    'LIST_APPEND': 80,
+    'LIST_EXTEND': 81,
+    'LOAD_ATTR': 82,
+    'LOAD_CONST': 83,
+    'LOAD_DEREF': 84,
+    'LOAD_FAST': 85,
+    'LOAD_FAST_AND_CLEAR': 86,
+    'LOAD_FAST_CHECK': 87,
+    'LOAD_FAST_LOAD_FAST': 88,
+    'LOAD_FROM_DICT_OR_DEREF': 89,
+    'LOAD_FROM_DICT_OR_GLOBALS': 90,
+    'LOAD_GLOBAL': 91,
+    'LOAD_NAME': 92,
+    'LOAD_SUPER_ATTR': 93,
+    'MAKE_CELL': 94,
+    'MAP_ADD': 95,
+    'MATCH_CLASS': 96,
+    'POP_JUMP_IF_FALSE': 97,
+    'POP_JUMP_IF_NONE': 98,
+    'POP_JUMP_IF_NOT_NONE': 99,
+    'POP_JUMP_IF_TRUE': 100,
+    'RAISE_VARARGS': 101,
+    'RERAISE': 102,
+    'RETURN_CONST': 103,
+    'SEND': 104,
+    'SET_ADD': 105,
+    'SET_FUNCTION_ATTRIBUTE': 106,
+    'SET_UPDATE': 107,
+    'STORE_ATTR': 108,
+    'STORE_DEREF': 109,
+    'STORE_FAST': 110,
+    'STORE_FAST_LOAD_FAST': 111,
+    'STORE_FAST_STORE_FAST': 112,
+    'STORE_GLOBAL': 113,
+    'STORE_NAME': 114,
+    'SWAP': 115,
+    'UNPACK_EX': 116,
+    'UNPACK_SEQUENCE': 117,
+    'YIELD_VALUE': 118,
+    'INSTRUMENTED_RESUME': 236,
+    'INSTRUMENTED_END_FOR': 237,
+    'INSTRUMENTED_END_SEND': 238,
+    'INSTRUMENTED_RETURN_VALUE': 239,
+    'INSTRUMENTED_RETURN_CONST': 240,
+    'INSTRUMENTED_YIELD_VALUE': 241,
+    'INSTRUMENTED_LOAD_SUPER_ATTR': 242,
+    'INSTRUMENTED_FOR_ITER': 243,
+    'INSTRUMENTED_CALL': 244,
+    'INSTRUMENTED_CALL_KW': 245,
+    'INSTRUMENTED_CALL_FUNCTION_EX': 246,
+    'INSTRUMENTED_INSTRUCTION': 247,
+    'INSTRUMENTED_JUMP_FORWARD': 248,
+    'INSTRUMENTED_JUMP_BACKWARD': 249,
+    'INSTRUMENTED_POP_JUMP_IF_TRUE': 250,
+    'INSTRUMENTED_POP_JUMP_IF_FALSE': 251,
+    'INSTRUMENTED_POP_JUMP_IF_NONE': 252,
+    'INSTRUMENTED_POP_JUMP_IF_NOT_NONE': 253,
+    'JUMP': 256,
+    'JUMP_NO_INTERRUPT': 257,
+    'LOAD_CLOSURE': 258,
+    'LOAD_METHOD': 259,
+    'LOAD_SUPER_METHOD': 260,
+    'LOAD_ZERO_SUPER_ATTR': 261,
+    'LOAD_ZERO_SUPER_METHOD': 262,
+    'POP_BLOCK': 263,
+    'SETUP_CLEANUP': 264,
+    'SETUP_FINALLY': 265,
+    'SETUP_WITH': 266,
+    'STORE_FAST_MAYBE_NULL': 267,
+}
+
+HAVE_ARGUMENT = 44
+MIN_INSTRUMENTED_OPCODE = 236
+# ---- _osx_support.py ----
+"""Shared OS X support functions."""
+
+import os
+import re
+import sys
+
+__all__ = [
+    'compiler_fixup',
+    'customize_config_vars',
+    'customize_compiler',
+    'get_platform_osx',
+]
+
+# configuration variables that may contain universal build flags,
+# like "-arch" or "-isdkroot", that may need customization for
+# the user environment
+_UNIVERSAL_CONFIG_VARS = ('CFLAGS', 'LDFLAGS', 'CPPFLAGS', 'BASECFLAGS',
+                            'BLDSHARED', 'LDSHARED', 'CC', 'CXX',
+                            'PY_CFLAGS', 'PY_LDFLAGS', 'PY_CPPFLAGS',
+                            'PY_CORE_CFLAGS', 'PY_CORE_LDFLAGS')
+
+# configuration variables that may contain compiler calls
+_COMPILER_CONFIG_VARS = ('BLDSHARED', 'LDSHARED', 'CC', 'CXX')
+
+# prefix added to original configuration variable names
+_INITPRE = '_OSX_SUPPORT_INITIAL_'
+
+
+def _find_executable(executable, path=None):
+    """Tries to find 'executable' in the directories listed in 'path'.
+
+    A string listing directories separated by 'os.pathsep'; defaults to
+    os.environ['PATH'].  Returns the complete filename or None if not found.
+    """
+    if path is None:
+        path = os.environ['PATH']
+
+    paths = path.split(os.pathsep)
+    base, ext = os.path.splitext(executable)
+
+    if (sys.platform == 'win32') and (ext != '.exe'):
+        executable = executable + '.exe'
+
+    if not os.path.isfile(executable):
+        for p in paths:
+            f = os.path.join(p, executable)
+            if os.path.isfile(f):
+                # the file exists, we have a shot at spawn working
+                return f
+        return None
+    else:
+        return executable
+
+
+def _read_output(commandstring, capture_stderr=False):
+    """Output from successful command execution or None"""
+    # Similar to os.popen(commandstring, "r").read(),
+    # but without actually using os.popen because that
+    # function is not usable during python bootstrap.
+    # tempfile is also not available then.
+    import contextlib
+    try:
+        import tempfile
+        fp = tempfile.NamedTemporaryFile()
+    except ImportError:
+        fp = open("/tmp/_osx_support.%s"%(
+            os.getpid(),), "w+b")
+
+    with contextlib.closing(fp) as fp:
+        if capture_stderr:
+            cmd = "%s >'%s' 2>&1" % (commandstring, fp.name)
+        else:
+            cmd = "%s 2>/dev/null >'%s'" % (commandstring, fp.name)
+        return fp.read().decode('utf-8').strip() if not os.system(cmd) else None
+
+
+def _find_build_tool(toolname):
+    """Find a build tool on current path or using xcrun"""
+    return (_find_executable(toolname)
+                or _read_output("/usr/bin/xcrun -find %s" % (toolname,))
+                or ''
+            )
+
+_SYSTEM_VERSION = None
+
+def _get_system_version():
+    """Return the OS X system version as a string"""
+    # Reading this plist is a documented way to get the system
+    # version (see the documentation for the Gestalt Manager)
+    # We avoid using platform.mac_ver to avoid possible bootstrap issues during
+    # the build of Python itself (distutils is used to build standard library
+    # extensions).
+
+    global _SYSTEM_VERSION
+
+    if _SYSTEM_VERSION is None:
+        _SYSTEM_VERSION = ''
+        try:
+            f = open('/System/Library/CoreServices/SystemVersion.plist', encoding="utf-8")
+        except OSError:
+            # We're on a plain darwin box, fall back to the default
+            # behaviour.
+            pass
+        else:
+            try:
+                m = re.search(r'<key>ProductUserVisibleVersion</key>\s*'
+                              r'<string>(.*?)</string>', f.read())
+            finally:
+                f.close()
+            if m is not None:
+                _SYSTEM_VERSION = '.'.join(m.group(1).split('.')[:2])
+            # else: fall back to the default behaviour
+
+    return _SYSTEM_VERSION
+
+_SYSTEM_VERSION_TUPLE = None
+def _get_system_version_tuple():
+    """
+    Return the macOS system version as a tuple
+
+    The return value is safe to use to compare
+    two version numbers.
+    """
+    global _SYSTEM_VERSION_TUPLE
+    if _SYSTEM_VERSION_TUPLE is None:
+        osx_version = _get_system_version()
+        if osx_version:
+            try:
+                _SYSTEM_VERSION_TUPLE = tuple(int(i) for i in osx_version.split('.'))
+            except ValueError:
+                _SYSTEM_VERSION_TUPLE = ()
+
+    return _SYSTEM_VERSION_TUPLE
+
+
+def _remove_original_values(_config_vars):
+    """Remove original unmodified values for testing"""
+    # This is needed for higher-level cross-platform tests of get_platform.
+    for k in list(_config_vars):
+        if k.startswith(_INITPRE):
+            del _config_vars[k]
+
+def _save_modified_value(_config_vars, cv, newvalue):
+    """Save modified and original unmodified value of configuration var"""
+
+    oldvalue = _config_vars.get(cv, '')
+    if (oldvalue != newvalue) and (_INITPRE + cv not in _config_vars):
+        _config_vars[_INITPRE + cv] = oldvalue
+    _config_vars[cv] = newvalue
+
+
+_cache_default_sysroot = None
+def _default_sysroot(cc):
+    """ Returns the root of the default SDK for this system, or '/' """
+    global _cache_default_sysroot
+
+    if _cache_default_sysroot is not None:
+        return _cache_default_sysroot
+
+    contents = _read_output('%s -c -E -v - </dev/null' % (cc,), True)
+    in_incdirs = False
+    for line in contents.splitlines():
+        if line.startswith("#include <...>"):
+            in_incdirs = True
+        elif line.startswith("End of search list"):
+            in_incdirs = False
+        elif in_incdirs:
+            line = line.strip()
+            if line == '/usr/include':
+                _cache_default_sysroot = '/'
+            elif line.endswith(".sdk/usr/include"):
+                _cache_default_sysroot = line[:-12]
+    if _cache_default_sysroot is None:
+        _cache_default_sysroot = '/'
+
+    return _cache_default_sysroot
+
+def _supports_universal_builds():
+    """Returns True if universal builds are supported on this system"""
+    # As an approximation, we assume that if we are running on 10.4 or above,
+    # then we are running with an Xcode environment that supports universal
+    # builds, in particular -isysroot and -arch arguments to the compiler. This
+    # is in support of allowing 10.4 universal builds to run on 10.3.x systems.
+
+    osx_version = _get_system_version_tuple()
+    return bool(osx_version >= (10, 4)) if osx_version else False
+
+def _supports_arm64_builds():
+    """Returns True if arm64 builds are supported on this system"""
+    # There are two sets of systems supporting macOS/arm64 builds:
+    # 1. macOS 11 and later, unconditionally
+    # 2. macOS 10.15 with Xcode 12.2 or later
+    # For now the second category is ignored.
+    osx_version = _get_system_version_tuple()
+    return osx_version >= (11, 0) if osx_version else False
+
+
+def _find_appropriate_compiler(_config_vars):
+    """Find appropriate C compiler for extension module builds"""
+
+    # Issue #13590:
+    #    The OSX location for the compiler varies between OSX
+    #    (or rather Xcode) releases.  With older releases (up-to 10.5)
+    #    the compiler is in /usr/bin, with newer releases the compiler
+    #    can only be found inside Xcode.app if the "Command Line Tools"
+    #    are not installed.
+    #
+    #    Furthermore, the compiler that can be used varies between
+    #    Xcode releases. Up to Xcode 4 it was possible to use 'gcc-4.2'
+    #    as the compiler, after that 'clang' should be used because
+    #    gcc-4.2 is either not present, or a copy of 'llvm-gcc' that
+    #    miscompiles Python.
+
+    # skip checks if the compiler was overridden with a CC env variable
+    if 'CC' in os.environ:
+        return _config_vars
+
+    # The CC config var might contain additional arguments.
+    # Ignore them while searching.
+    cc = oldcc = _config_vars['CC'].split()[0]
+    if not _find_executable(cc):
+        # Compiler is not found on the shell search PATH.
+        # Now search for clang, first on PATH (if the Command LIne
+        # Tools have been installed in / or if the user has provided
+        # another location via CC).  If not found, try using xcrun
+        # to find an uninstalled clang (within a selected Xcode).
+
+        # NOTE: Cannot use subprocess here because of bootstrap
+        # issues when building Python itself (and os.popen is
+        # implemented on top of subprocess and is therefore not
+        # usable as well)
+
+        cc = _find_build_tool('clang')
+
+    elif os.path.basename(cc).startswith('gcc'):
+        # Compiler is GCC, check if it is LLVM-GCC
+        data = _read_output("'%s' --version"
+                             % (cc.replace("'", "'\"'\"'"),))
+        if data and 'llvm-gcc' in data:
+            # Found LLVM-GCC, fall back to clang
+            cc = _find_build_tool('clang')
+
+    if not cc:
+        raise SystemError(
+               "Cannot locate working compiler")
+
+    if cc != oldcc:
+        # Found a replacement compiler.
+        # Modify config vars using new compiler, if not already explicitly
+        # overridden by an env variable, preserving additional arguments.
+        for cv in _COMPILER_CONFIG_VARS:
+            if cv in _config_vars and cv not in os.environ:
+                cv_split = _config_vars[cv].split()
+                cv_split[0] = cc if cv != 'CXX' else cc + '++'
+                _save_modified_value(_config_vars, cv, ' '.join(cv_split))
+
+    return _config_vars
+
+
+def _remove_universal_flags(_config_vars):
+    """Remove all universal build arguments from config vars"""
+
+    for cv in _UNIVERSAL_CONFIG_VARS:
+        # Do not alter a config var explicitly overridden by env var
+        if cv in _config_vars and cv not in os.environ:
+            flags = _config_vars[cv]
+            flags = re.sub(r'-arch\s+\w+\s', ' ', flags, flags=re.ASCII)
+            flags = re.sub(r'-isysroot\s*\S+', ' ', flags)
+            _save_modified_value(_config_vars, cv, flags)
+
+    return _config_vars
+
+
+def _remove_unsupported_archs(_config_vars):
+    """Remove any unsupported archs from config vars"""
+    # Different Xcode releases support different sets for '-arch'
+    # flags. In particular, Xcode 4.x no longer supports the
+    # PPC architectures.
+    #
+    # This code automatically removes '-arch ppc' and '-arch ppc64'
+    # when these are not supported. That makes it possible to
+    # build extensions on OSX 10.7 and later with the prebuilt
+    # 32-bit installer on the python.org website.
+
+    # skip checks if the compiler was overridden with a CC env variable
+    if 'CC' in os.environ:
+        return _config_vars
+
+    if re.search(r'-arch\s+ppc', _config_vars['CFLAGS']) is not None:
+        # NOTE: Cannot use subprocess here because of bootstrap
+        # issues when building Python itself
+        status = os.system(
+            """echo 'int main{};' | """
+            """'%s' -c -arch ppc -x c -o /dev/null /dev/null 2>/dev/null"""
+            %(_config_vars['CC'].replace("'", "'\"'\"'"),))
+        if status:
+            # The compile failed for some reason.  Because of differences
+            # across Xcode and compiler versions, there is no reliable way
+            # to be sure why it failed.  Assume here it was due to lack of
+            # PPC support and remove the related '-arch' flags from each
+            # config variables not explicitly overridden by an environment
+            # variable.  If the error was for some other reason, we hope the
+            # failure will show up again when trying to compile an extension
+            # module.
+            for cv in _UNIVERSAL_CONFIG_VARS:
+                if cv in _config_vars and cv not in os.environ:
+                    flags = _config_vars[cv]
+                    flags = re.sub(r'-arch\s+ppc\w*\s', ' ', flags)
+                    _save_modified_value(_config_vars, cv, flags)
+
+    return _config_vars
+
+
+def _override_all_archs(_config_vars):
+    """Allow override of all archs with ARCHFLAGS env var"""
+    # NOTE: This name was introduced by Apple in OSX 10.5 and
+    # is used by several scripting languages distributed with
+    # that OS release.
+    if 'ARCHFLAGS' in os.environ:
+        arch = os.environ['ARCHFLAGS']
+        for cv in _UNIVERSAL_CONFIG_VARS:
+            if cv in _config_vars and '-arch' in _config_vars[cv]:
+                flags = _config_vars[cv]
+                flags = re.sub(r'-arch\s+\w+\s', ' ', flags)
+                flags = flags + ' ' + arch
+                _save_modified_value(_config_vars, cv, flags)
+
+    return _config_vars
+
+
+def _check_for_unavailable_sdk(_config_vars):
+    """Remove references to any SDKs not available"""
+    # If we're on OSX 10.5 or later and the user tries to
+    # compile an extension using an SDK that is not present
+    # on the current machine it is better to not use an SDK
+    # than to fail.  This is particularly important with
+    # the standalone Command Line Tools alternative to a
+    # full-blown Xcode install since the CLT packages do not
+    # provide SDKs.  If the SDK is not present, it is assumed
+    # that the header files and dev libs have been installed
+    # to /usr and /System/Library by either a standalone CLT
+    # package or the CLT component within Xcode.
+    cflags = _config_vars.get('CFLAGS', '')
+    m = re.search(r'-isysroot\s*(\S+)', cflags)
+    if m is not None:
+        sdk = m.group(1)
+        if not os.path.exists(sdk):
+            for cv in _UNIVERSAL_CONFIG_VARS:
+                # Do not alter a config var explicitly overridden by env var
+                if cv in _config_vars and cv not in os.environ:
+                    flags = _config_vars[cv]
+                    flags = re.sub(r'-isysroot\s*\S+(?:\s|$)', ' ', flags)
+                    _save_modified_value(_config_vars, cv, flags)
+
+    return _config_vars
+
+
+def compiler_fixup(compiler_so, cc_args):
+    """
+    This function will strip '-isysroot PATH' and '-arch ARCH' from the
+    compile flags if the user has specified one them in extra_compile_flags.
+
+    This is needed because '-arch ARCH' adds another architecture to the
+    build, without a way to remove an architecture. Furthermore GCC will
+    barf if multiple '-isysroot' arguments are present.
+    """
+    stripArch = stripSysroot = False
+
+    compiler_so = list(compiler_so)
+
+    if not _supports_universal_builds():
+        # OSX before 10.4.0, these don't support -arch and -isysroot at
+        # all.
+        stripArch = stripSysroot = True
+    else:
+        stripArch = '-arch' in cc_args
+        stripSysroot = any(arg for arg in cc_args if arg.startswith('-isysroot'))
+
+    if stripArch or 'ARCHFLAGS' in os.environ:
+        while True:
+            try:
+                index = compiler_so.index('-arch')
+                # Strip this argument and the next one:
+                del compiler_so[index:index+2]
+            except ValueError:
+                break
+
+    elif not _supports_arm64_builds():
+        # Look for "-arch arm64" and drop that
+        for idx in reversed(range(len(compiler_so))):
+            if compiler_so[idx] == '-arch' and compiler_so[idx+1] == "arm64":
+                del compiler_so[idx:idx+2]
+
+    if 'ARCHFLAGS' in os.environ and not stripArch:
+        # User specified different -arch flags in the environ,
+        # see also distutils.sysconfig
+        compiler_so = compiler_so + os.environ['ARCHFLAGS'].split()
+
+    if stripSysroot:
+        while True:
+            indices = [i for i,x in enumerate(compiler_so) if x.startswith('-isysroot')]
+            if not indices:
+                break
+            index = indices[0]
+            if compiler_so[index] == '-isysroot':
+                # Strip this argument and the next one:
+                del compiler_so[index:index+2]
+            else:
+                # It's '-isysroot/some/path' in one arg
+                del compiler_so[index:index+1]
+
+    # Check if the SDK that is used during compilation actually exists,
+    # the universal build requires the usage of a universal SDK and not all
+    # users have that installed by default.
+    sysroot = None
+    argvar = cc_args
+    indices = [i for i,x in enumerate(cc_args) if x.startswith('-isysroot')]
+    if not indices:
+        argvar = compiler_so
+        indices = [i for i,x in enumerate(compiler_so) if x.startswith('-isysroot')]
+
+    for idx in indices:
+        if argvar[idx] == '-isysroot':
+            sysroot = argvar[idx+1]
+            break
+        else:
+            sysroot = argvar[idx][len('-isysroot'):]
+            break
+
+    if sysroot and not os.path.isdir(sysroot):
+        sys.stderr.write(f"Compiling with an SDK that doesn't seem to exist: {sysroot}\n")
+        sys.stderr.write("Please check your Xcode installation\n")
+        sys.stderr.flush()
+
+    return compiler_so
+
+
+def customize_config_vars(_config_vars):
+    """Customize Python build configuration variables.
+
+    Called internally from sysconfig with a mutable mapping
+    containing name/value pairs parsed from the configured
+    makefile used to build this interpreter.  Returns
+    the mapping updated as needed to reflect the environment
+    in which the interpreter is running; in the case of
+    a Python from a binary installer, the installed
+    environment may be very different from the build
+    environment, i.e. different OS levels, different
+    built tools, different available CPU architectures.
+
+    This customization is performed whenever
+    distutils.sysconfig.get_config_vars() is first
+    called.  It may be used in environments where no
+    compilers are present, i.e. when installing pure
+    Python dists.  Customization of compiler paths
+    and detection of unavailable archs is deferred
+    until the first extension module build is
+    requested (in distutils.sysconfig.customize_compiler).
+
+    Currently called from distutils.sysconfig
+    """
+
+    if not _supports_universal_builds():
+        # On Mac OS X before 10.4, check if -arch and -isysroot
+        # are in CFLAGS or LDFLAGS and remove them if they are.
+        # This is needed when building extensions on a 10.3 system
+        # using a universal build of python.
+        _remove_universal_flags(_config_vars)
+
+    # Allow user to override all archs with ARCHFLAGS env var
+    _override_all_archs(_config_vars)
+
+    # Remove references to sdks that are not found
+    _check_for_unavailable_sdk(_config_vars)
+
+    return _config_vars
+
+
+def customize_compiler(_config_vars):
+    """Customize compiler path and configuration variables.
+
+    This customization is performed when the first
+    extension module build is requested
+    in distutils.sysconfig.customize_compiler.
+    """
+
+    # Find a compiler to use for extension module builds
+    _find_appropriate_compiler(_config_vars)
+
+    # Remove ppc arch flags if not supported here
+    _remove_unsupported_archs(_config_vars)
+
+    # Allow user to override all archs with ARCHFLAGS env var
+    _override_all_archs(_config_vars)
+
+    return _config_vars
+
+
+def get_platform_osx(_config_vars, osname, release, machine):
+    """Filter values for get_platform()"""
+    # called from get_platform() in sysconfig and distutils.util
+    #
+    # For our purposes, we'll assume that the system version from
+    # distutils' perspective is what MACOSX_DEPLOYMENT_TARGET is set
+    # to. This makes the compatibility story a bit more sane because the
+    # machine is going to compile and link as if it were
+    # MACOSX_DEPLOYMENT_TARGET.
+
+    macver = _config_vars.get('MACOSX_DEPLOYMENT_TARGET', '')
+    if macver and '.' not in macver:
+        # Ensure that the version includes at least a major
+        # and minor version, even if MACOSX_DEPLOYMENT_TARGET
+        # is set to a single-label version like "14".
+        macver += '.0'
+    macrelease = _get_system_version() or macver
+    macver = macver or macrelease
+
+    if macver:
+        release = macver
+        osname = "macosx"
+
+        # Use the original CFLAGS value, if available, so that we
+        # return the same machine type for the platform string.
+        # Otherwise, distutils may consider this a cross-compiling
+        # case and disallow installs.
+        cflags = _config_vars.get(_INITPRE+'CFLAGS',
+                                    _config_vars.get('CFLAGS', ''))
+        if macrelease:
+            try:
+                macrelease = tuple(int(i) for i in macrelease.split('.')[0:2])
+            except ValueError:
+                macrelease = (10, 3)
+        else:
+            # assume no universal support
+            macrelease = (10, 3)
+
+        if (macrelease >= (10, 4)) and '-arch' in cflags.strip():
+            # The universal build will build fat binaries, but not on
+            # systems before 10.4
+
+            machine = 'fat'
+
+            archs = re.findall(r'-arch\s+(\S+)', cflags)
+            archs = tuple(sorted(set(archs)))
+
+            if len(archs) == 1:
+                machine = archs[0]
+            elif archs == ('arm64', 'x86_64'):
+                machine = 'universal2'
+            elif archs == ('i386', 'ppc'):
+                machine = 'fat'
+            elif archs == ('i386', 'x86_64'):
+                machine = 'intel'
+            elif archs == ('i386', 'ppc', 'x86_64'):
+                machine = 'fat3'
+            elif archs == ('ppc64', 'x86_64'):
+                machine = 'fat64'
+            elif archs == ('i386', 'ppc', 'ppc64', 'x86_64'):
+                machine = 'universal'
+            else:
+                raise ValueError(
+                   "Don't know machine value for archs=%r" % (archs,))
+
+        elif machine == 'i386':
+            # On OSX the machine type returned by uname is always the
+            # 32-bit variant, even if the executable architecture is
+            # the 64-bit variant
+            if sys.maxsize >= 2**32:
+                machine = 'x86_64'
+
+        elif machine in ('PowerPC', 'Power_Macintosh'):
+            # Pick a sane name for the PPC architecture.
+            # See 'i386' case
+            if sys.maxsize >= 2**32:
+                machine = 'ppc64'
+            else:
+                machine = 'ppc'
+
+    return (osname, release, machine)
+# ---- _py_abc.py ----
+from _weakrefset import WeakSet
+
+
+def get_cache_token():
+    """Returns the current ABC cache token.
+
+    The token is an opaque object (supporting equality testing) identifying the
+    current version of the ABC cache for virtual subclasses. The token changes
+    with every call to ``register()`` on any ABC.
+    """
+    return ABCMeta._abc_invalidation_counter
+
+
+class ABCMeta(type):
+    """Metaclass for defining Abstract Base Classes (ABCs).
+
+    Use this metaclass to create an ABC.  An ABC can be subclassed
+    directly, and then acts as a mix-in class.  You can also register
+    unrelated concrete classes (even built-in classes) and unrelated
+    ABCs as 'virtual subclasses' -- these and their descendants will
+    be considered subclasses of the registering ABC by the built-in
+    issubclass() function, but the registering ABC won't show up in
+    their MRO (Method Resolution Order) nor will method
+    implementations defined by the registering ABC be callable (not
+    even via super()).
+    """
+
+    # A global counter that is incremented each time a class is
+    # registered as a virtual subclass of anything.  It forces the
+    # negative cache to be cleared before its next use.
+    # Note: this counter is private. Use `abc.get_cache_token()` for
+    #       external code.
+    _abc_invalidation_counter = 0
+
+    def __new__(mcls, name, bases, namespace, /, **kwargs):
+        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
+        # Compute set of abstract method names
+        abstracts = {name
+                     for name, value in namespace.items()
+                     if getattr(value, "__isabstractmethod__", False)}
+        for base in bases:
+            for name in getattr(base, "__abstractmethods__", set()):
+                value = getattr(cls, name, None)
+                if getattr(value, "__isabstractmethod__", False):
+                    abstracts.add(name)
+        cls.__abstractmethods__ = frozenset(abstracts)
+        # Set up inheritance registry
+        cls._abc_registry = WeakSet()
+        cls._abc_cache = WeakSet()
+        cls._abc_negative_cache = WeakSet()
+        cls._abc_negative_cache_version = ABCMeta._abc_invalidation_counter
+        return cls
+
+    def register(cls, subclass):
+        """Register a virtual subclass of an ABC.
+
+        Returns the subclass, to allow usage as a class decorator.
+        """
+        if not isinstance(subclass, type):
+            raise TypeError("Can only register classes")
+        if issubclass(subclass, cls):
+            return subclass  # Already a subclass
+        # Subtle: test for cycles *after* testing for "already a subclass";
+        # this means we allow X.register(X) and interpret it as a no-op.
+        if issubclass(cls, subclass):
+            # This would create a cycle, which is bad for the algorithm below
+            raise RuntimeError("Refusing to create an inheritance cycle")
+        cls._abc_registry.add(subclass)
+        ABCMeta._abc_invalidation_counter += 1  # Invalidate negative cache
+        return subclass
+
+    def _dump_registry(cls, file=None):
+        """Debug helper to print the ABC registry."""
+        print(f"Class: {cls.__module__}.{cls.__qualname__}", file=file)
+        print(f"Inv. counter: {get_cache_token()}", file=file)
+        for name in cls.__dict__:
+            if name.startswith("_abc_"):
+                value = getattr(cls, name)
+                if isinstance(value, WeakSet):
+                    value = set(value)
+                print(f"{name}: {value!r}", file=file)
+
+    def _abc_registry_clear(cls):
+        """Clear the registry (for debugging or testing)."""
+        cls._abc_registry.clear()
+
+    def _abc_caches_clear(cls):
+        """Clear the caches (for debugging or testing)."""
+        cls._abc_cache.clear()
+        cls._abc_negative_cache.clear()
+
+    def __instancecheck__(cls, instance):
+        """Override for isinstance(instance, cls)."""
+        # Inline the cache checking
+        subclass = instance.__class__
+        if subclass in cls._abc_cache:
+            return True
+        subtype = type(instance)
+        if subtype is subclass:
+            if (cls._abc_negative_cache_version ==
+                ABCMeta._abc_invalidation_counter and
+                subclass in cls._abc_negative_cache):
+                return False
+            # Fall back to the subclass check.
+            return cls.__subclasscheck__(subclass)
+        return any(cls.__subclasscheck__(c) for c in (subclass, subtype))
+
+    def __subclasscheck__(cls, subclass):
+        """Override for issubclass(subclass, cls)."""
+        if not isinstance(subclass, type):
+            raise TypeError('issubclass() arg 1 must be a class')
+        # Check cache
+        if subclass in cls._abc_cache:
+            return True
+        # Check negative cache; may have to invalidate
+        if cls._abc_negative_cache_version < ABCMeta._abc_invalidation_counter:
+            # Invalidate the negative cache
+            cls._abc_negative_cache = WeakSet()
+            cls._abc_negative_cache_version = ABCMeta._abc_invalidation_counter
+        elif subclass in cls._abc_negative_cache:
+            return False
+        # Check the subclass hook
+        ok = cls.__subclasshook__(subclass)
+        if ok is not NotImplemented:
+            assert isinstance(ok, bool)
+            if ok:
+                cls._abc_cache.add(subclass)
+            else:
+                cls._abc_negative_cache.add(subclass)
+            return ok
+        # Check if it's a direct subclass
+        if cls in getattr(subclass, '__mro__', ()):
+            cls._abc_cache.add(subclass)
+            return True
+        # Check if it's a subclass of a registered class (recursive)
+        for rcls in cls._abc_registry:
+            if issubclass(subclass, rcls):
+                cls._abc_cache.add(subclass)
+                return True
+        # Check if it's a subclass of a subclass (recursive)
+        for scls in cls.__subclasses__():
+            if issubclass(subclass, scls):
+                cls._abc_cache.add(subclass)
+                return True
+        # No dice; update negative cache
+        cls._abc_negative_cache.add(subclass)
+        return False
+# ---- _pydatetime.py ----
+"""Concrete date/time and related types.
+
+See http://www.iana.org/time-zones/repository/tz-link.html for
+time zone and DST data sources.
+"""
+
+__all__ = ("date", "datetime", "time", "timedelta", "timezone", "tzinfo",
+           "MINYEAR", "MAXYEAR", "UTC")
+
+
+import time as _time
+import math as _math
+import sys
+from operator import index as _index
+
+def _cmp(x, y):
+    return 0 if x == y else 1 if x > y else -1
+
+def _get_class_module(self):
+    module_name = self.__class__.__module__
+    if module_name == '_pydatetime':
+        return 'datetime'
+    else:
+        return module_name
+
+MINYEAR = 1
+MAXYEAR = 9999
+_MAXORDINAL = 3652059  # date.max.toordinal()
+
+# Utility functions, adapted from Python's Demo/classes/Dates.py, which
+# also assumes the current Gregorian calendar indefinitely extended in
+# both directions.  Difference:  Dates.py calls January 1 of year 0 day
+# number 1.  The code here calls January 1 of year 1 day number 1.  This is
+# to match the definition of the "proleptic Gregorian" calendar in Dershowitz
+# and Reingold's "Calendrical Calculations", where it's the base calendar
+# for all computations.  See the book for algorithms for converting between
+# proleptic Gregorian ordinals and many other calendar systems.
+
+# -1 is a placeholder for indexing purposes.
+_DAYS_IN_MONTH = [-1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+_DAYS_BEFORE_MONTH = [-1]  # -1 is a placeholder for indexing purposes.
+dbm = 0
+for dim in _DAYS_IN_MONTH[1:]:
+    _DAYS_BEFORE_MONTH.append(dbm)
+    dbm += dim
+del dbm, dim
+
+def _is_leap(year):
+    "year -> 1 if leap year, else 0."
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+def _days_before_year(year):
+    "year -> number of days before January 1st of year."
+    y = year - 1
+    return y*365 + y//4 - y//100 + y//400
+
+def _days_in_month(year, month):
+    "year, month -> number of days in that month in that year."
+    assert 1 <= month <= 12, month
+    if month == 2 and _is_leap(year):
+        return 29
+    return _DAYS_IN_MONTH[month]
+
+def _days_before_month(year, month):
+    "year, month -> number of days in year preceding first day of month."
+    assert 1 <= month <= 12, 'month must be in 1..12'
+    return _DAYS_BEFORE_MONTH[month] + (month > 2 and _is_leap(year))
+
+def _ymd2ord(year, month, day):
+    "year, month, day -> ordinal, considering 01-Jan-0001 as day 1."
+    assert 1 <= month <= 12, 'month must be in 1..12'
+    dim = _days_in_month(year, month)
+    assert 1 <= day <= dim, ('day must be in 1..%d' % dim)
+    return (_days_before_year(year) +
+            _days_before_month(year, month) +
+            day)
+
+_DI400Y = _days_before_year(401)    # number of days in 400 years
+_DI100Y = _days_before_year(101)    #    "    "   "   " 100   "
+_DI4Y   = _days_before_year(5)      #    "    "   "   "   4   "
+
+# A 4-year cycle has an extra leap day over what we'd get from pasting
+# together 4 single years.
+assert _DI4Y == 4 * 365 + 1
+
+# Similarly, a 400-year cycle has an extra leap day over what we'd get from
+# pasting together 4 100-year cycles.
+assert _DI400Y == 4 * _DI100Y + 1
+
+# OTOH, a 100-year cycle has one fewer leap day than we'd get from
+# pasting together 25 4-year cycles.
+assert _DI100Y == 25 * _DI4Y - 1
+
+def _ord2ymd(n):
+    "ordinal -> (year, month, day), considering 01-Jan-0001 as day 1."
+
+    # n is a 1-based index, starting at 1-Jan-1.  The pattern of leap years
+    # repeats exactly every 400 years.  The basic strategy is to find the
+    # closest 400-year boundary at or before n, then work with the offset
+    # from that boundary to n.  Life is much clearer if we subtract 1 from
+    # n first -- then the values of n at 400-year boundaries are exactly
+    # those divisible by _DI400Y:
+    #
+    #     D  M   Y            n              n-1
+    #     -- --- ----        ----------     ----------------
+    #     31 Dec -400        -_DI400Y       -_DI400Y -1
+    #      1 Jan -399         -_DI400Y +1   -_DI400Y      400-year boundary
+    #     ...
+    #     30 Dec  000        -1             -2
+    #     31 Dec  000         0             -1
+    #      1 Jan  001         1              0            400-year boundary
+    #      2 Jan  001         2              1
+    #      3 Jan  001         3              2
+    #     ...
+    #     31 Dec  400         _DI400Y        _DI400Y -1
+    #      1 Jan  401         _DI400Y +1     _DI400Y      400-year boundary
+    n -= 1
+    n400, n = divmod(n, _DI400Y)
+    year = n400 * 400 + 1   # ..., -399, 1, 401, ...
+
+    # Now n is the (non-negative) offset, in days, from January 1 of year, to
+    # the desired date.  Now compute how many 100-year cycles precede n.
+    # Note that it's possible for n100 to equal 4!  In that case 4 full
+    # 100-year cycles precede the desired day, which implies the desired
+    # day is December 31 at the end of a 400-year cycle.
+    n100, n = divmod(n, _DI100Y)
+
+    # Now compute how many 4-year cycles precede it.
+    n4, n = divmod(n, _DI4Y)
+
+    # And now how many single years.  Again n1 can be 4, and again meaning
+    # that the desired day is December 31 at the end of the 4-year cycle.
+    n1, n = divmod(n, 365)
+
+    year += n100 * 100 + n4 * 4 + n1
+    if n1 == 4 or n100 == 4:
+        assert n == 0
+        return year-1, 12, 31
+
+    # Now the year is correct, and n is the offset from January 1.  We find
+    # the month via an estimate that's either exact or one too large.
+    leapyear = n1 == 3 and (n4 != 24 or n100 == 3)
+    assert leapyear == _is_leap(year)
+    month = (n + 50) >> 5
+    preceding = _DAYS_BEFORE_MONTH[month] + (month > 2 and leapyear)
+    if preceding > n:  # estimate is too large
+        month -= 1
+        preceding -= _DAYS_IN_MONTH[month] + (month == 2 and leapyear)
+    n -= preceding
+    assert 0 <= n < _days_in_month(year, month)
+
+    # Now the year and month are correct, and n is the offset from the
+    # start of that month:  we're done!
+    return year, month, n+1
+
+# Month and day names.  For localized versions, see the calendar module.
+_MONTHNAMES = [None, "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_DAYNAMES = [None, "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _build_struct_time(y, m, d, hh, mm, ss, dstflag):
+    wday = (_ymd2ord(y, m, d) + 6) % 7
+    dnum = _days_before_month(y, m) + d
+    return _time.struct_time((y, m, d, hh, mm, ss, wday, dnum, dstflag))
+
+def _format_time(hh, mm, ss, us, timespec='auto'):
+    specs = {
+        'hours': '{:02d}',
+        'minutes': '{:02d}:{:02d}',
+        'seconds': '{:02d}:{:02d}:{:02d}',
+        'milliseconds': '{:02d}:{:02d}:{:02d}.{:03d}',
+        'microseconds': '{:02d}:{:02d}:{:02d}.{:06d}'
+    }
+
+    if timespec == 'auto':
+        # Skip trailing microseconds when us==0.
+        timespec = 'microseconds' if us else 'seconds'
+    elif timespec == 'milliseconds':
+        us //= 1000
+    try:
+        fmt = specs[timespec]
+    except KeyError:
+        raise ValueError('Unknown timespec value')
+    else:
+        return fmt.format
+
+Continue the code above in the same style, implementing the next function.

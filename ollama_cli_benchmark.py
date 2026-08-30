@@ -607,10 +607,12 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("ollama_cli", args.model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "ollama_cli", args.model, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Find context files using common module
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -629,7 +631,7 @@ def main() -> int:
     # temporary model via Modelfile that bakes in the parameters we need.
     # Size num_ctx for the LARGEST context we'll run + headroom, so the
     # same temp model serves every row.
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     all_files = context_files + ([warmup_file] if warmup_file else [])
     max_num_ctx = max(_derive_num_ctx(f, args.max_tokens) for f in all_files)
 

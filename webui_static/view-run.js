@@ -48,6 +48,7 @@
     draft.runs = document.getElementById("rfRuns").value;
     draft.timeout = document.getElementById("rfTimeout").value;
     draft.saveResponses = document.getElementById("rfSaveResponses").checked;
+    draft.contextType = document.getElementById("rfContextType").value;
     const cold = document.getElementById("rfColdPrefill");
     if (cold) draft.coldPrefill = cold.checked;
     const options = {};
@@ -175,6 +176,13 @@
           ${engine.cold_prefill ? `<label class="check" style="margin-bottom:4px">
             <input type="checkbox" id="rfColdPrefill" ${draft.coldPrefill ? "checked" : ""}>
             Cold prefill (clear cache between contexts)</label>` : ""}
+          <div class="field" style="margin-bottom:12px">
+            <label for="rfContextType">Context type</label>
+            <select id="rfContextType">
+              <option value="prose" ${draft.contextType !== "code" ? "selected" : ""}>prose — novel text</option>
+              <option value="code" ${draft.contextType === "code" ? "selected" : ""}>code — CPython stdlib</option>
+            </select>
+          </div>
           ${renderEngineOptions(engine, draft.options)}
           <details class="advanced">
             <summary>Extra CLI arguments</summary>
@@ -372,6 +380,7 @@
       runs: draft.runs,
       timeout: draft.timeout,
       save_responses: draft.saveResponses,
+      context_type: draft.contextType,
       cold_prefill: engine.cold_prefill ? draft.coldPrefill : undefined,
       connection,
       options,

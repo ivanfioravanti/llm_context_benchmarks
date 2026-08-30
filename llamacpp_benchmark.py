@@ -297,14 +297,18 @@ def main() -> int:
     print(f"Cold prefill: {'enabled (cache_prompt=false)' if args.cold_prefill else 'disabled (cache reuse allowed)'}")
 
     # Find context files
-    context_files = find_context_files(args.contexts)
+    context_files = find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
     # Create output directory using common function
     machine_name = _hardware_folder_label(args.server_hardware) if args.server_hardware else None
     output_dir = create_output_directory(
-        "llamacpp", args.model, cold_prefill=args.cold_prefill, machine_name=machine_name
+        "llamacpp",
+        args.model,
+        cold_prefill=args.cold_prefill,
+        machine_name=machine_name,
+        context_type=args.context_type,
     )
 
     # Capture top-K logprobs on a fixed reference text for later KL comparison

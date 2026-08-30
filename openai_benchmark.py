@@ -608,11 +608,13 @@ def main() -> int:
         f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
 
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
-    output_dir = common.create_output_directory("openai_compat", model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "openai_compat", model, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     results = []
     benchmark_start = time.time()

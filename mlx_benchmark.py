@@ -820,10 +820,10 @@ def main() -> int:
     model_name = args.model.rstrip("/").split("/")[-1]
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("mlx", model_name, cold_prefill=True)
+    output_dir = common.create_output_directory("mlx", model_name, cold_prefill=True, context_type=args.context_type)
 
     # Find context files using common module
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 

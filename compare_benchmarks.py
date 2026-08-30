@@ -133,12 +133,12 @@ KNOWN_ENGINES = (
 )
 
 
-def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str, str]:
-    """Extract (engine, model, cache_mode) from a benchmark folder name.
+def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, str, str, str]:
+    """Extract (engine, model, cache_mode, context_type) from a benchmark folder name.
 
-    Current format:  ``benchmark_{framework}_{model}-{machine}_{cache_mode}_{YYYYMMDD}_{HHMMSS}``
+    Current format:  ``benchmark_{framework}_{model}-{machine}{_cache_mode}{_context_type}_{YYYYMMDD}_{HHMMSS}``
     Legacy format:   ``benchmark_{framework}_{model}_{cache_mode}_{machine}_{YYYYMMDD}_{HHMMSS}``
-    Older formats may omit ``{machine}`` and/or ``{cache_mode}``.
+    Older formats may omit ``{machine}``, ``{cache_mode}`` and/or ``{context_type}``.
     ``{framework}`` may itself contain underscores (e.g. ``ollama_api``).
     """
     body = folder_name
@@ -158,7 +158,7 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
     if engine is None:
         first_underscore = body.find("_")
         if first_underscore == -1:
-            return body or "unknown", "unknown", ""
+            return body or "unknown", "unknown", "", ""
         engine = body[:first_underscore]
         body = body[first_underscore + 1 :]
 
@@ -176,6 +176,13 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
             cache_mode = middle.group(1)
             body = body[: middle.start()] + body[middle.end() - 1 :]
 
+    # Detect and strip a trailing context-type tag (e.g. ``_code`` appended
+    # after the cache mode by create_output_directory(context_type=...)).
+    context_type = ""
+    trailing_ctx = re.search(r"_code$", body)
+    if trailing_ctx:
+        context_type = "code"
+        body = body[: -len(trailing_ctx.group(0))]
     # Body is now "{model}", "{model}-{machine}", or "{model}_{machine}".
     # Strip a trailing machine token (separator may be "-" or "_") if it matches
     # the recorded chip, the explicit machine_label (set by engines for remote /
@@ -196,7 +203,7 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
         ):
             body = body[: machine_match.start()]
 
-    return engine, body or "unknown", cache_mode
+    return engine, body or "unknown", cache_mode, context_type
 
 
 def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
@@ -278,7 +285,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
 
     # Extract engine and model from folder name
     folder_name = folder_path.name
-    engine, model, cache_mode = _parse_folder_metadata(folder_name, hardware_info)
+    engine, model, cache_mode, context_type = _parse_folder_metadata(folder_name, hardware_info)
 
     # Read perplexity data if available
     perplexity_file = folder_path / "perplexity.json"
@@ -304,7 +311,8 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
 
     # Create display name
     cache_label = " (cached)" if cache_mode == "cache" else " (no cache)" if cache_mode == "nocache" else ""
-    display_name = f"{engine}: {model}{cache_label}"
+    ctx_label = " (code)" if context_type == "code" else ""
+    display_name = f"{engine}: {model}{cache_label}{ctx_label}"
 
     return {
         "results": results,
@@ -312,6 +320,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         "engine": engine,
         "model": model,
         "cache_mode": cache_mode,
+        "context_type": context_type,
         "folder_name": folder_name,
         "display_name": display_name,
         "perplexity_data": perplexity_data,

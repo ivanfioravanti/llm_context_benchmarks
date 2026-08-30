@@ -57,6 +57,8 @@ def parse_folder_name(folder_name: str):
 
     body = re.sub(r"_\d{8}_\d{6}$", "", body)
 
+    # Strip context-type tag (_code) before cache/machine tags
+    body = re.sub(r"_code$", "", body)
     # Strip cache tag (_nocache or _cache) followed by optional machine name at end
     body = re.sub(r"_(?:no)?cache$", "", body)
     body = re.sub(r"_(?:no)?cache_M\d+(?:Ultra|Max|Pro)?$", "", body)

@@ -179,6 +179,7 @@ def build_result_summary(folder: Path, parsed: dict) -> dict:
         "engine": parsed["engine"],
         "model": parsed["model"],
         "cache_mode": parsed["cache_mode"],
+        "context_type": parsed.get("context_type", ""),
         "timestamp": folder_timestamp(folder.name),
         "machine": hw.get("chip") or hw.get("machine_label") or hw.get("processor") or "",
         "hardware": benchmark_common.format_hardware_string(hw) if hw else "",

@@ -300,27 +300,36 @@ def stream_chat(
     }
 
 
-def find_warmup_file() -> Optional[Path]:
-    """Return the 0.5k.txt warmup file if it exists in the current directory."""
-    warmup = Path("0.5k.txt")
+def context_dir_for(context_type: str) -> str:
+    """Directory holding context files for the given type ("." for prose, "contexts_code" for code)."""
+    return "contexts_code" if context_type == "code" else "."
+
+
+def find_warmup_file(context_type: str = "prose") -> Optional[Path]:
+    """Return the 0.5k.txt warmup file for the context type if it exists."""
+    warmup = Path(context_dir_for(context_type)) / "0.5k.txt"
     return warmup if warmup.exists() else None
 
 
-def find_context_files(contexts_arg=None):
+def find_context_files(contexts_arg=None, context_type: str = "prose"):
     """Find context files based on user input or auto-discover.
 
     Args:
         contexts_arg: Comma-separated string of context sizes or None for auto-discovery
+        context_type: "prose" reads {size}k.txt from the repo root, "code" reads
+            contexts_code/{size}k.txt (same numeric stems, so downstream parsing
+            of context_size, charts and cooldowns work unchanged)
 
     Returns:
         List of Path objects for context files, sorted by size
     """
+    base = Path(context_dir_for(context_type))
     if contexts_arg:
         # User specified which contexts to run
         context_sizes = [size.strip() for size in contexts_arg.split(",")]
         context_files = []
         for size in context_sizes:
-            file_path = Path(f"{size}k.txt")
+            file_path = base / f"{size}k.txt"
             if file_path.exists():
                 context_files.append(file_path)
             else:
@@ -333,7 +342,7 @@ def find_context_files(contexts_arg=None):
         # Sort by size
         context_files = sorted(context_files, key=lambda x: float(x.stem[:-1]))
     else:
-        # Find all .txt files in current directory
+        # Find all .txt files in the context directory
         try:
             # Filter files that have a numeric prefix followed by 'k' (e.g., 0.5k.txt, 2k.txt)
             def is_valid_context_file(f):
@@ -347,14 +356,14 @@ def find_context_files(contexts_arg=None):
                 return False
 
             context_files = sorted(
-                [f for f in Path(".").glob("*.txt") if is_valid_context_file(f)],
+                [f for f in base.glob("*.txt") if is_valid_context_file(f)],
                 key=lambda x: float(x.stem[:-1]),
             )
         except:
             context_files = []
 
         if not context_files:
-            print("No valid context files (e.g., 2k.txt, 4k.txt) found in current directory")
+            print(f"No valid context files (e.g., 2k.txt, 4k.txt) found in {base}")
             return []
 
     print(f"Will benchmark context files: {[f.name for f in context_files]}")
@@ -1636,6 +1645,7 @@ def create_output_directory(
     base_dir: str = "output",
     cold_prefill: bool = True,
     machine_name: Optional[str] = None,
+    context_type: str = "prose",
 ) -> Path:
     """Create timestamped output directory for benchmark results.
 
@@ -1645,6 +1655,7 @@ def create_output_directory(
         base_dir: Base directory for output (default: "output")
         cold_prefill: If True, append _nocache suffix to directory name
         machine_name: Optional hardware label to use in the directory name
+        context_type: "code" tags the directory name with _code (default: prose)
 
     Returns:
         Path object for the created directory
@@ -1661,7 +1672,10 @@ def create_output_directory(
     machine_name = machine_name or _get_machine_name()
 
     cache_tag = "_nocache" if cold_prefill else "_cache"
-    output_dir = base_output_dir / f"benchmark_{framework_name}_{model_safe}-{machine_name}{cache_tag}_{timestamp}"
+    context_tag = "" if context_type == "prose" else f"_{context_type}"
+    output_dir = (
+        base_output_dir / f"benchmark_{framework_name}_{model_safe}-{machine_name}{cache_tag}{context_tag}_{timestamp}"
+    )
     output_dir.mkdir(exist_ok=True)
 
     return output_dir
@@ -1677,6 +1691,13 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
         "--contexts",
         default="0.5,1,2,4,8,16,32",
         help="Comma-separated list of context sizes to benchmark (default: 0.5,1,2,4,8,16,32)",
+    )
+    parser.add_argument(
+        "--context-type",
+        choices=["prose", "code"],
+        default="prose",
+        help="Context content: prose reads {size}k.txt from the repo root, code reads "
+        "contexts_code/{size}k.txt and tags the output folder _code (default: prose)",
     )
     parser.add_argument(
         "--max-tokens",

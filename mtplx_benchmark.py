@@ -528,7 +528,7 @@ def main() -> int:
 
     request_model = args.request_model or model
 
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -560,10 +560,12 @@ def main() -> int:
     )
 
     gen_mode_tag = f"-{args.generation_mode}" if args.generation_mode else f"-{health.get('generation_mode', 'mtp')}"
-    output_dir = common.create_output_directory("mtplx", f"{model}{gen_mode_tag}", cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "mtplx", f"{model}{gen_mode_tag}", cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Warmup
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

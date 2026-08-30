@@ -32,6 +32,7 @@
       label: "",
       contexts: null,
       maxTokens: "128",
+      contextType: "prose",
       runs: "2",
       timeout: "3600",
       saveResponses: false,
@@ -191,7 +192,8 @@
 
   function resultName(summary) {
     if (summary.label) return summary.label;
-    return `${summary.engine}: ${summary.model}`;
+    const base = `${summary.engine}: ${summary.model}`;
+    return summary.context_type === "code" ? `${base} (code)` : base;
   }
 
   // chart/series label: always carries the model so runs against the same

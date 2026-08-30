@@ -453,10 +453,12 @@ def main() -> int:
         return 1
 
     # Create output directory using common function
-    output_dir = common.create_output_directory("ollama_api", args.model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "ollama_api", args.model, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Find context files using common module
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -473,7 +475,7 @@ def main() -> int:
 
     # Warmup run — max_tokens=1 is enough to load weights and hit the code
     # path; mirrors mlx_benchmark's warmup (see mlx_benchmark.py:749).
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

@@ -358,7 +358,7 @@ def main() -> int:
 
     request_model = args.request_model or model
 
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -384,10 +384,12 @@ def main() -> int:
         cold_msg += ")"
     print(f"Cold prefill: {cold_msg}")
 
-    output_dir = common.create_output_directory("mlx_vlm_server", model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "mlx_vlm_server", model, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Warmup
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

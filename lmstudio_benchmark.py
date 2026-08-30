@@ -604,19 +604,21 @@ def main() -> int:
     print(f"API version: /api/{args.api_version}/")
 
     # Find context files
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
     # Output directory
-    output_dir = common.create_output_directory("lmstudio", model_id, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "lmstudio", model_id, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Warmup. Use a realistic max_tokens (not 1) so thinking-mode models
     # actually emit content tokens — with max_tokens=1 a Qwen3.5-style
     # model may generate only the opening `<think>` special token, which
     # LM Studio reports as completion_tokens=0 and makes the diagnostic
     # output misleading.
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

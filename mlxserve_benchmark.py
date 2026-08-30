@@ -438,16 +438,18 @@ def main() -> int:
         f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
 
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
-    output_dir = common.create_output_directory("mlx_serve", model, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "mlx_serve", model, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Warmup run (discarded): absorbs first-request cold-start cost (Metal/MLX
     # graph compilation, KV cache allocation) so it doesn't land inside the
     # first measured context size.
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

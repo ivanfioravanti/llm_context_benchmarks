@@ -59,6 +59,7 @@ htmlcov/
 32k.txt
 64k.txt
 128k.txt
+contexts_code/
 
 # Benchmark output directories
 output/

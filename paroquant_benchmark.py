@@ -435,10 +435,12 @@ def main() -> int:
     model_name = args.model.rstrip("/").split("/")[-1]
 
     # Create output directory
-    output_dir = common.create_output_directory("paroquant", model_name, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "paroquant", model_name, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Find context files
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 

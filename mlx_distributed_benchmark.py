@@ -257,9 +257,11 @@ def main() -> int:
         return 1
 
     model_name = args.model.rstrip("/").split("/")[-1]
-    output_dir = common.create_output_directory("mlx-distributed", model_name, args.output_dir, cold_prefill=True)
+    output_dir = common.create_output_directory(
+        "mlx-distributed", model_name, args.output_dir, cold_prefill=True, context_type=args.context_type
+    )
 
-    context_files = common.find_context_files(args.contexts, args.context_dir)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -278,7 +280,7 @@ def main() -> int:
         print("Parallel mode: pipeline")
 
     # Warmup run
-    warmup_file = common.find_warmup_file()
+    warmup_file = common.find_warmup_file(context_type=args.context_type)
     if warmup_file:
         print(f"\n{'=' * 50}")
         print(f"Warmup run (excluded from results): {warmup_file.name}")

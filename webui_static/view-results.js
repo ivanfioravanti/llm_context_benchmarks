@@ -127,6 +127,7 @@
     draft.timeout = String(settings.timeout ?? "");
     draft.saveResponses = !!settings.save_responses;
     draft.coldPrefill = settings.cold_prefill !== false;
+    draft.contextType = settings.context_type || "prose";
     draft.options = Object.assign({}, settings.options);
     draft.extraArgs = settings.extra_args || "";
     if (!epExists) {

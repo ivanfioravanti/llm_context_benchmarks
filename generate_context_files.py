@@ -72,19 +72,39 @@ def main():
         help="Tiktoken encoding to use (default: cl100k_base for GPT-3.5/GPT-4)",
     )
     parser.add_argument(
+        "--context-type",
+        type=str,
+        choices=["prose", "code"],
+        default="prose",
+        help="Content type: prose uses the summary prompt in the current directory, code uses a "
+        "continuation prompt in contexts_code/ (default: prose)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
-        default=".",
-        help="Directory to save context files (default: current directory)",
+        default=None,
+        help="Directory to save context files (default: '.' for prose, 'contexts_code' for code)",
     )
     parser.add_argument(
         "--prompt-suffix",
         type=str,
-        default="\n\nPlease provide a summary of the above text.",
-        help="Prompt to append at the end of each context file",
+        default=None,
+        help="Prompt to append at the end of each context file (default: summary request for "
+        "prose, code-continuation request for code)",
     )
-
     args = parser.parse_args()
+
+    # Resolve context-type-dependent defaults; explicit CLI values always win.
+    if args.context_type == "code":
+        default_output_dir = "contexts_code"
+        default_prompt_suffix = "\n\nContinue the code above in the same style, implementing the next function."
+    else:
+        default_output_dir = "."
+        default_prompt_suffix = "\n\nPlease provide a summary of the above text."
+    if args.output_dir is None:
+        args.output_dir = default_output_dir
+    if args.prompt_suffix is None:
+        args.prompt_suffix = default_prompt_suffix
 
     # Read source file
     source_path = Path(args.source)
@@ -105,9 +125,9 @@ def main():
 
     # Parse sizes
     try:
-        sizes = [int(s.strip()) for s in args.sizes.split(",")]
+        sizes = [float(s.strip()) for s in args.sizes.split(",")]
     except ValueError:
-        print("Error: Sizes must be comma-separated integers")
+        print("Error: Sizes must be comma-separated numbers (e.g. 0.5,1,2,4)")
         sys.exit(1)
 
     # Check if tiktoken encoding is valid
@@ -128,19 +148,20 @@ def main():
     # Generate context files
     results = []
     for size_k in sizes:
-        target_tokens = size_k * 1000
+        size_label = f"{size_k:g}"  # 0.5 → "0.5", 1.0 → "1" — same names as integer inputs
+        target_tokens = int(size_k * 1000)
 
         # Reserve space for prompt suffix
         context_tokens = target_tokens - prompt_suffix_tokens
 
         if context_tokens <= 0:
-            print(f"Skipping {size_k}k: Not enough tokens after prompt suffix")
+            print(f"Skipping {size_label}k: Not enough tokens after prompt suffix")
             continue
 
-        output_file = output_dir / f"{size_k}k.txt"
+        output_file = output_dir / f"{size_label}k.txt"
 
         # Generate the context part
-        temp_file = output_dir / f"temp_{size_k}k.txt"
+        temp_file = output_dir / f"temp_{size_label}k.txt"
         actual_context_tokens = generate_context_file(source_text, context_tokens, temp_file, args.encoding)
 
         # Read the context and append prompt

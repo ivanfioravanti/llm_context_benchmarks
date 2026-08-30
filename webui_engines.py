@@ -639,6 +639,9 @@ def build_command(engine_id: str, payload: dict) -> tuple:
     argv += ["--max-tokens", str(int(payload.get("max_tokens") or 128))]
     argv += ["--runs", str(int(payload.get("runs") or 2))]
     argv += ["--timeout", str(int(payload.get("timeout") or 3600))]
+    context_type = (payload.get("context_type") or "prose").strip() or "prose"
+    if context_type != "prose":
+        argv += ["--context-type", context_type]
     if payload.get("save_responses"):
         argv.append("--save-responses")
 

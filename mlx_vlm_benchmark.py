@@ -580,10 +580,12 @@ def main() -> int:
         output_model_name = f"{model_name}_TBQ"
 
     # Create output directory
-    output_dir = common.create_output_directory("mlx_vlm", output_model_name, cold_prefill=args.cold_prefill)
+    output_dir = common.create_output_directory(
+        "mlx_vlm", output_model_name, cold_prefill=args.cold_prefill, context_type=args.context_type
+    )
 
     # Find context files
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 

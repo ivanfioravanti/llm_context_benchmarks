@@ -432,7 +432,7 @@ def main() -> int:
     base_url = ensure_endpoint(args.base_url, bench_mode=args.bench_mode)
     request_model = args.request_model or args.model
 
-    context_files = common.find_context_files(args.contexts)
+    context_files = common.find_context_files(args.contexts, context_type=args.context_type)
     if not context_files:
         return 1
 
@@ -463,7 +463,7 @@ def main() -> int:
         print(f"Request model: {request_model}")
     print(f"Max tokens: {args.max_tokens}")
 
-    output_dir = common.create_output_directory("exo", args.model, cold_prefill=True)
+    output_dir = common.create_output_directory("exo", args.model, cold_prefill=True, context_type=args.context_type)
 
     results = []
     benchmark_start = time.time()
