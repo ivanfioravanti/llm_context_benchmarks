@@ -18,31 +18,34 @@
       </div>
     </a>
     <nav class="nav" id="nav">
-      <a href="#run" data-view="run">
+      <a href="#run" data-view="run" title="Run">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.8v10.4l8-5.2z"/></svg>
-        Run</a>
-      <a href="#results" data-view="results">
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
-        Results</a>
-      <a href="#compare" data-view="compare">
+        <span class="nav-label">Run</span></a>
+      <a href="#results" data-view="results" title="Results">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+        <span class="nav-label">Results</span></a>
+      <a href="#compare" data-view="compare" title="Compare">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12.5l4-4 3 2.5 5-6"/><path d="M10.5 5H14v3.5"/></svg>
-        Compare</a>
-      <a href="#endpoints" data-view="endpoints">
+        <span class="nav-label">Compare</span></a>
+      <a href="#endpoints" data-view="endpoints" title="Endpoints">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4.6" rx="1.2"/><rect x="2" y="8.9" width="12" height="4.6" rx="1.2"/><path d="M4.6 4.8h.01M4.6 11.2h.01"/></svg>
-        Endpoints</a>
-      <a href="#tools" data-view="tools">
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.7"/><circle cx="10" cy="11" r="1.7"/></svg>
-        Tools</a>
+        <span class="nav-label">Endpoints</span></a>
+      <a href="#tools" data-view="tools" title="Tools">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.7"/><circle cx="10" cy="11" r="1.7"/></svg>
+        <span class="nav-label">Tools</span></a>
     </nav>
     <div class="rail-foot">
       <div class="hw-readout" id="hwReadout" title="">–</div>
       <div class="mlx-badge" id="mlxBadge"></div>
-      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">◐ theme</button>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">◐ <span class="tgl">theme</span></button>
       <a class="rail-link" href="https://github.com/ivanfioravanti/llm_context_benchmarks" target="_blank" rel="noopener noreferrer" title="GitHub repository">
         <svg class="rail-link-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        GitHub
+        <span class="tgl">GitHub</span>
       </a>
     </div>
+    <button class="rail-toggle" id="railToggle" type="button" aria-label="Collapse side panel" aria-expanded="true" title="Collapse side panel">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+    </button>
   </aside>
   <main class="main" id="main">
     <section class="view" id="view-run" hidden></section>

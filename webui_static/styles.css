@@ -92,6 +92,7 @@ input, select, textarea { font: inherit; }
   position: sticky;
   top: 0;
   height: 100vh;
+  transition: flex-basis 160ms ease, width 160ms ease;
 }
 .wordmark { display: flex; gap: 10px; align-items: center; padding: 2px 10px 6px; color: inherit; text-decoration: none; cursor: pointer; }
 .wordmark-sigil {
@@ -155,6 +156,26 @@ input, select, textarea { font: inherit; }
   padding: 4px 9px; cursor: pointer; letter-spacing: 0.07em;
 }
 .theme-toggle:hover { color: var(--ink); border-color: var(--border); }
+.rail-toggle {
+  position: absolute;
+  top: 24px;
+  right: -11px; /* straddles the rail border — can never collide with the wordmark */
+  z-index: 5;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail-toggle svg { width: 14px; height: 14px; transition: transform 160ms ease; }
+.rail-toggle:hover { color: var(--ink); border-color: var(--ink-2); }
+.rail-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rail-link {
   align-self: flex-start;
   display: inline-flex; align-items: center; gap: 6px;
@@ -164,6 +185,23 @@ input, select, textarea { font: inherit; }
 }
 .rail-link:hover { color: var(--ink); border-color: var(--border); }
 .rail-link-icon { width: 13px; height: 13px; }
+
+/* Collapsed rail: icon-only strip. Toggled from core.js (localStorage
+   "cb-rail"); labels/labels-only widgets disappear, buttons shrink to
+   their glyph. */
+body.rail-collapsed .rail { width: 62px; flex-basis: 62px; padding: 22px 11px 18px; }
+body.rail-collapsed .wordmark { padding-inline: 0; }
+body.rail-collapsed .wordmark-title,
+body.rail-collapsed .wordmark-sub,
+body.rail-collapsed .nav-label,
+body.rail-collapsed .hw-readout,
+body.rail-collapsed .mlx-badge,
+body.rail-collapsed .tgl { display: none; }
+body.rail-collapsed .nav a { justify-content: center; gap: 0; padding-inline: 0; }
+body.rail-collapsed .rail-foot { padding: 0 2px; }
+body.rail-collapsed .theme-toggle,
+body.rail-collapsed .rail-link { align-self: stretch; padding: 4px 8px; }
+body.rail-collapsed .rail-toggle svg { transform: rotate(180deg); }
 
 .main { flex: 1; min-width: 0; padding: 30px 38px 70px; }
 

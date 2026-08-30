@@ -4,10 +4,11 @@
 (function () {
   "use strict";
 
-  const { state, esc, api, initTheme, render } = CB;
+  const { state, esc, api, initTheme, initRailToggle, render } = CB;
 
   async function boot() {
     initTheme();
+    initRailToggle();
     try {
       state.meta = await api("/api/meta");
       state.endpoints = await api("/api/endpoints");

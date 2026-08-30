@@ -300,6 +300,27 @@
     else delete document.documentElement.dataset.theme;
   }
 
+  // ------------------------------------------------------------- rail collapse
+
+  function initRailToggle() {
+    const btn = document.getElementById("railToggle");
+    if (!btn) return;
+    const apply = (collapsed) => {
+      document.body.classList.toggle("rail-collapsed", collapsed);
+      const label = collapsed ? "Expand side panel" : "Collapse side panel";
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("aria-expanded", String(!collapsed));
+    };
+    apply(localStorage.getItem("cb-rail") === "collapsed");
+    btn.addEventListener("click", () => {
+      const collapsed = !document.body.classList.contains("rail-collapsed");
+      localStorage.setItem("cb-rail", collapsed ? "collapsed" : "open");
+      apply(collapsed);
+      render(); // charts size to their container — re-render to re-fit
+    });
+  }
+
   // ----------------------------------------------------------------- router
 
   const VIEW_NAMES = ["run", "results", "compare", "endpoints", "tools"];
@@ -410,7 +431,7 @@
     seriesColor, ctxNum, cachedSeriesPoints, fmtDate, fmtDuration,
     pageHead, resultName, resultSubtitle, seriesLabel, matchesFilter, engineById, endpointTarget,
     ensureResults, ensureDetail, toggleCompare,
-    openModal, closeModal, initTheme,
+    openModal, closeModal, initTheme, initRailToggle,
     views, currentView, render,
     attachModelPicker, modelPickerHtml,
     onCompareResize: null,
