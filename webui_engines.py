@@ -172,6 +172,23 @@ def get_engine_catalog() -> dict:
                     "help": "Some hosted models, including Kimi K3, require exactly 1.0",
                 },
                 {
+                    "key": "thinking",
+                    "type": "choice",
+                    "flag": "--thinking",
+                    "label": "Thinking",
+                    "default": "",
+                    "choices": ["", "on", "off"],
+                    "help": "Sends chat_template_kwargs.enable_thinking (Qwen3-style templates); blank = server default",
+                },
+                {
+                    "key": "extra_body",
+                    "type": "str",
+                    "flag": "--extra-body",
+                    "label": "Extra body (JSON)",
+                    "default": "",
+                    "help": 'JSON object merged into every request, e.g. {"top_k": 20}',
+                },
+                {
                     "key": "latency_adjustment",
                     "type": "optbool",
                     "flag": "--latency-adjustment",

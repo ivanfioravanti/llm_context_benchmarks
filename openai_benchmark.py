@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import statistics
 import sys
@@ -143,6 +144,7 @@ def run_benchmark(
     endpoint_latency: Optional[Dict[str, float]] = None,
     cold_prefill: bool = True,
     _run_idx: Optional[int] = None,
+    extra_body: Optional[Dict] = None,
 ) -> Optional[Dict]:
     """Benchmark a single context file against the OpenAI-compatible endpoint.
 
@@ -162,7 +164,9 @@ def run_benchmark(
     if host_mem_sampler:
         host_mem_sampler.__enter__()
     try:
-        stream_result = common.stream_chat(client, model, prompt, max_tokens, temperature=temperature, timeout=timeout)
+        stream_result = common.stream_chat(
+            client, model, prompt, max_tokens, temperature=temperature, timeout=timeout, extra_body=extra_body
+        )
     except Exception as e:
         print(f"Error during benchmark: {e}")
         return None
@@ -308,6 +312,7 @@ def run_batch_benchmark(
     num_trials: int = 3,
     temperature: float = 1.0,
     endpoint_latency_s: float = 0.0,
+    extra_body: Optional[Dict] = None,
 ) -> List[Dict]:
     """Run batch benchmark by sending concurrent requests to test continuous batching.
 
@@ -358,6 +363,7 @@ def run_batch_benchmark(
                 "messages": [{"role": "user", "content": prompt_text}],
                 "max_tokens": gen_tokens,
                 "temperature": temperature,
+                **(extra_body or {}),
             },
         )
         resp.raise_for_status()
@@ -502,6 +508,18 @@ def main() -> int:
         help="Sampling temperature (default: 1.0; required by some hosted models, including Kimi K3)",
     )
     parser.add_argument(
+        "--thinking",
+        choices=["on", "off"],
+        default=None,
+        help="Send chat_template_kwargs.enable_thinking=true/false (Qwen3-style templates; vLLM, SGLang, "
+        "llama.cpp and most local servers). Default: server default",
+    )
+    parser.add_argument(
+        "--extra-body",
+        default=None,
+        help="JSON object merged into every request body for server-specific fields, e.g. '{\"top_k\": 20}'",
+    )
+    parser.add_argument(
         "--latency-adjustment",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -556,6 +574,22 @@ def main() -> int:
 
     base_url = args.base_url.rstrip("/")
 
+    extra_body: Dict = {}
+    if args.extra_body:
+        try:
+            extra_body = json.loads(args.extra_body)
+        except json.JSONDecodeError as exc:
+            print(f"Error: --extra-body is not valid JSON: {exc}")
+            return 1
+        if not isinstance(extra_body, dict):
+            print("Error: --extra-body must be a JSON object")
+            return 1
+    if args.thinking:
+        extra_body["chat_template_kwargs"] = {
+            **extra_body.get("chat_template_kwargs", {}),
+            "enable_thinking": args.thinking == "on",
+        }
+
     # host RAM/VRAM sampling is only meaningful when the server is local
     global SAMPLE_HOST_MEMORY
     SAMPLE_HOST_MEMORY = common.is_local_base_url(base_url)
@@ -604,6 +638,8 @@ def main() -> int:
     print(f"Model:      {model}")
     print(f"Hardware:   {hardware_str}")
     print(f"Max tokens: {args.max_tokens}")
+    if extra_body:
+        print(f"Extra body: {json.dumps(extra_body)}")
     print(
         f"Cold prefill: {'enabled (cache busted per prompt)' if args.cold_prefill else 'disabled (cache reuse allowed)'}"
     )
@@ -636,6 +672,7 @@ def main() -> int:
                 endpoint_latency=endpoint_latency,
                 cold_prefill=args.cold_prefill,
                 n_runs=args.runs,
+                extra_body=extra_body or None,
             )
             if result:
                 results.append(result)
@@ -657,6 +694,7 @@ def main() -> int:
             temperature=args.temperature,
             endpoint_latency=endpoint_latency,
             cold_prefill=args.cold_prefill,
+            extra_body=extra_body or None,
         )
         if args.save_responses:
             for result in results:
@@ -685,6 +723,7 @@ def main() -> int:
                 num_trials=args.batch_trials,
                 temperature=args.temperature,
                 endpoint_latency_s=(endpoint_latency or {}).get("mean_s", 0.0),
+                extra_body=extra_body or None,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
