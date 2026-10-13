@@ -249,8 +249,10 @@ Each run writes a timestamped directory under `output/`:
 
 | File | Contents |
 | --- | --- |
+| `metadata.json` | Run identity: engine, model, machine, cache mode, context type, args (API keys redacted), git sha, package versions |
 | `hardware_info.json` | CPU/GPU/memory specs |
-| `benchmark_results.csv` | Per-context metrics (TPS, TTFT, total time, …) |
+| `benchmark_results.csv` | Per-context metrics (TPS, TTFT, total time, …); peak across `--runs` |
+| `results.json` | Every run per context (incl. discarded ones and why) plus median/mean/min/max/stdev |
 | `benchmark_chart.png` | Visual chart with hardware in the title |
 | `table.txt` | Formatted results table |
 | `xpost.txt` | Summary text for social posts |
