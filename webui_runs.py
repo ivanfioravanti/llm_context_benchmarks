@@ -56,6 +56,15 @@ PEAK_MEM_RES = [
 SECRET_FLAGS = {"--api-key"}
 
 
+def without_api_key(settings):
+    """Launch settings minus the API key. They land in webui_run.json inside
+    result folders (which get shared) and are mirrored to a master; the key
+    itself lives in webui_endpoints.json (0600) or is re-entered on rerun."""
+    if not settings or not (settings.get("connection") or {}).get("api_key"):
+        return settings
+    return {**settings, "connection": {**settings["connection"], "api_key": ""}}
+
+
 def batch_sizes_from_argv(argv: list) -> list[int]:
     """Return the effective batch sweep, or none when this run skips it."""
     if "--no-batch" in argv:
@@ -142,7 +151,7 @@ class BenchmarkRun:
         self.live = {}
         self.result_folders = []
         # original /api/runs start payload, replayed by the Results »rerun« button
-        self.settings = settings
+        self.settings = without_api_key(settings)
         self.error = None
         # per-context / per-batch metrics accumulated from console output;
         # entries are {"context": "2k", ...} or {"batch_size": 8, ...} with
