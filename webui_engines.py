@@ -581,6 +581,16 @@ def get_engine_catalog() -> dict:
             ],
         },
     }
+    # Lucebox is the generic OpenAI engine with its own tag/label; same options.
+    catalog["lucebox"] = {
+        **catalog["openai"],
+        "label": "Lucebox",
+        "script": "lucebox_benchmark.py",
+        "tag": "lucebox",
+        "description": "Lucebox server (OpenAI-compatible + usage.timings prefill/decode stats)",
+        "example": "qwen3.8-27b",
+        "default_base_url": "http://localhost:8081/v1",
+    }
     return dict(sorted(catalog.items()))
 
 

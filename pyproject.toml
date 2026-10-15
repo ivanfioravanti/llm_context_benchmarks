@@ -68,6 +68,7 @@ dependencies = [
   "urllib3>=2.6.3",
   "uvicorn>=0.30.0",
   "virtualenv>=21.3.0",
+  "watchfiles>=1.0.0",
   "torchvision>=0.26.0",
 ]
 
@@ -92,6 +93,7 @@ openai-benchmark = "openai_benchmark:main"
 unsloth-benchmark = "unsloth_benchmark:main"
 vllm-benchmark = "vllm_benchmark:main"
 sglang-benchmark = "sglang_benchmark:main"
+lucebox-benchmark = "lucebox_benchmark:main"
 apple-foundation-benchmark = "apple_foundation_benchmark:main"
 omlx-benchmark = "omlx_benchmark:main"
 mtplx-benchmark = "mtplx_benchmark:main"
@@ -135,6 +137,7 @@ py-modules = [
   "paroquant_benchmark",
   "vllm_benchmark",
   "sglang_benchmark",
+  "lucebox_benchmark",
   "webui",
   "webui_common",
   "webui_engines",

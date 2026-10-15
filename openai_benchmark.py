@@ -134,6 +134,47 @@ class HostMemorySampler:
 SAMPLE_HOST_MEMORY = False
 
 
+def server_timing_stats(usage: Dict) -> Dict[str, float]:
+    """Normalize server-reported prefill/decode stats; key names vary by server.
+
+    Flat keys: mlx-vlm uses *_tps, oMLX uses *_tokens_per_second, mtplx uses
+    prefill_tps/decode_tps. Lucebox nests a ``timings`` block (prefill_ms,
+    prefilled_tokens, decode_ms, decode_tokens_per_sec); prefilled_tokens
+    excludes cache hits, so the derived prefill rate stays honest.
+    """
+    timings = usage.get("timings") or {}
+    prefill_s = (
+        usage.get("prompt_eval_duration")
+        or usage.get("prefill_time_s")
+        or usage.get("ttft_s")
+        or (timings.get("prefill_ms") or 0.0) / 1000
+    )
+    decode_s = (
+        usage.get("generation_duration") or usage.get("decode_time_s") or (timings.get("decode_ms") or 0.0) / 1000
+    )
+    prefilled_tokens = timings.get("prefilled_tokens", usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    prompt_tps = (
+        usage.get("prompt_tps")
+        or usage.get("prompt_tokens_per_second")
+        or usage.get("prefill_tps")
+        or (prefilled_tokens / prefill_s if "prefill_ms" in timings and prefill_s > 0 else 0.0)
+    )
+    generation_tps = (
+        usage.get("generation_tps")
+        or usage.get("generation_tokens_per_second")
+        or usage.get("decode_tps")
+        or timings.get("decode_tokens_per_sec")
+        or 0.0
+    )
+    return {
+        "prompt_tps": prompt_tps,
+        "generation_tps": generation_tps,
+        "prefill_s": prefill_s,
+        "decode_s": decode_s,
+        "prefilled_tokens": prefilled_tokens,
+    }
+
+
 def run_benchmark(
     client: OpenAI,
     model: str,
@@ -182,25 +223,11 @@ def run_benchmark(
     prompt_tokens = usage_extra.get("prompt_tokens") or usage_extra.get("input_tokens") or 0
     completion_tokens = usage_extra.get("completion_tokens") or usage_extra.get("output_tokens") or 0
 
-    # Extract server-reported stats; key names vary by server.
-    # TPS keys: mlx-vlm uses *_tps, oMLX uses *_tokens_per_second,
-    # mtplx uses prefill_tps/decode_tps.
-    server_prompt_tps = (
-        usage_extra.get("prompt_tps")
-        or usage_extra.get("prompt_tokens_per_second")
-        or usage_extra.get("prefill_tps")
-        or 0.0
-    )
-    server_generation_tps = (
-        usage_extra.get("generation_tps")
-        or usage_extra.get("generation_tokens_per_second")
-        or usage_extra.get("decode_tps")
-        or 0.0
-    )
-    server_prompt_eval = (
-        usage_extra.get("prompt_eval_duration") or usage_extra.get("prefill_time_s") or usage_extra.get("ttft_s") or 0.0
-    )
-    server_gen_duration = usage_extra.get("generation_duration") or usage_extra.get("decode_time_s") or 0.0
+    server = server_timing_stats(usage_extra)
+    server_prompt_tps = server["prompt_tps"]
+    server_generation_tps = server["generation_tps"]
+    server_prompt_eval = server["prefill_s"]
+    server_gen_duration = server["decode_s"]
     peak_memory_gb = usage_extra.get("peak_memory", 0.0) or 0.0
 
     # TTFT is always the end-to-end client observation. For prompt throughput,
@@ -313,6 +340,7 @@ def run_batch_benchmark(
     temperature: float = 1.0,
     endpoint_latency_s: float = 0.0,
     extra_body: Optional[Dict] = None,
+    cold_prefill: bool = True,
 ) -> List[Dict]:
     """Run batch benchmark by sending concurrent requests to test continuous batching.
 
@@ -330,22 +358,7 @@ def run_batch_benchmark(
     """
     import concurrent.futures
 
-    import tiktoken
-
-    # Generate a fixed prompt of approximately prompt_tokens length
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        # Use a repeated phrase to fill the token budget
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        repeats = max(1, prompt_tokens // len(base_tokens))
-        prompt_text = base_text * repeats
-        # Trim to exact token count
-        tokens = enc.encode(prompt_text)[:prompt_tokens]
-        prompt_text = enc.decode(tokens)
-    except Exception:
-        # Fallback: approximate ~4 chars per token
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+    prompt_text = common.make_batch_prompt(prompt_tokens)
 
     import httpx
 
@@ -356,11 +369,12 @@ def run_batch_benchmark(
 
     def single_request():
         """Send one non-streaming request and return (prompt_tps, gen_tps, prompt_tokens, gen_tokens)."""
+        body = (common.make_cache_buster() + prompt_text) if cold_prefill else prompt_text
         resp = http_client.post(
             f"{base_url}/chat/completions",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt_text}],
+                "messages": [{"role": "user", "content": body}],
                 "max_tokens": gen_tokens,
                 "temperature": temperature,
                 **(extra_body or {}),
@@ -369,9 +383,12 @@ def run_batch_benchmark(
         resp.raise_for_status()
         data = resp.json()
         usage = data.get("usage", {})
+        stats = server_timing_stats(usage)
         return {
-            "prompt_tps": usage.get("prompt_tps", 0),
-            "generation_tps": usage.get("generation_tps", 0),
+            "prompt_tps": stats["prompt_tps"],
+            "generation_tps": stats["generation_tps"],
+            "prefill_s": stats["prefill_s"],
+            "prefilled_tokens": stats["prefilled_tokens"],
             "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
             "generation_tokens": usage.get("output_tokens", usage.get("completion_tokens", 0)),
             "peak_memory": usage.get("peak_memory", 0),
@@ -393,6 +410,7 @@ def run_batch_benchmark(
         trial_gen_tps_e2e = []
         trial_peak_mem = []
         trial_decode_tps = []  # pure decode rate summed across clients (from server usage)
+        trial_prefill_tps = []  # pure prefill rate across clients (from server usage)
 
         trial_host_mem = []
         for trial in range(num_trials):
@@ -436,6 +454,13 @@ def run_batch_benchmark(
             if len(per_request_decode) == len(responses):
                 trial_decode_tps.append(sum(per_request_decode))
 
+            # Pure prefill throughput: concurrent prefills share batched steps, so
+            # every request reports roughly the same window (lucebox: 2x2048 tok,
+            # both ~3.8s). Total uncached tokens over the longest window.
+            longest_prefill = max(r["prefill_s"] for r in responses)
+            if longest_prefill > 0 and all(r["prefill_s"] > 0 for r in responses):
+                trial_prefill_tps.append(sum(r["prefilled_tokens"] for r in responses) / longest_prefill)
+
             latency_note = " latency-adjusted" if adjusted_wall_time != wall_time else ""
             print(
                 f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s "
@@ -460,6 +485,15 @@ def run_batch_benchmark(
                 peak_decode = max(trial_decode_tps)
                 result["decode_tps_total"] = round(peak_decode, 2)
                 result["decode_tps_per_client"] = round(peak_decode / bs, 2)
+            if trial_prefill_tps:
+                result["prefill_tps_total"] = round(max(trial_prefill_tps), 2)
+            # Wall-clock rates blend prefill + decode + network into one window;
+            # when the server times each phase, headline the pure rates instead.
+            if trial_prefill_tps and trial_decode_tps:
+                result["prompt_tps_wall"] = result["prompt_tps"]
+                result["generation_tps_wall"] = result["generation_tps"]
+                result["prompt_tps"] = result["prefill_tps_total"]
+                result["generation_tps"] = result["decode_tps_total"]
             if trial_host_mem:
                 result["host_memory_gb"] = round(max(trial_host_mem), 2)
             if trial_peak_mem:
@@ -467,18 +501,20 @@ def run_batch_benchmark(
             else:
                 result["peak_memory_gb"] = 0.0
 
-            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
+            print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s (wall-clock)")
+            if trial_prefill_tps and trial_decode_tps:
+                print(f"  Server-timed: pp {result['prompt_tps']:.1f} tg {result['generation_tps']:.1f} t/s")
             batch_results.append(result)
 
     http_client.close()
     return batch_results
 
 
-def main() -> int:
-    """Entry point."""
-    parser = argparse.ArgumentParser(
-        description="Benchmark any OpenAI-compatible API endpoint across different context sizes"
-    )
+def main(
+    tag: str = "openai_compat", name: str = "OpenAI Compat", default_base_url: str = "http://localhost:8080/v1"
+) -> int:
+    """Entry point; ``tag``/``name``/``default_base_url`` let thin wrappers (lucebox) reuse it."""
+    parser = argparse.ArgumentParser(description=f"Benchmark a {name} endpoint across different context sizes")
     parser.add_argument(
         "model",
         nargs="?",
@@ -493,8 +529,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--base-url",
-        default="http://localhost:8080/v1",
-        help="Base URL of the OpenAI-compatible server (default: http://localhost:8080/v1)",
+        default=default_base_url,
+        help=f"Base URL of the OpenAI-compatible server (default: {default_base_url})",
     )
     parser.add_argument(
         "--api-key",
@@ -633,7 +669,7 @@ def main() -> int:
     hardware_info = common.mark_client_hardware(common.get_hardware_info(), base_url)
     hardware_str = common.format_hardware_string(hardware_info)
 
-    print(f"\nOpenAI-compatible Endpoint Benchmark")
+    print(f"\n{name} Endpoint Benchmark")
     print(f"Server:     {base_url}")
     print(f"Model:      {model}")
     print(f"Hardware:   {hardware_str}")
@@ -649,7 +685,7 @@ def main() -> int:
         return 1
 
     output_dir = common.create_output_directory(
-        "openai_compat", model, cold_prefill=args.cold_prefill, context_type=args.context_type
+        tag, model, cold_prefill=args.cold_prefill, context_type=args.context_type
     )
 
     results = []
@@ -679,7 +715,7 @@ def main() -> int:
 
                 if args.save_responses:
                     resp_path = output_dir / f"response_{result['context_size']}.txt"
-                    common.save_generated_text(result, model, resp_path, "OpenAI Compat")
+                    common.save_generated_text(result, model, resp_path, name)
 
             common.cooldown_after_context(ctx_file, is_last=i == len(context_files) - 1)
     else:
@@ -699,7 +735,7 @@ def main() -> int:
         if args.save_responses:
             for result in results:
                 resp_path = output_dir / f"response_{result['context_size']}.txt"
-                common.save_generated_text(result, model, resp_path, "OpenAI Compat")
+                common.save_generated_text(result, model, resp_path, name)
 
     total_benchmark_time = time.time() - benchmark_start
 
@@ -724,6 +760,7 @@ def main() -> int:
                 temperature=args.temperature,
                 endpoint_latency_s=(endpoint_latency or {}).get("mean_s", 0.0),
                 extra_body=extra_body or None,
+                cold_prefill=args.cold_prefill,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
@@ -737,7 +774,7 @@ def main() -> int:
         results,
         output_dir,
         model,
-        "OpenAI Compat",
+        name,
         hardware_info,
         args,
         include_memory=has_memory,
@@ -747,7 +784,7 @@ def main() -> int:
     common.print_benchmark_summary(
         results,
         model,
-        "OpenAI Compat",
+        name,
         hardware_info,
         output_dir,
         total_benchmark_time,

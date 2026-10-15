@@ -31,6 +31,7 @@ AUTO_MODEL_ENGINES = {
     "unsloth",
     "mlx-serve",
     "sglang",
+    "lucebox",
 }
 
 
@@ -91,6 +92,11 @@ def get_available_engines():
             "script": "sglang_benchmark.py",
             "description": "SGLang server (OpenAI-compatible + usage/cache/spec-decode stats)",
             "example": "Qwen/Qwen3-8B --base-url http://dgx1.local:8888/v1",
+        },
+        "lucebox": {
+            "script": "lucebox_benchmark.py",
+            "description": "Lucebox server (OpenAI-compatible + usage.timings prefill/decode stats)",
+            "example": "qwen3.8-27b --base-url http://localhost:8081/v1",
         },
         "afms": {
             "script": "apple_foundation_benchmark.py",
@@ -449,7 +455,7 @@ Examples:
     if args.engine == "llamacpp":
         pass_through_args.extend(["--host", args.host])
         pass_through_args.extend(["--port", str(args.port)])
-    if args.engine in ("openai", "afms", "vllm", "unsloth"):
+    if args.engine in ("openai", "afms", "vllm", "unsloth", "sglang", "lucebox"):
         if args.base_url:
             pass_through_args.extend(["--base-url", args.base_url])
         if args.api_key:

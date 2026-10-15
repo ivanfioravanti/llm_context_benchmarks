@@ -20,7 +20,7 @@ uv run benchmark -- llamacpp <model> --host localhost --port 8080
 uv run benchmark -- <engine> <model> --contexts 2,4,8,16 --max-tokens 500 --timeout 7200
 
 uv run compare-benchmarks            # Compare benchmark results
-uv run benchmark-webui               # Web UI on http://127.0.0.1:8321
+uv run benchmark-webui               # Web UI on http://127.0.0.1:8321 (--reload: auto-restart on UI code edits)
 uv run generate-context-files -- <source.txt> --sizes 2,4,8,16,32,64,128
 ```
 

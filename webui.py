@@ -759,7 +759,16 @@ def main():
         default=platform.node(),
         help="Worker name shown at the master (default: hostname)",
     )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Dev: restart the server when its Python sources change. Engine scripts (*_benchmark.py) are "
+        "excluded since each run spawns them fresh; a reload drops in-progress runs from the UI (they keep "
+        "running and their results still land in output/)",
+    )
     args = parser.parse_args()
+    if args.reload and args.master:
+        parser.error("--reload can't be combined with --master: reloaded processes don't see the mirror config")
 
     if args.master:
         run_manager.mirror = {"master": args.master, "token": args.master_token, "name": args.worker_name}
@@ -775,7 +784,18 @@ def main():
         print(f"Worker mode: mirroring launched runs to {args.master} as '{args.worker_name}'")
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    if args.reload:
+        uvicorn.run(
+            "webui:app",
+            host=args.host,
+            port=args.port,
+            log_level="warning",
+            reload=True,
+            reload_dirs=[str(ROOT)],
+            reload_excludes=["*_benchmark.py"],
+        )
+    else:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
 
