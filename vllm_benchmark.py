@@ -826,6 +826,7 @@ def run_batch_benchmark(
     top_p: float = 1.0,
     metrics_base_url: Optional[str] = None,
     use_metrics: bool = True,
+    cold_prefill: bool = True,
 ) -> List[Dict[str, object]]:
     """Benchmark aggregate throughput under concurrent requests.
 
@@ -837,17 +838,7 @@ def run_batch_benchmark(
     import concurrent.futures
     import statistics
 
-    # Build a fixed prompt of approximately prompt_tokens tokens.
-    try:
-        import tiktoken
-
-        enc = tiktoken.get_encoding("cl100k_base")
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        prompt_text = enc.decode((enc.encode(base_text * max(1, prompt_tokens // len(base_tokens))))[:prompt_tokens])
-    except Exception:
-        # ponytail: ~4 chars/token fallback when tiktoken is unavailable
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * max(1, prompt_tokens // 10)
+    prompt_text = common.make_batch_prompt(prompt_tokens)
 
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     if api_key:
@@ -866,7 +857,12 @@ def run_batch_benchmark(
                 f"{base_url}/chat/completions",
                 json={
                     "model": model_name,
-                    "messages": [{"role": "user", "content": prompt_text}],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (common.make_cache_buster() + prompt_text) if cold_prefill else prompt_text,
+                        }
+                    ],
                     "max_tokens": gen_tokens,
                     "temperature": temperature,
                     "top_p": top_p,
@@ -1332,6 +1328,7 @@ def main() -> int:
                 top_p=args.top_p,
                 metrics_base_url=metrics_base_url,
                 use_metrics=args.metrics,
+                cold_prefill=args.cold_prefill,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")

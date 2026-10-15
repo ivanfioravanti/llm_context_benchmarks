@@ -461,21 +461,7 @@ def run_batch_benchmark(
     """
     import concurrent.futures
 
-    # Build a synthetic prompt of approximately prompt_tokens length. Same
-    # tiktoken encoding as ollama_api_benchmark and openai_benchmark, so the
-    # batch numbers across engines are directly comparable.
-    try:
-        import tiktoken
-
-        enc = tiktoken.get_encoding("cl100k_base")
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        repeats = max(1, prompt_tokens // len(base_tokens))
-        prompt_text = base_text * repeats
-        tokens = enc.encode(prompt_text)[:prompt_tokens]
-        prompt_text = enc.decode(tokens)
-    except Exception:
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+    prompt_text = common.make_batch_prompt(prompt_tokens)
 
     def single_request() -> Dict:
         """Send one non-streaming request via `ollama run` and parse metrics."""

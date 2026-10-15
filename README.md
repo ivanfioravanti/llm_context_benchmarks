@@ -28,6 +28,7 @@ Engine-specific setup:
 | LM Studio | Install [LM Studio](https://lmstudio.ai), start the local server |
 | Apple Foundation Models Serve | Start the local server; defaults to `http://127.0.0.1:1976/v1` |
 | Exo / OpenAI-compatible | Any server exposing `/v1/chat/completions` |
+| Lucebox | Start the Lucebox server; defaults to `http://localhost:8081/v1`, reads prefill/decode timings from `usage.timings` |
 | SGLang | `python -m sglang.launch_server --model ... --port 8888`; start with `--enable-cache-report` for cached-token stats |
 | vLLM | `vllm serve <model>`; defaults to `http://127.0.0.1:8000/v1` |
 

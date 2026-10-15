@@ -1762,6 +1762,27 @@ def make_cache_buster(run_idx: Optional[int] = None) -> str:
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
+def make_batch_prompt(prompt_tokens: int) -> str:
+    """Synthetic batch-benchmark prompt: ~``prompt_tokens`` of filler, then a long-answer request.
+
+    Filler is sized with tiktoken cl100k_base so batch numbers compare across
+    engines. Filler alone draws a short reply and early EOS, so clients leave
+    the batch after a few tokens and decode TPS is diluted (lucebox b8: 7-16 of
+    128 tokens). Asking for an essay keeps every client decoding all gen_tokens;
+    servers can't be relied on to honor ignore_eos/min_tokens.
+    """
+    base_text = "The quick brown fox jumps over the lazy dog. "
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        filler = enc.decode(enc.encode(base_text * max(1, prompt_tokens // len(enc.encode(base_text))))[:prompt_tokens])
+    except Exception:
+        # ponytail: ~4 chars/token fallback when tiktoken is unavailable
+        filler = base_text * max(1, prompt_tokens // 10)
+    return filler + "\n\nIgnore the text above. Write a long, detailed essay about the history of computing."
+
+
 def _is_degenerate_generation(result: Dict) -> bool:
     """Return True if the generation phase was too short for a reliable TPS measurement."""
     if result.get("generation_tokens", 0) < 2:

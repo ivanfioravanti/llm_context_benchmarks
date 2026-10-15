@@ -220,6 +220,7 @@ def run_batch_benchmark(
     num_trials: int = 3,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    cold_prefill: bool = True,
 ) -> List[Dict]:
     """Run batch benchmark by sending concurrent requests to test continuous batching.
 
@@ -229,29 +230,18 @@ def run_batch_benchmark(
     """
     import concurrent.futures
 
-    import tiktoken
-
-    # Generate a fixed prompt of approximately prompt_tokens length
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        repeats = max(1, prompt_tokens // len(base_tokens))
-        prompt_text = base_text * repeats
-        tokens = enc.encode(prompt_text)[:prompt_tokens]
-        prompt_text = enc.decode(tokens)
-    except Exception:
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
+    prompt_text = common.make_batch_prompt(prompt_tokens)
 
     def single_request() -> Dict:
         """Send one non-streaming request; return metrics from usage + timings."""
         import httpx
 
+        body = (common.make_cache_buster() + prompt_text) if cold_prefill else prompt_text
         resp = httpx.post(
             f"{base_url}/chat/completions",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt_text}],
+                "messages": [{"role": "user", "content": body}],
                 "max_tokens": gen_tokens,
                 "temperature": temperature,
                 "top_p": top_p,
@@ -537,6 +527,7 @@ def main() -> int:
                 num_trials=args.batch_trials,
                 temperature=args.temperature,
                 top_p=args.top_p,
+                cold_prefill=args.cold_prefill,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")
