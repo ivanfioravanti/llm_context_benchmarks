@@ -29,6 +29,7 @@ FRAMEWORK_NAMES = {
     "grok": "Grok API",
     "llamacpp": "llama.cpp",
     "llamacpp_embed": "llama.cpp Embed [EXPERIMENTAL]",
+    "lucebox": "Lucebox",
     "lmstudio": "LM Studio",
     "mlx": "MLX",
     "mlx-distributed": "MLX Distributed",
