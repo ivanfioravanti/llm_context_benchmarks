@@ -133,7 +133,7 @@
     if (!epExists) {
       const conn = settings.connection || {};
       draft.baseUrl = conn.base_url || draft.baseUrl || "";
-      draft.apiKey = conn.api_key || "";
+      draft.apiKey = conn.api_key || draft.apiKey || ""; // keys aren't saved with results
       draft.host = conn.host || draft.host || "localhost";
       draft.port = conn.port || draft.port || "8080";
     }
