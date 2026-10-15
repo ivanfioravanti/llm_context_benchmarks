@@ -17,58 +17,35 @@ import sys
 from pathlib import Path
 
 import benchmark_common as common
+from compare_benchmarks import read_folder_identity
 
-
-def parse_folder_name(folder_name: str):
-    """Extract (engine, model_name) from a benchmark folder name.
-
-    Format: benchmark_{engine}_{model}_{cache}_{machine}_{timestamp}
-    """
-    body = folder_name
-    if body.startswith("benchmark_"):
-        body = body[len("benchmark_") :]
-
-    # Known multi-word engines (longest first)
-    engines_multi = [
-        "mlx-vlm",
-        "mlx-distributed",
-        "ollama-api",
-        "ollama-cli",
-        "llamacpp",
-        "lmstudio",
-        "openai",
-        "paroquant",
-    ]
-    engine = None
-    for eng in engines_multi:
-        if body.startswith(eng + "_") or body.startswith(eng + "-"):
-            engine = eng
-            body = body[len(eng) :].lstrip("_")
-            break
-
-    if engine is None:
-        parts = body.split("_", 1)
-        engine = parts[0]
-        body = parts[1] if len(parts) > 1 else ""
-
-    # body is now "{model}_{cache}_{machine}_{timestamp}" or similar
-    # Strip timestamp: _YYYYMMDD_HHMMSS
-    import re
-
-    body = re.sub(r"_\d{8}_\d{6}$", "", body)
-
-    # Strip context-type tag (_code) before cache/machine tags
-    body = re.sub(r"_code$", "", body)
-    # Strip cache tag (_nocache or _cache) followed by optional machine name at end
-    body = re.sub(r"_(?:no)?cache$", "", body)
-    body = re.sub(r"_(?:no)?cache_M\d+(?:Ultra|Max|Pro)?$", "", body)
-
-    # Strip trailing machine name (common patterns: M3Ultra, M2Max, etc.)
-    body = re.sub(r"_M\d+(?:Ultra|Max|Pro)?$", "", body)
-
-    # What remains is the model name
-    model_name = body
-    return engine, model_name
+# Display name per engine folder tag, for folders older than metadata.json
+# (newer folders record the framework name they were run with).
+FRAMEWORK_NAMES = {
+    "afms": "Apple Foundation Models Serve",
+    "deepseek": "DeepSeek API",
+    "dflash": "dflash-mlx API",
+    "exo": "Exo API",
+    "grok": "Grok API",
+    "llamacpp": "llama.cpp",
+    "llamacpp_embed": "llama.cpp Embed [EXPERIMENTAL]",
+    "lmstudio": "LM Studio",
+    "mlx": "MLX",
+    "mlx-distributed": "MLX Distributed",
+    "mlx_vlm": "MLX-VLM",
+    "mlx_vlm_server": "MLX-VLM Server",
+    "mlx_serve": "MLX-Serve",
+    "mtplx": "MTPLX API",
+    "ollama_api": "Ollama API",
+    "ollama_cli": "Ollama CLI",
+    "omlx": "oMLX API",
+    "openai_compat": "OpenAI Compat",
+    "paroquant": "Paroquant",
+    "sglang": "SGLang",
+    "unsloth": "Unsloth",
+    "vllm": "vLLM",
+    "vmlx": "vMLX API",
+}
 
 
 def load_csv_results(csv_path: Path):
@@ -101,37 +78,17 @@ def regen_folder(folder: Path, model_override: str = None, dry_run: bool = False
         print(f"  Skipping {folder.name}: no benchmark_results.csv")
         return False
 
-    # Determine model name
-    if model_override:
-        model_name = model_override
-    else:
-        _, model_name = parse_folder_name(folder.name)
-        if not model_name:
-            print(f"  Skipping {folder.name}: could not extract model name from folder")
-            return False
-
-    # Determine engine/framework
-    engine, _ = parse_folder_name(folder.name)
-    framework_map = {
-        "mlx": "MLX",
-        "mlx-vlm": "MLX-VLM",
-        "mlx-distributed": "MLX-Distributed",
-        "ollama-api": "Ollama API",
-        "ollama-cli": "Ollama CLI",
-        "llamacpp": "llama.cpp",
-        "lmstudio": "LM Studio",
-        "exo": "Exo",
-        "openai": "OpenAI",
-        "paroquant": "Paroquant",
-        "grok": "Grok",
-        "deepseek": "DeepSeek",
-        "vllm": "vLLM",
-    }
-    framework = framework_map.get(engine, engine)
+    hardware_info = json.loads(hw_path.read_text()) if hw_path.exists() else {}
+    identity = read_folder_identity(folder, hardware_info)
+    metadata = identity["metadata"] or {}
+    model_name = model_override or metadata.get("model_label") or metadata.get("model") or identity["model"]
+    if not model_name or model_name == "unknown":
+        print(f"  Skipping {folder.name}: could not determine model name")
+        return False
+    framework = metadata.get("framework") or FRAMEWORK_NAMES.get(identity["engine"], identity["engine"])
 
     # Load data
     results = load_csv_results(csv_path)
-    hardware_info = json.loads(hw_path.read_text()) if hw_path.exists() else {}
     batch_results = json.loads(batch_path.read_text()) if batch_path.exists() else None
     perplexity_data = json.loads(ppl_path.read_text()) if ppl_path.exists() else None
     perplexity = perplexity_data.get("perplexity") if perplexity_data else None
@@ -168,6 +125,7 @@ def regen_folder(folder: Path, model_override: str = None, dry_run: bool = False
         perplexity_data=perplexity_data,
         batch_results=batch_results,
         cached_results=cached_results,
+        record_run=False,
     )
 
     return True

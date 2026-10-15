@@ -29,6 +29,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import benchmark_common as common
+
 
 def _clean_display_name(name: str) -> str:
     """Strip trailing timestamp suffixes like _20260215 from display names."""
@@ -117,7 +119,9 @@ def _folder_label(folder_name: str) -> str:
 KNOWN_ENGINES = (
     "ollama_api",
     "ollama_cli",
+    "mlx_vlm_server",
     "mlx_vlm",
+    "mlx_serve",
     "mlx-distributed",
     "llamacpp_embed",
     "openai_compat",
@@ -206,6 +210,34 @@ def _parse_folder_metadata(folder_name: str, hardware_info: dict) -> Tuple[str, 
     return engine, body or "unknown", cache_mode, context_type
 
 
+def read_folder_identity(folder_path: Path, hardware_info: dict) -> Dict:
+    """Return engine, model, cache_mode, context_type and metadata for a result folder.
+
+    Folders written since metadata.json exists are identified from that file;
+    older folders fall back to parsing the folder name. ``context_type`` is ""
+    for prose and ``model`` uses the folder-name sanitization in both cases so
+    old and new runs of the same model group together.
+    """
+    metadata = common.read_run_metadata(folder_path)
+    if metadata.get("engine") and metadata.get("model"):
+        context_type = metadata.get("context_type") or ""
+        return {
+            "engine": metadata["engine"],
+            "model": common.sanitize_model_name(metadata["model"]),
+            "cache_mode": metadata.get("cache_mode") or "",
+            "context_type": "" if context_type == "prose" else context_type,
+            "metadata": metadata,
+        }
+    engine, model, cache_mode, context_type = _parse_folder_metadata(folder_path.name, hardware_info)
+    return {
+        "engine": engine,
+        "model": model,
+        "cache_mode": cache_mode,
+        "context_type": context_type,
+        "metadata": None,
+    }
+
+
 def _extract_base_model(model: str, hardware_info: dict, quant: str) -> str:
     """Strip quantization, hardware, and date tokens from model name to get the base model name."""
     base = model
@@ -283,9 +315,10 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
                     processed_row[key] = value
             results.append(processed_row)
 
-    # Extract engine and model from folder name
     folder_name = folder_path.name
-    engine, model, cache_mode, context_type = _parse_folder_metadata(folder_name, hardware_info)
+    identity = read_folder_identity(folder_path, hardware_info)
+    engine, model = identity["engine"], identity["model"]
+    cache_mode, context_type = identity["cache_mode"], identity["context_type"]
 
     # Read perplexity data if available
     perplexity_file = folder_path / "perplexity.json"
@@ -326,6 +359,7 @@ def parse_benchmark_folder(folder_path: Path) -> Tuple[Dict, str]:
         "perplexity_data": perplexity_data,
         "batch_data": batch_data,
         "cached_results": cached_results,
+        "metadata": identity["metadata"],
     }, display_name
 
 

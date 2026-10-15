@@ -3,11 +3,14 @@
 
 import argparse
 import json
+import math
 import platform
 import re
+import statistics
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -530,13 +533,14 @@ def save_results_csv(results, csv_path, exclude_fields=None):
         results: List of result dictionaries
         csv_path: Path to save CSV file
         exclude_fields: List of field names to exclude from CSV
-            (default: ['generated_text', 'reasoning_text'] — multi-line text
-            blobs belong in the response files, not in the metrics CSV)
+            (default: ['generated_text', 'reasoning_text', 'runs'] — multi-line
+            text blobs belong in the response files and per-run records in
+            results.json, not in the metrics CSV)
     """
     import csv
 
     if exclude_fields is None:
-        exclude_fields = ["generated_text", "reasoning_text"]
+        exclude_fields = ["generated_text", "reasoning_text", "runs"]
 
     if not results:
         print("Warning: No results to save to CSV")
@@ -1645,6 +1649,177 @@ def _get_machine_name() -> str:
     return platform.node().split(".")[0]
 
 
+# --- Run metadata (metadata.json) and per-run records (results.json) --------
+#
+# metadata.json identifies a result folder (engine, model, machine, cache mode,
+# context type, args, code version) so readers never have to parse the folder
+# name. results.json keeps every run of every context size next to the merged
+# peak row that benchmark_results.csv reports. Bump RESULTS_SCHEMA_VERSION on
+# incompatible changes to either file.
+RESULTS_SCHEMA_VERSION = 1
+METADATA_FILE = "metadata.json"
+RESULTS_JSON_FILE = "results.json"
+
+# Text blobs stay in the response files; "runs" is never nested in a run.
+RUN_RECORD_EXCLUDE = ("generated_text", "reasoning_text", "runs")
+
+# Metrics summarized (median/mean/min/max/stdev) across the ok runs of a context.
+RUN_SUMMARY_METRICS = (
+    "prompt_tps",
+    "generation_tps",
+    "time_to_first_token",
+    "total_time",
+    "prompt_tokens",
+    "generation_tokens",
+    "peak_memory_gb",
+)
+
+# Client-side packages whose version determines what was measured (local
+# engines) or how it was measured (API clients). Missing ones are skipped.
+TRACKED_PACKAGES = ("mlx", "mlx-lm", "mlx-vlm", "ollama", "openai", "llama-cpp-python", "transformers")
+
+# argparse dests holding credentials: api_key, worker_token, hf_token, ...
+# Anchored at the end so e.g. max_tokens is not caught.
+_SECRET_ARG_RE = re.compile(r"(?:^|_)(?:key|token|secret|password)$", re.IGNORECASE)
+
+
+def sanitize_model_name(model_name: str) -> str:
+    """Filesystem-safe model name, as used in output folder names."""
+    return model_name.replace("/", "_").replace(":", "_")
+
+
+def _json_safe(value):
+    """Convert numpy scalars, NaN/inf, Paths etc. into strict-JSON values."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    return str(value)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _git_info() -> Optional[Dict]:
+    """Commit and dirty state of the benchmark code, or None outside a git checkout."""
+    repo = Path(__file__).resolve().parent
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, timeout=5)
+        if head.returncode != 0:
+            return None
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {
+        "sha": head.stdout.strip(),
+        "dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
+    }
+
+
+def _package_versions() -> Dict[str, str]:
+    versions = {}
+    for package in TRACKED_PACKAGES:
+        try:
+            versions[package] = importlib_metadata.version(package)
+        except importlib_metadata.PackageNotFoundError:
+            continue
+    return versions
+
+
+def _redacted_args(args: argparse.Namespace) -> Dict:
+    return {key: "<redacted>" if value and _SECRET_ARG_RE.search(key) else value for key, value in vars(args).items()}
+
+
+def read_run_metadata(output_dir: Path) -> Dict:
+    """Load metadata.json from a result folder; empty dict when absent or unreadable."""
+    path = Path(output_dir) / METADATA_FILE
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_run_metadata(output_dir: Path, updates: Dict) -> None:
+    """Merge ``updates`` into the folder's metadata.json."""
+    metadata = read_run_metadata(output_dir)
+    metadata.update(updates)
+    metadata["schema_version"] = RESULTS_SCHEMA_VERSION
+    path = Path(output_dir) / METADATA_FILE
+    path.write_text(json.dumps(_json_safe(metadata), indent=2) + "\n")
+
+
+def make_run_record(run_idx: Optional[int], status: str, result: Optional[Dict] = None, error: str = "") -> Dict:
+    """One attempted run of one context size, as stored in results.json.
+
+    ``status`` is ``ok`` (used for the peak), ``degenerate`` (too few tokens /
+    too short to time), ``rejected_cache_hit`` (prefill served from cache) or
+    ``failed`` (no result).
+    """
+    record = {k: v for k, v in (result or {}).items() if k not in RUN_RECORD_EXCLUDE}
+    record["run"] = run_idx
+    record["status"] = status
+    if error:
+        record["error"] = error
+    return record
+
+
+def summarize_runs(run_records: List[Dict]) -> Dict:
+    """Median/mean/min/max/stdev of RUN_SUMMARY_METRICS over the ok runs."""
+    ok_runs = [r for r in run_records if r.get("status") == "ok"]
+    summary = {}
+    for metric in RUN_SUMMARY_METRICS:
+        values = [
+            float(r[metric])
+            for r in ok_runs
+            if isinstance(r.get(metric), (int, float, np.number))
+            and not isinstance(r.get(metric), bool)
+            and math.isfinite(r[metric])
+        ]
+        if not values:
+            continue
+        summary[metric] = {
+            "n": len(values),
+            "median": statistics.median(values),
+            "mean": statistics.fmean(values),
+            "min": min(values),
+            "max": max(values),
+            "stdev": statistics.stdev(values) if len(values) > 1 else None,
+        }
+    return summary
+
+
+def save_results_json(results: List[Dict], json_path: Path) -> None:
+    """Write results.json: per context, the reported peak row plus every run."""
+    entries = []
+    for result in results:
+        runs = result.get("runs") or []
+        entries.append(
+            {
+                "context_size": result.get("context_size"),
+                "peak": {k: v for k, v in result.items() if k not in RUN_RECORD_EXCLUDE},
+                "runs": runs,
+                "summary": summarize_runs(runs),
+            }
+        )
+    payload = {"schema_version": RESULTS_SCHEMA_VERSION, "results": entries}
+    Path(json_path).write_text(json.dumps(_json_safe(payload), indent=2) + "\n")
+    print(f"Per-run results saved to {json_path}")
+
+
 def create_output_directory(
     framework_name: str,
     model_name: str,
@@ -1670,8 +1845,7 @@ def create_output_directory(
     base_output_dir = Path(base_dir)
     base_output_dir.mkdir(exist_ok=True)
 
-    # Sanitize model name for filesystem
-    model_safe = model_name.replace("/", "_").replace(":", "_")
+    model_safe = sanitize_model_name(model_name)
 
     # Extract short machine name for the directory, unless a server-backed
     # benchmark provided a remote hardware label.
@@ -1683,6 +1857,20 @@ def create_output_directory(
         base_output_dir / f"benchmark_{framework_name}_{model_safe}-{machine_name}{cache_tag}{context_tag}_{timestamp}"
     )
     output_dir.mkdir(exist_ok=True)
+
+    write_run_metadata(
+        output_dir,
+        {
+            "engine": framework_name,
+            "model": model_name,
+            "machine": machine_name,
+            "cache_mode": "nocache" if cold_prefill else "cache",
+            "context_type": context_type,
+            "created_at": _utc_now(),
+            "git": _git_info(),
+            "packages": _package_versions(),
+        },
+    )
 
     return output_dir
 
@@ -1730,7 +1918,8 @@ def setup_common_args(parser: argparse.ArgumentParser) -> None:
         "--runs",
         type=int,
         default=2,
-        help="Number of runs per context size; peak decode and prefill are kept independently (default: 2)",
+        help="Number of runs per context size; peak decode and prefill are kept independently, "
+        "every run is saved to results.json (default: 2)",
     )
     parser.add_argument(
         "--timeout",
@@ -1804,7 +1993,9 @@ PREFILL_PHASE_FIELDS = (
 )
 
 
-def merge_peak_results(run_results: List[Dict], metric: str = "generation_tps") -> Optional[Dict]:
+def merge_peak_results(
+    run_results: List[Dict], metric: str = "generation_tps", run_log: Optional[List[Dict]] = None
+) -> Optional[Dict]:
     """Combine per-run results into one dict with independent per-phase peaks.
 
     The decode winner (highest ``metric``, default ``generation_tps``) provides
@@ -1814,9 +2005,15 @@ def merge_peak_results(run_results: List[Dict], metric: str = "generation_tps") 
     of the other phase.  ``total_time`` is recomputed from the two winning
     phase durations and ``time_to_first_token`` takes the fastest run.
 
+    The merged dict carries a ``runs`` list with one record per attempted run
+    (see ``make_run_record``); it is written to results.json and excluded from
+    the CSV.
+
     Args:
         run_results: Non-degenerate result dicts from the runs of one context size.
         metric: Decode-phase metric to maximize when picking the base run.
+        run_log: Records of every attempted run, including discarded ones.
+            Defaults to one ``ok`` record (run index unknown) per ``run_results`` entry.
 
     Returns:
         Merged result dict, or None when ``run_results`` is empty.
@@ -1849,6 +2046,7 @@ def merge_peak_results(run_results: List[Dict], metric: str = "generation_tps") 
     if ttfts:
         merged["time_to_first_token"] = min(ttfts)
 
+    merged["runs"] = run_log if run_log is not None else [make_run_record(None, "ok", r) for r in run_results]
     return merged
 
 
@@ -1889,21 +2087,26 @@ def run_benchmark_peak(
         runs, or None if all runs fail.
     """
     run_results = []
+    attempts = []  # [run_idx, status, result] per attempted run
     for run_idx in range(1, n_runs + 1):
         print(f"  Run {run_idx}/{n_runs}...")
         kwargs["_run_idx"] = run_idx
         result = run_fn(*args, **kwargs)
-        if result:
-            if _is_degenerate_generation(result):
-                print(
-                    f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
-                    f"in {result.get('eval_duration', 0):.6f}s "
-                    f"(tps={result.get('generation_tps', 0):.0f})"
-                )
-                continue
-            score = result.get(metric, 0)
-            print(f"    {metric}: {score:.2f}")
-            run_results.append(result)
+        if not result:
+            attempts.append([run_idx, "failed", None])
+            continue
+        if _is_degenerate_generation(result):
+            print(
+                f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
+                f"in {result.get('eval_duration', 0):.6f}s "
+                f"(tps={result.get('generation_tps', 0):.0f})"
+            )
+            attempts.append([run_idx, "degenerate", result])
+            continue
+        score = result.get(metric, 0)
+        print(f"    {metric}: {score:.2f}")
+        run_results.append(result)
+        attempts.append([run_idx, "ok", result])
 
     # A cached prompt can have nearly the same reported token count but orders
     # of magnitude less prompt-evaluation time. If requested by an engine that
@@ -1930,9 +2133,13 @@ def run_benchmark_peak(
             else:
                 filtered_results.append(result)
         if filtered_results:
+            for attempt in attempts:
+                if attempt[1] == "ok" and not any(attempt[2] is kept for kept in filtered_results):
+                    attempt[1] = "rejected_cache_hit"
             run_results = filtered_results
 
-    best_result = merge_peak_results(run_results, metric=metric)
+    run_log = [make_run_record(idx, status, result) for idx, status, result in attempts]
+    best_result = merge_peak_results(run_results, metric=metric, run_log=run_log)
     if best_result:
         print(
             f"  Peak {metric}: {best_result.get(metric, 0):.2f}, peak prompt_tps: {best_result.get('prompt_tps', 0):.2f}"
@@ -1966,6 +2173,7 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
         List of result dicts (one per context file), ordered by context file.
     """
     all_results = {cf.stem: [] for cf in context_files}
+    run_logs = {cf.stem: [] for cf in context_files}
 
     for run_idx in range(1, n_runs + 1):
         for i, context_file in enumerate(context_files):
@@ -1976,20 +2184,25 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
             kwargs["_run_idx"] = run_idx
             try:
                 result = run_fn(context_file=context_file, **kwargs)
+                error = ""
             except Exception as exc:
                 print(f"    Error: {exc}")
                 result = None
-            if result:
-                if _is_degenerate_generation(result):
-                    print(
-                        f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
-                        f"in {result.get('eval_duration', 0):.6f}s "
-                        f"(tps={result.get('generation_tps', 0):.0f})"
-                    )
-                    continue
+                error = str(exc)
+            if not result:
+                run_logs[context_file.stem].append(make_run_record(run_idx, "failed", error=error))
+            elif _is_degenerate_generation(result):
+                print(
+                    f"    Skipping degenerate run: {result.get('generation_tokens', 0)} tokens "
+                    f"in {result.get('eval_duration', 0):.6f}s "
+                    f"(tps={result.get('generation_tps', 0):.0f})"
+                )
+                run_logs[context_file.stem].append(make_run_record(run_idx, "degenerate", result))
+            else:
                 score = result.get(metric, 0)
                 print(f"    {metric}: {score:.2f}")
                 all_results[context_file.stem].append(result)
+                run_logs[context_file.stem].append(make_run_record(run_idx, "ok", result))
 
             cooldown_after_context(context_file, is_last=i == len(context_files) - 1)
 
@@ -1997,7 +2210,7 @@ def run_benchmark_peak_per_run(run_fn, context_files, n_runs=2, metric="generati
     for context_file in context_files:
         run_results = all_results[context_file.stem]
         if run_results:
-            best = merge_peak_results(run_results, metric=metric)
+            best = merge_peak_results(run_results, metric=metric, run_log=run_logs[context_file.stem])
             print(
                 f"  {context_file.name}: Peak {metric}: {best.get(metric, 0):.2f}, "
                 f"peak prompt_tps: {best.get('prompt_tps', 0):.2f}"
@@ -2019,6 +2232,7 @@ def save_all_outputs(
     perplexity_data: Optional[Dict] = None,
     batch_results: Optional[List[Dict]] = None,
     cached_results: Optional[List[Dict]] = None,
+    record_run: bool = True,
 ) -> None:
     """Save all benchmark outputs to files.
 
@@ -2034,6 +2248,9 @@ def save_all_outputs(
         perplexity_data: Full perplexity data dict to save as JSON (optional)
         batch_results: Batch benchmark results (optional)
         cached_results: Cached KV cache benchmark results (optional)
+        record_run: Write results.json and complete metadata.json. False when
+            re-rendering an existing folder (regen-charts), whose CSV no longer
+            holds the per-run records.
     """
     # Save hardware info
     hardware_path = output_dir / "hardware_info.json"
@@ -2042,6 +2259,22 @@ def save_all_outputs(
     # Save CSV results
     csv_path = output_dir / args.output_csv
     save_results_csv(results, csv_path)
+
+    if record_run:
+        save_results_json(results, output_dir / RESULTS_JSON_FILE)
+        updates = {
+            "framework": framework,
+            "args": _redacted_args(args),
+            "context_sizes": [r.get("context_size") for r in results],
+            "completed_at": _utc_now(),
+        }
+        recorded_model = read_run_metadata(output_dir).get("model")
+        if recorded_model is None:
+            updates["model"] = model_name
+        elif recorded_model != model_name:
+            # The chart/table name differs from the folder's model; keep both.
+            updates["model_label"] = model_name
+        write_run_metadata(output_dir, updates)
 
     # Save perplexity data if available
     if perplexity_data is not None:
