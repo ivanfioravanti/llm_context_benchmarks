@@ -313,8 +313,18 @@ def run_batch_benchmark(
     temperature: float = 1.0,
     endpoint_latency_s: float = 0.0,
     extra_body: Optional[Dict] = None,
+    cold_prefill: bool = True,
+    timeout: int = 3600,
 ) -> List[Dict]:
-    """Run batch benchmark by sending concurrent requests to test continuous batching.
+    """Run batch benchmark by sending concurrent streaming requests to test continuous batching.
+
+    Every request streams so per-request first/last-token times are known:
+    prompt t/s is total prompt tokens over the time until the *last* request
+    produced its first token (the prefill of all N prompts), and gen t/s is
+    total decoded tokens over the first-token→last-token span. See
+    ``benchmark_common.summarize_batch_trial``. With ``cold_prefill`` each
+    request gets its own cache-buster prefix so no prefill is served from a
+    prompt/prefix cache.
 
     Args:
         base_url: Server base URL
@@ -324,57 +334,43 @@ def run_batch_benchmark(
         prompt_tokens: Approximate prompt tokens per request
         gen_tokens: Tokens to generate per request
         num_trials: Number of trials per batch size
+        cold_prefill: Prefix every request with a unique marker to bust KV/prefix caches
 
     Returns:
         List of result dicts with batch_size, prompt_tps, generation_tps
     """
     import concurrent.futures
 
-    import tiktoken
+    prompt_text = common.build_batch_prompt(prompt_tokens)
+    client = build_client(base_url, api_key)
 
-    # Generate a fixed prompt of approximately prompt_tokens length
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        # Use a repeated phrase to fill the token budget
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        repeats = max(1, prompt_tokens // len(base_tokens))
-        prompt_text = base_text * repeats
-        # Trim to exact token count
-        tokens = enc.encode(prompt_text)[:prompt_tokens]
-        prompt_text = enc.decode(tokens)
-    except Exception:
-        # Fallback: approximate ~4 chars per token
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * (prompt_tokens // 10)
-
-    import httpx
-
-    http_client = httpx.Client(
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=600,
-    )
-
-    def single_request():
-        """Send one non-streaming request and return (prompt_tps, gen_tps, prompt_tokens, gen_tokens)."""
-        resp = http_client.post(
-            f"{base_url}/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt_text}],
-                "max_tokens": gen_tokens,
-                "temperature": temperature,
-                **(extra_body or {}),
-            },
+    def single_request() -> Dict:
+        """Stream one request; return token counts and absolute first/last-token times."""
+        prompt = common.make_cache_buster() + prompt_text if cold_prefill else prompt_text
+        sent_at = time.time()
+        stream_result = common.stream_chat(
+            client, model, prompt, gen_tokens, temperature=temperature, timeout=timeout, extra_body=extra_body
         )
-        resp.raise_for_status()
-        data = resp.json()
-        usage = data.get("usage", {})
+        usage = stream_result["usage"]
+        ttft = stream_result["time_to_first_token"]
+        first_at = sent_at + ttft if ttft > 0 else None
+        last_at = first_at + stream_result["decode_window"] if first_at else None
+        prompt_tok = usage.get("prompt_tokens") or usage.get("input_tokens") or len(prompt.split())
+        gen_tok = (
+            usage.get("completion_tokens")
+            or usage.get("output_tokens")
+            or len(stream_result["generated_text"].split()) + len(stream_result["reasoning_text"].split())
+        )
         return {
-            "prompt_tps": usage.get("prompt_tps", 0),
-            "generation_tps": usage.get("generation_tps", 0),
-            "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
-            "generation_tokens": usage.get("output_tokens", usage.get("completion_tokens", 0)),
-            "peak_memory": usage.get("peak_memory", 0),
+            "prompt_tokens": prompt_tok,
+            "generation_tokens": gen_tok,
+            "first_token_at": first_at,
+            "last_token_at": last_at,
+            "generation_tps": usage.get("generation_tps")
+            or usage.get("generation_tokens_per_second")
+            or usage.get("decode_tps")
+            or 0,
+            "peak_memory": usage.get("peak_memory", 0) or 0,
         }
 
     batch_results = []
@@ -393,6 +389,11 @@ def run_batch_benchmark(
         trial_gen_tps_e2e = []
         trial_peak_mem = []
         trial_decode_tps = []  # pure decode rate summed across clients (from server usage)
+        trial_ttft = []
+        trial_tpot = []
+        trial_prompt_tok = []
+        trial_gen_tok = []
+        short_requests = 0
 
         trial_host_mem = []
         for trial in range(num_trials):
@@ -408,23 +409,20 @@ def run_batch_benchmark(
                 if host_mem_sampler:
                     host_mem_sampler.__exit__()
                     trial_host_mem.append(host_mem_sampler.peak_gb)
-            wall_time = time.time() - start
+            end = time.time()
 
-            total_prompt_tok = sum(r["prompt_tokens"] for r in responses)
-            total_gen_tok = sum(r["generation_tokens"] for r in responses)
-            adjusted_wall_time = wall_time
-            if endpoint_latency_s > 0 and wall_time > endpoint_latency_s:
-                adjusted_wall_time = wall_time - endpoint_latency_s
-            agg_prompt_tps_e2e = total_prompt_tok / wall_time if wall_time > 0 else 0
-            agg_gen_tps_e2e = total_gen_tok / wall_time if wall_time > 0 else 0
-            agg_prompt_tps = total_prompt_tok / adjusted_wall_time if adjusted_wall_time > 0 else 0
-            agg_gen_tps = total_gen_tok / adjusted_wall_time if adjusted_wall_time > 0 else 0
+            summary = common.summarize_batch_trial(responses, start, end, endpoint_latency_s)
             peak_mem = max((r["peak_memory"] for r in responses), default=0)
 
-            trial_prompt_tps.append(agg_prompt_tps)
-            trial_gen_tps.append(agg_gen_tps)
-            trial_prompt_tps_e2e.append(agg_prompt_tps_e2e)
-            trial_gen_tps_e2e.append(agg_gen_tps_e2e)
+            trial_prompt_tps.append(summary["prompt_tps"])
+            trial_gen_tps.append(summary["generation_tps"])
+            trial_prompt_tps_e2e.append(summary["prompt_tps_e2e"])
+            trial_gen_tps_e2e.append(summary["generation_tps_e2e"])
+            trial_ttft.extend(summary["ttfts"])
+            trial_tpot.extend(summary["tpots"])
+            trial_prompt_tok.extend(r["prompt_tokens"] for r in responses)
+            trial_gen_tok.extend(r["generation_tokens"] for r in responses)
+            short_requests += sum(1 for r in responses if r["generation_tokens"] < 0.9 * gen_tokens)
             if peak_mem > 0:
                 trial_peak_mem.append(peak_mem)
 
@@ -436,10 +434,17 @@ def run_batch_benchmark(
             if len(per_request_decode) == len(responses):
                 trial_decode_tps.append(sum(per_request_decode))
 
-            latency_note = " latency-adjusted" if adjusted_wall_time != wall_time else ""
             print(
-                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s "
-                f"({wall_time:.1f}s e2e{latency_note})"
+                f"    Trial {trial + 1}: pp {summary['prompt_tps']:.1f} tg {summary['generation_tps']:.1f} t/s "
+                f"({summary['wall_time']:.1f}s wall, prefill {summary['prefill_window']:.1f}s, "
+                f"decode {summary['decode_window']:.1f}s)"
+            )
+
+        if short_requests:
+            total_requests = bs * num_trials
+            print(
+                f"    Note: {short_requests}/{total_requests} requests stopped well short of {gen_tokens} tokens "
+                f"(mean {statistics.mean(trial_gen_tok):.0f}); tg uses the shorter decode window"
             )
 
         if trial_prompt_tps:
@@ -453,7 +458,13 @@ def run_batch_benchmark(
                 "generation_tps": round(peak_gen, 2),
                 "prompt_tps_e2e": round(max(trial_prompt_tps_e2e), 2),
                 "generation_tps_e2e": round(max(trial_gen_tps_e2e), 2),
+                "prompt_tokens": int(round(statistics.mean(trial_prompt_tok))),
+                "generation_tokens": int(round(statistics.mean(trial_gen_tok))),
             }
+            if trial_ttft:
+                result["time_to_first_token"] = round(statistics.median(trial_ttft), 3)
+            if trial_tpot:
+                result["time_per_output_token"] = round(statistics.median(trial_tpot), 5)
             if endpoint_latency_s > 0:
                 result["endpoint_latency_ms"] = round(endpoint_latency_s * 1000, 3)
             if trial_decode_tps:
@@ -470,7 +481,6 @@ def run_batch_benchmark(
             print(f"  Peak: pp {peak_prompt:.1f} tg {peak_gen:.1f} t/s")
             batch_results.append(result)
 
-    http_client.close()
     return batch_results
 
 
@@ -724,6 +734,8 @@ def main() -> int:
                 temperature=args.temperature,
                 endpoint_latency_s=(endpoint_latency or {}).get("mean_s", 0.0),
                 extra_body=extra_body or None,
+                cold_prefill=args.cold_prefill,
+                timeout=args.timeout,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")

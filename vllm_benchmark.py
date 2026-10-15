@@ -826,36 +826,31 @@ def run_batch_benchmark(
     top_p: float = 1.0,
     metrics_base_url: Optional[str] = None,
     use_metrics: bool = True,
+    cold_prefill: bool = True,
 ) -> List[Dict[str, object]]:
     """Benchmark aggregate throughput under concurrent requests.
 
     vLLM's defining feature is continuous batching, so we fire N concurrent
-    non-streaming /chat/completions requests and report aggregate prompt +
-    generation tokens/sec (total tokens across the batch / wall time),
-    peak per metric over ``num_trials`` trials per batch size.
+    streaming /chat/completions requests. Prompt t/s is total prompt tokens
+    over the time until the *last* request produced its first token (the
+    prefill of all N prompts); gen t/s is total decoded tokens over the
+    first-token→last-token span (see ``benchmark_common.summarize_batch_trial``).
+    Both are peaked per metric over ``num_trials`` trials per batch size.
+    With ``cold_prefill`` each request carries its own cache-buster prefix so
+    vLLM's automatic prefix caching cannot serve the prefill.
     """
     import concurrent.futures
     import statistics
 
-    # Build a fixed prompt of approximately prompt_tokens tokens.
-    try:
-        import tiktoken
-
-        enc = tiktoken.get_encoding("cl100k_base")
-        base_text = "The quick brown fox jumps over the lazy dog. "
-        base_tokens = enc.encode(base_text)
-        prompt_text = enc.decode((enc.encode(base_text * max(1, prompt_tokens // len(base_tokens))))[:prompt_tokens])
-    except Exception:
-        # ponytail: ~4 chars/token fallback when tiktoken is unavailable
-        prompt_text = "The quick brown fox jumps over the lazy dog. " * max(1, prompt_tokens // 10)
+    prompt_text = common.build_batch_prompt(prompt_tokens)
 
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    def single_request() -> Tuple[int, int, float, float]:
-        """Send one streaming request, return (prompt_tokens, gen_tokens, ttft, tpot_ms)."""
-        request_start = time.time()
+    def single_request() -> Dict[str, Any]:
+        """Send one streaming request; return token counts and absolute first/last-token times."""
+        prompt = common.make_cache_buster() + prompt_text if cold_prefill else prompt_text
         first_token_time: Optional[float] = None
         last_token_time: Optional[float] = None
         generated_text = ""
@@ -866,11 +861,14 @@ def run_batch_benchmark(
                 f"{base_url}/chat/completions",
                 json={
                     "model": model_name,
-                    "messages": [{"role": "user", "content": prompt_text}],
+                    "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": gen_tokens,
                     "temperature": temperature,
                     "top_p": top_p,
                     "stream": True,
+                    # Without include_usage no usage chunk is emitted on a
+                    # stream, so token counts (and thus pp/tg t/s) stay 0.
+                    "stream_options": {"include_usage": True},
                 },
                 headers=headers,
                 timeout=timeout,
@@ -891,11 +889,15 @@ def run_batch_benchmark(
                         choices = chunk.get("choices", [])
                         if choices and isinstance(choices[0], dict):
                             delta = choices[0].get("delta", {})
-                            content = delta.get("content")
-                            if content and first_token_time is None:
-                                first_token_time = time.time()
+                            # Reasoning models stream thinking via
+                            # reasoning_content/reasoning; count both so
+                            # TTFT/TPOT anchor on the first generated token.
+                            content = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning")
                             if content:
-                                last_token_time = time.time()
+                                now = time.time()
+                                if first_token_time is None:
+                                    first_token_time = now
+                                last_token_time = now
                                 generated_text += str(content)
 
                         # Extract usage from final chunk
@@ -905,25 +907,25 @@ def run_batch_benchmark(
                     except json.JSONDecodeError:
                         pass
         except Exception as exc:
-            return 0, 0, 0.0, 0.0
+            print(f"    Request failed: {exc}")
+            return {"prompt_tokens": 0, "generation_tokens": 0, "first_token_at": None, "last_token_at": None}
 
-        total_time = time.time() - request_start
-
-        # Extract token counts
+        # Extract token counts; fall back to estimating from text when the
+        # server omits usage even with stream_options (same convention as
+        # run_benchmark).
         prompt_t = _safe_int(usage.get("prompt_tokens", usage.get("input_tokens", 0)), 0)
         gen_t = _safe_int(usage.get("completion_tokens", usage.get("output_tokens", 0)), 0)
+        if prompt_t <= 0:
+            prompt_t = _estimate_token_count(prompt, model_name)
+        if gen_t <= 0:
+            gen_t = _estimate_token_count(generated_text, model_name)
 
-        # Calculate TTFT
-        ttft = (first_token_time - request_start) if first_token_time else 0.0
-
-        # Calculate TPOT (ms per token after first)
-        if first_token_time and last_token_time and gen_t > 1:
-            eval_duration = last_token_time - first_token_time
-            tpot_ms = (eval_duration / (gen_t - 1)) * 1000 if eval_duration > 0 else 0.0
-        else:
-            tpot_ms = 0.0
-
-        return prompt_t, gen_t, ttft, tpot_ms
+        return {
+            "prompt_tokens": prompt_t,
+            "generation_tokens": gen_t,
+            "first_token_at": first_token_time,
+            "last_token_at": last_token_time,
+        }
 
     batch_results: List[Dict[str, object]] = []
 
@@ -940,9 +942,14 @@ def run_batch_benchmark(
 
         trial_prompt_tps: List[float] = []
         trial_gen_tps: List[float] = []
+        trial_prompt_tps_e2e: List[float] = []
+        trial_gen_tps_e2e: List[float] = []
         trial_kv_perc: List[float] = []
         trial_ttft: List[float] = []
         trial_tpot: List[float] = []
+        trial_prompt_tok: List[int] = []
+        trial_gen_tok: List[int] = []
+        short_requests = 0
 
         for trial in range(num_trials):
             start = time.time()
@@ -953,7 +960,7 @@ def run_batch_benchmark(
             except Exception as exc:
                 print(f"    Trial {trial + 1} error: {exc}")
                 continue
-            wall_time = time.time() - start
+            end = time.time()
 
             # Sample the KV cache pool gauge right after the burst — under
             # continuous batching it reflects how full the pool got at bs-wide
@@ -968,30 +975,31 @@ def run_batch_benchmark(
                 except requests.exceptions.RequestException:
                     pass
 
-            # Unpack responses: (prompt_tokens, gen_tokens, ttft, tpot_ms)
-            prompt_toks = [p for p, _, _, _ in responses]
-            gen_toks = [g for _, g, _, _ in responses]
-            ttfts = [t for _, _, t, _ in responses if t > 0]
-            tpots = [tp for _, _, _, tp in responses if tp > 0]
+            summary = common.summarize_batch_trial(responses, start, end)
+            trial_prompt_tps.append(summary["prompt_tps"])
+            trial_gen_tps.append(summary["generation_tps"])
+            trial_prompt_tps_e2e.append(summary["prompt_tps_e2e"])
+            trial_gen_tps_e2e.append(summary["generation_tps_e2e"])
+            trial_ttft.extend(summary["ttfts"])
+            trial_tpot.extend(summary["tpots"])
+            trial_prompt_tok.extend(r["prompt_tokens"] for r in responses)
+            trial_gen_tok.extend(r["generation_tokens"] for r in responses)
+            short_requests += sum(1 for r in responses if r["generation_tokens"] < 0.9 * gen_tokens)
 
-            total_prompt_tok = sum(prompt_toks)
-            total_gen_tok = sum(gen_toks)
-            agg_prompt_tps = total_prompt_tok / wall_time if wall_time > 0 else 0.0
-            agg_gen_tps = total_gen_tok / wall_time if wall_time > 0 else 0.0
-
-            trial_prompt_tps.append(agg_prompt_tps)
-            trial_gen_tps.append(agg_gen_tps)
-            if ttfts:
-                trial_ttft.extend(ttfts)
-            if tpots:
-                trial_tpot.extend(tpots)
-
-            ttft_str = f"TTFT {statistics.median(ttfts):.0f}ms" if ttfts else ""
-            tpot_str = f"TPOT {statistics.median(tpots):.0f}ms" if tpots else ""
+            ttft_str = f"TTFT {statistics.median(summary['ttfts']) * 1000:.0f}ms" if summary["ttfts"] else ""
+            tpot_str = f"TPOT {statistics.median(summary['tpots']) * 1000:.0f}ms" if summary["tpots"] else ""
             lat_str = ", ".join(s for s in [ttft_str, tpot_str] if s)
             print(
-                f"    Trial {trial + 1}: pp {agg_prompt_tps:.1f} tg {agg_gen_tps:.1f} t/s ({wall_time:.1f}s)"
-                + (f" [{lat_str}]" if lat_str else "")
+                f"    Trial {trial + 1}: pp {summary['prompt_tps']:.1f} tg {summary['generation_tps']:.1f} t/s "
+                f"({summary['wall_time']:.1f}s wall, prefill {summary['prefill_window']:.1f}s, "
+                f"decode {summary['decode_window']:.1f}s)" + (f" [{lat_str}]" if lat_str else "")
+            )
+
+        if short_requests:
+            total_requests = bs * num_trials
+            print(
+                f"    Note: {short_requests}/{total_requests} requests stopped well short of {gen_tokens} tokens "
+                f"(mean {statistics.mean(trial_gen_tok):.0f}); tg uses the shorter decode window"
             )
 
         if trial_prompt_tps:
@@ -1003,11 +1011,15 @@ def run_batch_benchmark(
                 "batch_size": bs,
                 "prompt_tps": round(peak_prompt, 2),
                 "generation_tps": round(peak_gen, 2),
+                "prompt_tps_e2e": round(max(trial_prompt_tps_e2e), 2),
+                "generation_tps_e2e": round(max(trial_gen_tps_e2e), 2),
+                "prompt_tokens": int(round(statistics.mean(trial_prompt_tok))),
+                "generation_tokens": int(round(statistics.mean(trial_gen_tok))),
             }
             if trial_ttft:
                 result["time_to_first_token"] = round(statistics.median(trial_ttft), 3)
             if trial_tpot:
-                result["time_per_output_token"] = round(statistics.median(trial_tpot) / 1000, 3)  # Convert ms to sec
+                result["time_per_output_token"] = round(statistics.median(trial_tpot), 5)
             if trial_kv_perc:
                 result["kv_cache_usage_perc"] = round(max(trial_kv_perc), 4)
             batch_results.append(result)
@@ -1332,6 +1344,7 @@ def main() -> int:
                 top_p=args.top_p,
                 metrics_base_url=metrics_base_url,
                 use_metrics=args.metrics,
+                cold_prefill=args.cold_prefill,
             )
             if batch_results:
                 print(f"\nBatch benchmark complete: {len(batch_results)} sizes tested")

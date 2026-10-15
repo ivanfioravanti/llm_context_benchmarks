@@ -1762,6 +1762,84 @@ def make_cache_buster(run_idx: Optional[int] = None) -> str:
     return f"[session-{uuid.uuid4().hex[:16]}]\n"
 
 
+# Appended to the synthetic batch prompt. A bare repeated phrase makes chat
+# models answer in a sentence or two and hit EOS long before ``max_tokens``,
+# which shrinks the decode window the batch tg figures are measured over.
+BATCH_PROMPT_SUFFIX = "\n\nWrite a long, detailed essay about the history of the typewriter."
+
+
+def build_batch_prompt(prompt_tokens: int) -> str:
+    """Build the synthetic prompt (~``prompt_tokens`` cl100k tokens) for batch sweeps."""
+    base_text = "The quick brown fox jumps over the lazy dog. "
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        body_budget = max(1, prompt_tokens - len(enc.encode(BATCH_PROMPT_SUFFIX)))
+        repeats = max(1, body_budget // len(enc.encode(base_text)) + 1)
+        body = enc.decode(enc.encode(base_text * repeats)[:body_budget])
+    except Exception:
+        # ~4 chars per token when tiktoken is unavailable
+        body = base_text * max(1, prompt_tokens // 10)
+    return body + BATCH_PROMPT_SUFFIX
+
+
+def summarize_batch_trial(
+    requests: List[Dict], start: float, end: float, endpoint_latency_s: float = 0.0
+) -> Dict[str, object]:
+    """Reduce one burst of N concurrent streaming requests to throughput figures.
+
+    Each request dict carries ``prompt_tokens``, ``generation_tokens`` and the
+    absolute ``first_token_at`` / ``last_token_at`` timestamps (``None`` when no
+    token text arrived). ``start`` is when the burst was submitted, ``end`` when
+    the last request finished.
+
+    - **Prompt t/s** = total prompt tokens / time until the *last* request
+      produced its first token. That is how long the server needed to prefill
+      all N prompts, so it is independent of how much is decoded afterwards.
+      The ``_e2e`` variant keeps the raw client time; the default one removes
+      one measured endpoint round trip, like the single-call prompt t/s.
+    - **Gen t/s** = total (generated - 1) tokens / span from the earliest first
+      token to the latest last token (the same N-1 convention as single calls).
+      The ``_e2e`` variant divides all generated tokens by the full wall time,
+      prefill included — the "requests served per second" view.
+    """
+    wall = max(end - start, 0.0)
+    timed = [r for r in requests if r.get("first_token_at") and r.get("last_token_at")]
+    total_prompt = sum(r.get("prompt_tokens", 0) for r in requests)
+    total_gen = sum(r.get("generation_tokens", 0) for r in requests)
+
+    if timed:
+        prefill_window = max(max(r["first_token_at"] for r in timed) - start, 0.0)
+        decode_window = max(r["last_token_at"] for r in timed) - min(r["first_token_at"] for r in timed)
+        decode_tokens = sum(max(r.get("generation_tokens", 0) - 1, 0) for r in timed)
+    else:
+        prefill_window = decode_window = wall
+        decode_tokens = max(total_gen - len(requests), 0)
+
+    adjusted_prefill = prefill_window
+    if endpoint_latency_s > 0 and prefill_window > endpoint_latency_s:
+        adjusted_prefill = prefill_window - endpoint_latency_s
+
+    ttfts = [r["first_token_at"] - start for r in timed]
+    tpots = [
+        (r["last_token_at"] - r["first_token_at"]) / (r["generation_tokens"] - 1)
+        for r in timed
+        if r.get("generation_tokens", 0) > 1 and r["last_token_at"] > r["first_token_at"]
+    ]
+    return {
+        "prompt_tps": total_prompt / adjusted_prefill if adjusted_prefill > 0 else 0.0,
+        "prompt_tps_e2e": total_prompt / prefill_window if prefill_window > 0 else 0.0,
+        "generation_tps": decode_tokens / decode_window if decode_window > 0 else 0.0,
+        "generation_tps_e2e": total_gen / wall if wall > 0 else 0.0,
+        "wall_time": wall,
+        "prefill_window": prefill_window,
+        "decode_window": decode_window,
+        "ttfts": ttfts,
+        "tpots": tpots,
+    }
+
+
 def _is_degenerate_generation(result: Dict) -> bool:
     """Return True if the generation phase was too short for a reliable TPS measurement."""
     if result.get("generation_tokens", 0) < 2:
