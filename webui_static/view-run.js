@@ -670,7 +670,7 @@
         <div class="live-table-cell"><div data-f="ltable"></div></div></div>
       <p class="hint" style="margin:8px 0 0">Live values scraped from engine output while the run is in
         progress — the saved result folder stays authoritative once it completes.</p>`);
-    modal.classList.add("live-detail");
+    modal.classList.add("compact-detail");
     modal.dataset.liveRun = run.id;
     modal.dataset.sig = "";
     drawLiveDetail(modal, run);

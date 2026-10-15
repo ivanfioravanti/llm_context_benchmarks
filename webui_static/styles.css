@@ -678,15 +678,21 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .modal-close { float: right; }
 .detail-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
 @media (max-width: 800px) { .detail-charts { grid-template-columns: 1fr; } }
-/* live-detail modal: reclaim vertical space so charts + table fit one screen */
-.modal-backdrop:has(.modal.live-detail) { padding: 2vh 16px; }
-.modal.live-detail { max-height: 96vh; padding: 14px 22px 12px; }
-.modal.live-detail h2 { margin-bottom: 0; }
-.modal.live-detail .detail-charts { gap: 10px 16px; margin: 10px 0; }
-.modal.live-detail .chart-title { margin: 0 0 6px; }
-.modal.live-detail .tbl th, .modal.live-detail .tbl td { padding: 3px 8px; }
-.modal.live-detail .live-table-cell { align-self: start; min-width: 0; }
-.modal.live-detail .live-table-cell .tbl { font-size: 12px; }
+/* compact detail modals (live + saved run): reclaim vertical space so charts + tables fit one screen */
+.modal-backdrop:has(.modal.compact-detail) { padding: 2vh 16px; }
+.modal.compact-detail { max-height: 96vh; padding: 14px 22px 12px; }
+.modal.compact-detail h2 { margin-bottom: 0; }
+.modal.compact-detail .detail-charts { gap: 10px 16px; margin: 10px 0; }
+.modal.compact-detail .detail-charts.three { grid-template-columns: repeat(3, 1fr); }
+.modal.compact-detail .chart-title { margin: 0 0 6px; }
+.modal.compact-detail .tbl { font-size: 12px; }
+.modal.compact-detail .tbl th, .modal.compact-detail .tbl td { padding: 3px 8px; }
+.modal.compact-detail .live-table-cell { align-self: start; min-width: 0; }
+.modal.compact-detail .live-table-cell h3 { font-size: 13px; margin: 0 0 2px; }
+.modal.compact-detail .live-table-cell .hint { margin: 0 0 6px; font-size: 11.5px; }
+.modal.compact-detail details.advanced { margin-top: 8px; }
+@media (max-width: 1000px) { .modal.compact-detail .detail-charts.three { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 800px) { .modal.compact-detail .detail-charts.three { grid-template-columns: 1fr; } }
 .kv-list { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12.5px; }
 .kv-list dt { color: var(--muted); font-family: var(--mono); font-size: 10.5px; padding-top: 1px; }
 .kv-list dd { margin: 0; overflow-wrap: anywhere; }

@@ -159,44 +159,45 @@
 
   // ------------------------------------------------------------- detail
 
+  // memory metrics share one panel (GB) so the core charts fit two rows
+  const MEMORY_KEYS = ["peak_memory_gb", "host_memory_gb", "kv_cache_gb"];
+  const DETAIL_CHART_HEIGHT = 170;
+
+  function chartPanelHtml(key, label, unit, desc) {
+    return `<div><div class="chart-title">${esc(label)}
+      ${unit ? `<span class="unit">${esc(unit)}</span>` : ""}${desc ? qmarkHtml(desc) : ""}</div>
+      <div data-chart="${esc(key)}"></div></div>`;
+  }
+
   async function openDetail(folder) {
     let detail;
     try { detail = await ensureDetail(folder); } catch (e) { toast(e.message, true); return; }
     const summary = detail.summary;
     const rows = detail.results;
+    const hasKey = key => rows.some(r => r[key] != null && isFinite(r[key]));
     const cols = ["context_size", "prompt_tokens", "prompt_tps", "prompt_tps_e2e",
       "endpoint_latency_ms", "prompt_eval_duration", "generation_tokens", "generation_tps",
       "time_to_first_token", "time_per_output_token", "total_time",
       "peak_memory_gb", "host_memory_gb", "kv_cache_gb"]
       .filter(c => rows.some(r => r[c] != null));
 
-    // charts: the four core panels plus memory panels when the run has them
-    const chartKeys = ["generation_tps", "prompt_tps", "time_to_first_token", "total_time",
-      "peak_memory_gb", "host_memory_gb", "kv_cache_gb"]
-      .filter(key => rows.some(r => r[key] != null && isFinite(r[key])));
-    const chartPanels = chartKeys.map(key => {
+    // charts: the four core panels, one combined memory panel, and the batch sweep
+    const chartKeys = ["generation_tps", "prompt_tps", "time_to_first_token", "total_time"].filter(hasKey);
+    const memKeys = MEMORY_KEYS.filter(key => rows.some(r => r[key] > 0));   // remote engines report 0
+    const batchRows = (detail.batch_data || []).filter(b => b.batch_size != null);
+    const panels = chartKeys.map(key => {
       const metric = METRICS.find(m => m.key === key) || { label: key, unit: "" };
-      return `<div><div class="chart-title">${esc(metric.label)}
-        ${metric.unit ? `<span class="unit">${esc(metric.unit)}</span>` : ""}${qmarkHtml(metric.desc)}</div>
-        <div data-chart="${esc(key)}"></div></div>`;
-    }).join("");
+      return chartPanelHtml(key, metric.label, metric.unit, metric.desc);
+    });
+    if (memKeys.length) {
+      const only = memKeys.length === 1 ? METRICS.find(m => m.key === memKeys[0]) : null;
+      panels.push(chartPanelHtml("memory", only ? only.label : "Memory", "GB", only && only.desc));
+    }
+    if (batchRows.length) panels.push(chartPanelHtml("batch", "Batch sweep", "tok/s"));
 
-    const hw = detail.hardware_info || {};
-    const modal = openModal(`
-      <button class="btn small modal-close" data-close>Close</button>
-      <span class="modal-close" style="margin-right:10px">${CB.report.exportGroupHtml()}</span>
-      <div class="eyebrow">${esc(summary.engine)} · ${esc(fmtDate(summary.timestamp))}</div>
-      <h2>${esc(resultName(summary))}</h2>
-      <div class="page-sub">${esc(summary.model)}${summary.endpoint_hardware
-        ? " — " + esc(summary.endpoint_hardware)
-        : (summary.hardware ? " — " + esc(summary.hardware) : "")}</div>
-      <div class="detail-charts">${chartPanels}</div>
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr>${cols.map(c => `<th>${esc(c.replace(/_/g, " "))}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map(r => `<tr>${cols.map(c =>
-          `<td>${c === "context_size" ? esc(r[c]) : esc(fmt(r[c], { seconds: /time|ttft|tpot/.test(c) }))}</td>`).join("")}</tr>`).join("")}
-        </tbody></table></div>
-      ${detail.cached_results && detail.cached_results.length ? (() => {
+    // secondary tables flow into the chart grid (like the live detail) so everything fits one screen
+    const sideTables = [
+      detail.cached_results && detail.cached_results.length ? (() => {
         const cachedRows = detail.cached_results;
         const cCols = [
           ["cached_tokens", "cached tokens", {}],
@@ -207,8 +208,8 @@
           ["kv_cache_gb", "kv cache GB", {}],
         ].filter(([key]) => cachedRows.some(r => r[key] != null));
         return `
-        <h3 style="font-size:14px;margin:18px 0 4px">Cached re-prompt <span class="unit">KV-cache reuse</span></h3>
-        <p class="hint" style="margin:0 0 8px">Warm runs on top of a stored KV cache — »incr. prompt«
+        <h3>Cached re-prompt <span class="unit">KV-cache reuse</span></h3>
+        <p class="hint">Warm runs on top of a stored KV cache — »incr. prompt«
           only counts the tokens added after the cached prefix.</p>
         <div class="tbl-wrap"><table class="tbl">
           <thead><tr><th>context</th>${cCols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
@@ -216,9 +217,8 @@
             ${cCols.map(([key, , o]) => `<td>${esc(fmt(r[key], o))}</td>`).join("")}
           </tr>`).join("")}</tbody>
         </table></div>`;
-      })() : ""}
-      ${detail.batch_data && detail.batch_data.length ? (() => {
-        const batchRows = detail.batch_data;
+      })() : "",
+      batchRows.length ? (() => {
         const bCols = [
           ["prompt_tps", "prompt t/s adj.", {}],
           ["prompt_tps_e2e", "prompt t/s e2e", {}],
@@ -235,9 +235,12 @@
         ].filter(([key]) => batchRows.some(b => b[key] != null && b[key] > 0));
         const hasDecode = bCols.some(([key]) => key === "decode_tps_total");
         return `
-        <h3 style="font-size:14px;margin:18px 0 4px">Batch sweep <span class="unit">N parallel clients</span></h3>
-        <p class="hint" style="margin:0 0 8px">»Adjusted« removes one measured endpoint round trip
-          from batch wall time; »E2E« keeps the full observed wall time${hasDecode
+        <h3>Batch sweep <span class="unit">N parallel clients</span></h3>
+        <p class="hint">»Prompt« = prompt tokens ÷ time until the last request's
+          first token; »gen« = decoded tokens ÷ first→last token span.
+          »Adjusted« removes one measured endpoint round trip from the prompt
+          window; »E2E« keeps the raw client timing (gen: all tokens ÷ full
+          wall time, prefill included)${hasDecode
             ? " — »decode« = pure generation rate, summed across clients" : ""}.</p>
         <div class="tbl-wrap"><table class="tbl">
           <thead><tr><th>batch</th>${bCols.map(([, label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
@@ -245,8 +248,26 @@
             ${bCols.map(([key, , o]) => `<td>${esc(fmt(b[key], o))}</td>`).join("")}
           </tr>`).join("")}</tbody>
         </table></div>`;
-      })() : ""}
-      ${detail.perplexity_data ? `<p style="font-size:12.5px;color:var(--ink-2)">
+      })() : "",
+    ].filter(Boolean);
+
+    const hw = detail.hardware_info || {};
+    const modal = openModal(`
+      <button class="btn small modal-close" data-close>Close</button>
+      <span class="modal-close" style="margin-right:10px">${CB.report.exportGroupHtml()}</span>
+      <div class="eyebrow">${esc(summary.engine)} · ${esc(fmtDate(summary.timestamp))}</div>
+      <h2>${esc(resultName(summary))}</h2>
+      <div class="page-sub">${esc(summary.model)}${summary.endpoint_hardware
+        ? " — " + esc(summary.endpoint_hardware)
+        : (summary.hardware ? " — " + esc(summary.hardware) : "")}</div>
+      <div class="detail-charts${panels.length + sideTables.length > 4 ? " three" : ""}">${panels.join("")}${
+        sideTables.map(html => `<div class="live-table-cell">${html}</div>`).join("")}</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr>${cols.map(c => `<th>${esc(c.replace(/_/g, " "))}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${cols.map(c =>
+          `<td>${c === "context_size" ? esc(r[c]) : esc(fmt(r[c], { seconds: /time|ttft|tpot/.test(c) }))}</td>`).join("")}</tr>`).join("")}
+        </tbody></table></div>
+      ${detail.perplexity_data ? `<p style="font-size:12.5px;color:var(--ink-2);margin:8px 0 0">
         Perplexity: <span class="num">${esc(fmt(detail.perplexity_data.perplexity))}</span>
         ± ${esc(fmt(detail.perplexity_data.std_error))} (${esc(detail.perplexity_data.dataset || "")})</p>` : ""}
       <details class="advanced"><summary>Hardware & files</summary><div>
@@ -257,6 +278,7 @@
           `<a href="/output/${encodeURIComponent(folder)}/${encodeURIComponent(f)}" target="_blank" style="color:var(--accent)">${esc(f)}</a>`
         ).join(" · ")}</p>
       </div></details>`);
+    modal.classList.add("compact-detail");
 
     CB.report.wireExportGroup(modal,
       async () => [{ detail, slot: 0, name: seriesLabel(summary) }],
@@ -274,8 +296,29 @@
       const cached = cachedSeriesPoints(detail, key);
       if (cached) series.push({ name: "cached (incremental)", color, dash: true, points: cached });
       Charts.lineChart(node, {
-        series, logX: true, height: 190, seconds: metric.seconds,
+        series, logX: true, height: DETAIL_CHART_HEIGHT, seconds: metric.seconds,
         xLabel: "context", yLabel: metric.unit || "", legend: !!cached,
+      });
+    }
+
+    if (memKeys.length) {
+      Charts.lineChart(modal.querySelector('[data-chart="memory"]'), {
+        series: memKeys.map((key, i) => ({
+          name: (METRICS.find(m => m.key === key) || { label: key }).label,
+          color: seriesColor(i),
+          points: rows.map(r => [ctxNum(r.context_size), r[key]]),
+        })),
+        logX: true, height: DETAIL_CHART_HEIGHT, xLabel: "context", yLabel: "GB", legend: memKeys.length > 1,
+      });
+    }
+
+    if (batchRows.length) {
+      Charts.lineChart(modal.querySelector('[data-chart="batch"]'), {
+        series: [
+          { name: "prompt t/s", color: seriesColor(1), points: batchRows.map(b => [b.batch_size, b.prompt_tps]) },
+          { name: "gen t/s", color: seriesColor(2), points: batchRows.map(b => [b.batch_size, b.generation_tps]) },
+        ],
+        logX: true, height: DETAIL_CHART_HEIGHT, xLabel: "batch", yLabel: "tok/s", legend: true,
       });
     }
   }
